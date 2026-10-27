@@ -1,0 +1,16 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: MemberInvite
+description: Invites someone into a group.
+allOf:
+  - $ref: "header.yaml"
+  - type: object
+    required: [type, member]
+    properties:
+      type: { const: "member.invite" }
+      member: { $ref: "../wire/ids.yaml#/$defs/UserId", description: The invitee }
+unevaluatedProperties: false
+x-sent-by: any member
+x-rules:
+  - From a member, naming someone not already in
+  - Someone who left may be invited again by a later event
+  - Never more than 50 members and invited together

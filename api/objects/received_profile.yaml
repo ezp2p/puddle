@@ -1,0 +1,16 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: ReceivedProfile
+description: |
+  A profile someone shows us in one place we share: directly ("dm") or in a group ("group:<group id>"). Their Puddle
+  sent it; ours rebuilt it from the fields it understands, leaving out whatever was wrong, and `notes` says what that was.
+allOf:
+  - $ref: "../wire/profile.yaml"
+  - type: object
+    required: [place, received_at]
+    properties:
+      place: { type: string, pattern: "^(dm|group:[a-z2-7]{52})$" }
+      received_at: { $ref: "../wire/ids.yaml#/$defs/Timestamp" }
+      notes:
+        type: array
+        items: { type: string }
+        description: 'What had to be left out or cut short when it came, one line each, such as: color: "#12345g" is not a colour like "#3366ff"; left out'

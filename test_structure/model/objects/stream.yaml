@@ -1,0 +1,51 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: Stream
+description: The connection to another Puddle, as the owner manages it. GET /api/v1/streams/{user}.
+type: object
+required: [id, user, state, created_at, updated_at]
+properties:
+  id:
+    type: string
+    description: The peer's user id; a stand-in id for a request to an address nobody has answered yet (`provisional`)
+  provisional: { type: boolean, description: "Present, true, until the address we asked answers and says who it is" }
+  user: { $ref: "user.yaml" }
+  state: { $ref: "#/$defs/StreamState" }
+  address: { type: string, description: "Where we reach them, host:port: the best of the addresses we hold" }
+  error: { type: string, description: Why a request of ours, or an answer we owed, did not get through }
+  certificate_changed: { type: boolean, description: "Present, true: their certificate is not the one first seen, and nothing goes to them until the owner trusts it" }
+  message: { type: string, maxLength: 500, description: The note sent with the request }
+  profile: { type: string, description: The id of the owner's profile this peer sees; absent means the default }
+  created_at: { $ref: "../wire/ids.yaml#/$defs/Timestamp" }
+  updated_at: { $ref: "../wire/ids.yaml#/$defs/Timestamp" }
+$defs:
+  StreamState:
+    type: string
+    enum: [pending_out, pending_in, active, closed, scoped]
+    description: |
+      `pending_out` we asked, `pending_in` they asked and wait on the owner, `active` trusted both ways, `closed` dried
+      up (either side may ask again), `scoped` group-only: group events and nothing else.
+x-source:
+  struct: "src/core/streams.h puddle_stream"
+  writer: "src/core/owner_streams.c stream_json"
+  stored: "state/streams/<user id>.json; the profile shown, state/stream-profiles.tsv (puddle_assignments)"
+  today: "`peer` is {id, profile}; the model makes it `user`, a whole User."
+x-internal:
+  # Fields the record holds that the owner API does not show. Kept here so nothing is forgotten when designing.
+  chain: Their verified key chain. Protocol state; the owner sees its effect (keys rolled) as user.updated.
+  addresses: Every address we hold, best first. Only the best is shown as `address`.
+  addr_seq: The seq of the signed address record they came from.
+  tls_fp: Their certificate fingerprint as first seen.
+  tls_fp_seen: A different fingerprint met since. Shown only as `certificate_changed`. (Showing both would let the owner compare them with the friend.)
+  owed: An answer we still have to send them (approved, declined, closed, scoped). Shown only through `error` when it fails.
+  chain_sent: The highest seq of our chain they are known to hold.
+  addr_sent: The highest seq of our address record they are known to hold.
+  ticket: Ties a request to an address to its answer.
+  scoped_req: We asked only because we share a group; a yes makes the stream `scoped`.
+  group_ok: Group events pass whatever the stream's state.
+  read_marker: When the owner last read the DM (puddle_streams_read_marker). Shown as Conversation.unread.
+x-methods:
+  accept: POST /api/v1/streams/{user}/accept
+  decline: POST /api/v1/streams/{user}/decline
+  remove: POST /api/v1/streams/{user}/delete
+  trust: POST /api/v1/streams/{user}/trust
+  show_profile: POST /api/v1/streams/{user}/profile

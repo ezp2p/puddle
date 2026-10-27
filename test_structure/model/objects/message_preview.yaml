@@ -1,0 +1,19 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: MessagePreview
+description: |
+  The latest message of a conversation, short enough to list a hundred conversations at once: the text cut to a
+  preview, and no delivery state. The whole Message is GET /api/v1/conversations/{id}/messages.
+type: object
+required: [id, author, ts, outgoing]
+properties:
+  id: { $ref: "../wire/ids.yaml#/$defs/EventId" }
+  author: { $ref: "partial_user.yaml" }
+  ts: { $ref: "../wire/ids.yaml#/$defs/Timestamp" }
+  outgoing: { type: boolean }
+  preview: { type: string, maxLength: 500, description: "The start of the text; absent if taken back" }
+  deleted: { type: boolean, description: "Present, true, if taken back" }
+x-source:
+  stored: "records conversations, the `last` member (../records/conversation.yaml)"
+  struct: "src/core/messages.c conversation (last_id, last_sender, last_ts, preview, deleted)"
+  writer: "src/core/messages.c list_conversations, the `last` member"
+  today: "Called `last`, with `sender` as a bare id. The old spec said `last_message: Message`, but the code has always sent this shorter form."

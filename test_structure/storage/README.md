@@ -1,0 +1,1 @@
+Where data is kept, behind one interface (storage.hpp): logs, records, blobs, secrets. Bytes only; core decides what they mean. Drivers: files/ (default, today's layout), memory/ (tests). A new driver (SQLite, say) implements the four stores and passes tests/storage/.

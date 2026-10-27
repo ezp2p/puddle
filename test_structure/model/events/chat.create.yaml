@@ -1,0 +1,16 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: ChatCreate
+description: Starts a group. Its `chat` is the group's id, made from creator, ts and nonce, which every member checks.
+allOf:
+  - $ref: "header.yaml"
+  - type: object
+    required: [type, name, nonce]
+    properties:
+      type: { const: "chat.create" }
+      name: { type: string, minLength: 1, maxLength: 100 }
+      nonce: { type: string, pattern: "^[0-9a-f]{32}$" }
+unevaluatedProperties: false
+x-sent-by: the group's creator
+x-rules:
+  - chat == base32(SHA-256("group\n" sender "\n" ts "\n" nonce))
+  - The creator is the first member

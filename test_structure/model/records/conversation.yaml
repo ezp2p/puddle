@@ -1,0 +1,33 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: ConversationRecord
+description: |
+  One conversation's summary, kept current as events are appended. Collection "conversations", key = conversation id.
+  Kept by core/conversations.hpp. Listing conversations reads these, instead of working each one out from the
+  streams, groups and chat logs on every request (what src/core/messages.c list_conversations does today).
+type: object
+required: [id, chat, kind, sort_ts, read_at, unread]
+properties:
+  id: { type: string, description: "The other person's user id for a DM, the group id for a group" }
+  chat: { $ref: "../wire/ids.yaml#/$defs/ChatId", description: "The chat log it reads; a DM's is a hash of both user ids" }
+  kind: { type: string, enum: [dm, group] }
+  sort_ts: { $ref: "../wire/ids.yaml#/$defs/Timestamp" }
+  read_at: { $ref: "../wire/ids.yaml#/$defs/Timestamp", description: "When the owner last read it, in this Puddle's clock; 0 = never" }
+  unread: { type: integer, minimum: 0 }
+  last:
+    type: object
+    required: [id, sender, ts]
+    properties:
+      id: { $ref: "../wire/ids.yaml#/$defs/EventId" }
+      sender: { $ref: "../wire/ids.yaml#/$defs/UserId" }
+      ts: { $ref: "../wire/ids.yaml#/$defs/Timestamp" }
+      preview: { type: string, maxLength: 500 }
+      deleted: { type: boolean }
+x-fields:
+  derived: [sort_ts, unread, last]
+  owners-own: [read_at]
+x-rules:
+  - Every append to the chat updates `last`, `sort_ts` and, for a message from someone else received after `read_at`, `unread`
+  - An edit or redaction of the message in `last` updates its preview or `deleted`
+  - Rebuilding from the logs recomputes the derived fields and keeps `read_at`
+x-source:
+  today: "Nothing is stored. Read markers are kept by src/core/streams.h puddle_streams_set_read_marker; everything else is worked out per request."
