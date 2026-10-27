@@ -224,6 +224,12 @@ Pane {
                 height: page.chats.hasOlder ? 40 : 0
                 Label { anchors.centerIn: parent; visible: page.chats.hasOlder; opacity: 0.55; text: qsTr("Loading earlier messages…") }
             }
+            // a line's room between the newest message and the box you type in
+            footer: Item {
+                width: list.width
+                height: lineHeight.height
+                FontMetrics { id: lineHeight }
+            }
 
             delegate: Item {
                 id: msg
