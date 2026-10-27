@@ -297,7 +297,8 @@ int main(void)
     CHECK(strstr(f.out, "100 Continue") == NULL);
 
     /* ---- one request per connection ---- */
-    r = build(POST("/small", "5", ""), "helloGET /small HTTP/1.1\r\n\r\nGET /small HTTP/1.1\r\n\r\n", 5 + 52, &n);
+    static const char piped[] = "helloGET /small HTTP/1.1\r\n\r\nGET /small HTTP/1.1\r\n\r\n";
+    r = build(POST("/small", "5", ""), piped, sizeof piped - 1, &n);
     CHECK(run(&f, r, n, 0, &info) == 200 && seen.calls == 1 && seen.len == 5 && memcmp(seen.body, "hello", 5) == 0);
     CHECK(strstr(strstr(f.out, "ok") + 2, "HTTP/1.1") == NULL);                    /* only one answer */
     free(r);
