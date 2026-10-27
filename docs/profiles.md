@@ -140,6 +140,6 @@ In code: `puddle::Profile` (`src/objects/profile.hpp`). `Profile::get(ctx, "work
 
 ## Not built yet
 
-The app's screens for making and editing profiles and choosing one when accepting a friend or joining a group (the
-request dialog already has "Appear as"); reloading hand-edited files while running and resizing pictures
+The app's screens for making and editing profiles (sending a request, accepting one and joining a group already ask
+"Appear as"); reloading hand-edited files while running and resizing pictures
 (docs/discuss-later.md, 1 and 2); and Ponds.

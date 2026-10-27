@@ -16,6 +16,7 @@ ItemDelegate {
 
     signal menuRequested(Item from, real x, real y)
     signal joinRequested()   // an invitation was said yes to: the caller says what joining costs first
+    signal acceptRequested() // a friend request was said yes to: the caller asks which profile they will see first
 
     readonly property string kind: model.kind
     readonly property bool pending: kind === "invite" || kind === "request"
@@ -66,7 +67,7 @@ ItemDelegate {
             display: AbstractButton.IconOnly
             Accessible.name: row.kind === "invite" ? qsTr("Join") : qsTr("Accept")
             ToolTip.text: Accessible.name; ToolTip.visible: hovered
-            onClicked: row.kind === "invite" ? row.joinRequested() : row.chats.accept(row.model.id)
+            onClicked: row.kind === "invite" ? row.joinRequested() : row.acceptRequested()
         }
         ToolButton {
             objectName: row.kind === "invite" ? "declineGroupButton" : "declineButton"

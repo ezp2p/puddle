@@ -93,6 +93,7 @@ Rectangle {
                     }
                     onMenuRequested: (from, x, y) => convMenu.openFor(from, x, y, { id: model.id, kind: model.kind, name: model.name })
                     onJoinRequested: joinConfirm.ask(model.id, model.name)
+                    onAcceptRequested: acceptDialog.ask(model.id, model.name)
                 }
             }
 
@@ -165,7 +166,10 @@ Rectangle {
         developer: bar.backend.developerMode
         onOpenRequested: (id, kind) => bar.openChat(id, kind)
         onJoinRequested: (id, name) => joinConfirm.ask(id, name)
+        onAcceptRequested: (id, name) => acceptDialog.ask(id, name)
     }
+
+    AcceptDialog { id: acceptDialog; chats: bar.chats }
 
     // joining shows your address to everyone in the group: say so first
     Dialog {
@@ -179,11 +183,16 @@ Rectangle {
         modal: true
         title: qsTr("Join “%1”?").arg(groupName)
         standardButtons: Dialog.Cancel | Dialog.Ok
-        Label {
+        ColumnLayout {
             width: parent.width
-            wrapMode: Text.Wrap
-            text: qsTr("Everyone in this group will be able to see your address and connect to your Puddle for it, including people who are not your friends.")
+            spacing: 12
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: qsTr("Everyone in this group will be able to see your address and connect to your Puddle for it, including people who are not your friends.")
+            }
+            AppearAs { id: joinAs; chats: bar.chats; Layout.fillWidth: true }
         }
-        onAccepted: bar.chats.acceptGroup(target)
+        onAccepted: bar.chats.acceptGroup(target, joinAs.profile)
     }
 }

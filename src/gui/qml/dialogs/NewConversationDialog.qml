@@ -82,7 +82,7 @@ Popup {
     function send() {
         const t = link.text.trim()
         if (t === "") return
-        chats.request(t, note.text.trim(), profile.count > 0 ? profile.currentValue : "") // who they will see us as: our consent to show it them
+        chats.request(t, note.text.trim(), appearAs.profile) // who they will see us as: our consent to show it them
         close()
     }
 
@@ -278,19 +278,7 @@ Popup {
                 onAccepted: pop.send()
                 FieldMenu {}
             }
-            RowLayout {
-                visible: profile.count > 0 // always said: it is what they will see of us
-                Layout.fillWidth: true
-                Label { text: qsTr("Appear as") }
-                ComboBox {
-                    id: profile
-                    Layout.fillWidth: true
-                    model: pop.chats.profiles
-                    textRole: "display_name"
-                    valueRole: "id"
-                    Accessible.name: qsTr("Profile to show")
-                }
-            }
+            AppearAs { id: appearAs; chats: pop.chats; Layout.fillWidth: true }
             RowLayout {
                 Layout.fillWidth: true
                 Item { Layout.fillWidth: true }

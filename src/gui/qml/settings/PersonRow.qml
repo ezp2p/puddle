@@ -42,6 +42,8 @@ Rectangle {
         onDoubleTapped: row.message()
     }
 
+    AcceptDialog { id: acceptDialog; chats: row.chats }
+
     // what can be done about this person, by what they are to us
     Menu {
         id: menu
@@ -51,7 +53,7 @@ Rectangle {
         }
         MenuItem {
             objectName: "personAccept"; text: qsTr("Accept"); visible: row.streamState === "pending_in"; height: visible ? implicitHeight : 0
-            onTriggered: chats.accept(row.userId)
+            onTriggered: acceptDialog.ask(row.userId, row.name)
         }
         MenuItem {
             objectName: "personDecline"; text: qsTr("Decline"); visible: row.streamState === "pending_in"; height: visible ? implicitHeight : 0
@@ -171,7 +173,7 @@ Rectangle {
             display: AbstractButton.IconOnly
             Accessible.name: qsTr("Accept")
             ToolTip.text: qsTr("Accept"); ToolTip.visible: hovered
-            onClicked: chats.accept(row.userId)
+            onClicked: acceptDialog.ask(row.userId, row.name)
         }
         RoundButton {
             visible: row.streamState === "pending_in"

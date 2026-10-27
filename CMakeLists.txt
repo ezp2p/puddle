@@ -218,6 +218,8 @@ if(PUDDLE_BUILD_GUI)
         src/gui/qml/components/ContextTrigger.qml
         src/gui/qml/components/FieldMenu.qml
         src/gui/qml/components/ConfirmDialog.qml
+        src/gui/qml/components/AcceptDialog.qml
+        src/gui/qml/components/AppearAs.qml
         src/gui/qml/components/ConversationMenu.qml
         src/gui/qml/components/Icon.qml
         src/gui/qml/components/ScrollArea.qml

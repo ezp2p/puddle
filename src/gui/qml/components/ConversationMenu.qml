@@ -12,6 +12,7 @@ Item {
     property bool developer: false // Developer Mode: also offer the id
     signal openRequested(string id, string kind)
     signal joinRequested(string id, string name) // for an invitation: the caller says what joining costs, then joins
+    signal acceptRequested(string id, string name) // for a friend request: the caller asks which profile they will see, then accepts
 
     property string convId: ""
     property string convKind: "dm"
@@ -43,7 +44,7 @@ Item {
         MenuItem {
             objectName: "convAccept"; text: qsTr("Accept")
             visible: root.isRequest; height: visible ? implicitHeight : 0
-            onTriggered: root.chats.accept(root.convId)
+            onTriggered: root.acceptRequested(root.convId, root.convName)
         }
         MenuItem {
             objectName: "convJoin"; text: qsTr("Join…")

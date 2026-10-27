@@ -416,7 +416,13 @@ int main(int argc, char **argv)
         key(Qt::Key_Escape);
         CHECK(until([&] { return find("convAccept") == nullptr; }, 3000));
         CHECK(click(find("acceptButton")));                                    /* and it can be accepted without ever seeing an ID */
+        CHECK(until([&] { return find("acceptOk") != nullptr && find("appearAs") != nullptr; }, 3000));   /* first: which profile she will see */
+        CHECK(find("appearAs")->property("currentValue").toString() != "");
+        settle(300);
+        CHECK(A.incomingRequests() == 1);                                      /* nothing is accepted until it is said */
+        CHECK(click(find("acceptOk")));
         CHECK(until([&] { return A.incomingRequests() == 0 && A.friendCount() == 2; }));
+        CHECK(until([&] { return carol.chats->nameOf(backend.myId()) == A.myName(); }, 10000));   /* she sees the profile chosen, not an id */
     }
 
     /* ================= groups ================= */
@@ -570,6 +576,7 @@ int main(int argc, char **argv)
             });
             CHECK(said);
         }
+        CHECK(find("appearAs") != nullptr && find("appearAs")->isVisible());                     /* and which profile the group will see */
         CHECK(click(button("OK")));
         CHECK(until([&] { return A.incomingGroupInvites() == 0 && group_rows(conv_a) == 1; }, 5000));
         /* and one that is turned down */
