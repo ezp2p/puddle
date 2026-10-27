@@ -1,5 +1,6 @@
 #include "federation/courier.h"
 
+#include "federation/files.h"
 #include "federation/flow.h"
 #include "federation/groupflow.h"
 #include "federation/keysync.h"
@@ -19,4 +20,5 @@ const puddle_courier puddle_federation_courier = {
     puddle_group_leave,
     puddle_group_rename,
     puddle_group_send_event,
+    puddle_file_fetch,
 };

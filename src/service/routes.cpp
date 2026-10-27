@@ -2,6 +2,7 @@
 
 #include "api/api.h"
 #include "federation/access.h"
+#include "federation/files.h"
 #include "federation/groupapi.h"
 #include "federation/inbound.h"
 #include "federation/keysync.h"
@@ -30,6 +31,7 @@ const puddle_route *puddle_all_routes(size_t *count)
             { puddle_sync_routes, &puddle_sync_routes_count },
             { puddle_profile_routes, &puddle_profile_routes_count },
             { puddle_group_routes, &puddle_group_routes_count },
+            { puddle_file_routes, &puddle_file_routes_count },
         };
         for (size_t t = 0; t < sizeof tables / sizeof tables[0]; t++) {
             if (n + *tables[t].count > sizeof all / sizeof all[0])

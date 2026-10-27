@@ -395,6 +395,24 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
 
   # ---- files ----
+  /api/v1/conversations/{conversation}/messages/{message}/files/{file}/download:
+    parameters: [{ $ref: "#/components/parameters/Conversation" }, { $ref: "#/components/parameters/Message" }, { $ref: "#/components/parameters/File" }]
+    post:
+      tags: [files]
+      summary: "Fetch a file of a message: one over files.auto_download, or one that failed"
+      description: It is fetched from its sender, or from anyone else in the chat who has it. Watch its `state` and `received`.
+      responses:
+        "200": { $ref: "#/components/responses/File" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: "`too_large`: past files.max_size", content: { application/json: { schema: { $ref: "objects/error.yaml" } } } }
+  /api/v1/conversations/{conversation}/messages/{message}/files/{file}/cancel:
+    parameters: [{ $ref: "#/components/parameters/Conversation" }, { $ref: "#/components/parameters/Message" }, { $ref: "#/components/parameters/File" }]
+    post:
+      tags: [files]
+      summary: Stop fetching a file, and throw away what came (a file here whole stays)
+      responses:
+        "200": { $ref: "#/components/responses/File" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/v1/files/uploads/create:
     post:
       tags: [files]

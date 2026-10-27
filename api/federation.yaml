@@ -44,6 +44,8 @@ tags:
     description: Messages and profile changes over an existing stream
   - name: groups
     description: Group invites
+  - name: files
+    description: Files sent in messages, fetched a checked chunk at a time (docs/files.md)
 
 paths:
   /stream/v1/identity:
@@ -274,6 +276,42 @@ paths:
         "204": { description: Recorded (or set aside) }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /stream/v1/files/{file}/chunks:
+    get:
+      tags: [files]
+      operationId: getFileChunks
+      summary: A file's chunk hashes
+      description: |
+        The SHA-256 of each of the file's chunks, 32 bytes each, in order, as bytes (application/octet-stream). The
+        asker checks they hash to the file's id, and that there are as many as its size needs (1 MiB each), before
+        fetching any chunk. Served only to a peer in `chat` (the DM between us over an open stream, or a group we are
+        both in), only when `message` there carries the file, and only if we have it (whole, or partly, from fetching it
+        ourselves); anything else is `404`, like everything refused.
+      parameters:
+        - { name: file, in: path, required: true, schema: { type: string, pattern: "^[0-9a-f]{64}$" } }
+        - { name: chat, in: query, required: true, schema: { $ref: "#/components/schemas/ChatId" } }
+        - { name: message, in: query, required: true, schema: { $ref: "#/components/schemas/EventId" } }
+      responses:
+        "200": { description: The chunk hashes, content: { application/octet-stream: {} } }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /stream/v1/files/{file}/chunks/{n}:
+    get:
+      tags: [files]
+      operationId: getFileChunk
+      summary: One chunk of a file
+      description: |
+        Chunk `n` (from 0): 1 MiB, the last one what is left. Asked for under the same rules as the chunk list, and
+        answered only if we have that chunk. The asker checks it against its hash and throws it away if it does not
+        match. Ask the sender first; in a group, anyone else who has it will do.
+      parameters:
+        - { name: file, in: path, required: true, schema: { type: string, pattern: "^[0-9a-f]{64}$" } }
+        - { name: n, in: path, required: true, schema: { type: integer, minimum: 0 } }
+        - { name: chat, in: query, required: true, schema: { $ref: "#/components/schemas/ChatId" } }
+        - { name: message, in: query, required: true, schema: { $ref: "#/components/schemas/EventId" } }
+      responses:
+        "200": { description: The chunk, content: { application/octet-stream: {} } }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   /stream/v1/media:
     get:

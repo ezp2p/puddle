@@ -39,6 +39,7 @@ private:
     bool described_ = false; // the name, type and preview are known (from a message)
     State state_ = State::Waiting;
     int64_t have_ = 0;
+    std::string reason_; // why a download is waiting or failed
 };
 
 // A file the owner is sending us, a chunk at a time, before it has an id.

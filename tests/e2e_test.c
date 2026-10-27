@@ -11,6 +11,7 @@
 #include "core/phrase.h"
 #include "service/server.h"
 #include "core/streams.h"
+#include "events/message.h"
 
 #include <arpa/inet.h>
 #include <ftw.h>
@@ -1049,6 +1050,91 @@ int main(void)
         }
         CHECK(arrived && json_has("\"size\":2621440"));
         CHECK(get(&ivy, "/api/v1/conversations") == 200 && json_has("\"preview\":\"tide.bin\""));    /* a message of a file alone says which */
+
+        /* ---- and Ivy's Puddle fetches it by itself, a chunk at a time ---- */
+        int fetched = 0;
+        for (int i = 0; i < 300 && !fetched; i++) {
+            fetched = get(&ivy, url) == 200 && json_has("\"state\":\"available\"");
+            if (!fetched) usleep(50000);
+        }
+        CHECK(fetched);
+        char mid[80];
+        json_str(resp, "id", mid, sizeof mid);
+        snprintf(url, sizeof url, "/api/v1/files/%s/content", fid);
+        CHECK(api_bytes(&ivy, "GET", url, "", NULL, 0, &got, &gl) == 200 && gl == size && memcmp(got, bytes, size) == 0);   /* every byte */
+        free(got);
+
+        /* ---- only for who is in the chat, and only through a message that carries it ---- */
+        {
+            node jo;
+            CHECK(node_make(&jo, "jo", "Jo") == 0);
+            request(&jo, &hal, "hi Hal, Jo here", NULL, 201);
+            CHECK(wait_state(&hal, jo.uid, PUDDLE_STREAM_PENDING_IN));
+            stream_body(body, sizeof body, jo.uid);
+            CHECK(post(&hal, sp("accept"), body) == 200 && wait_state(&jo, hal.uid, PUDDLE_STREAM_ACTIVE));
+            char dm[PUDDLE_USER_ID_LEN + 1], jodm[PUDDLE_USER_ID_LEN + 1], t[400];
+            puddle_dm_chat_id(hal.uid, ivy.uid, dm);
+            puddle_dm_chat_id(hal.uid, jo.uid, jodm);
+            puddle_address at;
+            snprintf(t, sizeof t, "127.0.0.1:%u", hal.cfg.port);
+            puddle_address_parse(t, &at);
+            puddle_net_opts o;
+            memset(&o, 0, sizeof o);
+            o.max_body = 2 << 20;
+            struct { node *who; const char *chat; int want; size_t len; } asks[] = {
+                { &ivy, dm, 200, 3 * 32 },   /* in the chat: the chunk hashes */
+                { &jo, dm, 404, 0 },         /* a friend of Hal's, but not in that chat */
+                { &jo, jodm, 404, 0 },       /* in a chat of his own, where that message is not */
+            };
+            for (size_t k = 0; k < sizeof asks / sizeof *asks; k++) {
+                puddle_net_reply r;
+                snprintf(t, sizeof t, "/stream/v1/files/%s/chunks?chat=%s&message=%s", fid, asks[k].chat, mid);
+                puddle_net_request(&at, "GET", t, NULL, 0, puddle_server_identity(asks[k].who->srv), hal.uid, &o, &r);
+                CHECK(r.result == PUDDLE_NET_OK && r.status == asks[k].want && (asks[k].want != 200 || r.body_len == asks[k].len));
+                puddle_net_reply_free(&r);
+            }
+            node_down(&jo);
+        }
+
+        /* ---- a file over the size Ivy fetches by herself waits until she asks ---- */
+        node_down(&ivy);
+        ivy.cfg.files_auto_download = 1 << 20;
+        CHECK(node_up(&ivy) == 0);
+        for (size_t i = 0; i < size; i++) bytes[i] ^= 0x5A;                                          /* another file */
+        CHECK(post(&hal, "/api/v1/files/uploads/create", "{\"size\":2621440}") == 201);
+        json_str(resp, "upload", token, sizeof token);
+        for (int k = 0; k < 3; k++) {
+            snprintf(url, sizeof url, "/api/v1/files/uploads/%s/chunks/%d", token, k);
+            CHECK(api_bytes(&hal, "POST", url, "", bytes + (size_t)k * (1 << 20), k < 2 ? 1 << 20 : size - (2 << 20), &got, &gl) == 200);
+            free(got);
+        }
+        snprintf(url, sizeof url, "/api/v1/files/uploads/%s/finish", token);
+        CHECK(post(&hal, url, "{}") == 201);
+        char fid2[80], mid2[80];
+        json_str(resp, "id", fid2, sizeof fid2);
+        snprintf(msg, sizeof msg, "{\"body\":\"a big one\",\"files\":[{\"id\":\"%s\",\"name\":\"big.bin\",\"mime\":\"application/octet-stream\"}]}", fid2);
+        snprintf(url, sizeof url, "/api/v1/conversations/%s/messages/send", ivy.uid);
+        CHECK(post(&hal, url, msg) == 201);
+        json_str(resp, "id", mid2, sizeof mid2);
+        snprintf(url, sizeof url, "/api/v1/conversations/%s/messages", hal.uid);
+        arrived = 0;
+        for (int i = 0; i < 200 && !arrived; i++) {
+            arrived = get(&ivy, url) == 200 && json_has("big.bin");
+            if (!arrived) usleep(50000);
+        }
+        usleep(500000);
+        CHECK(arrived && get(&ivy, url) == 200 && strstr(strstr(resp, "big.bin"), "\"state\":\"waiting\""));   /* not fetched by itself */
+        snprintf(url, sizeof url, "/api/v1/conversations/%s/messages/%s/files/%s/download", hal.uid, mid2, fid2);
+        CHECK(post(&ivy, url, "{}") == 200);
+        snprintf(url, sizeof url, "/api/v1/files/%s", fid2);
+        fetched = 0;
+        for (int i = 0; i < 300 && !fetched; i++) {
+            fetched = get(&ivy, url) == 200 && json_has("\"state\":\"available\"");
+            if (!fetched) usleep(50000);
+        }
+        CHECK(fetched);
+        snprintf(url, sizeof url, "/api/v1/conversations/%s/messages/%064d/files/%s/download", hal.uid, 1, fid2);
+        CHECK(post(&ivy, url, "{}") == 404);                                                        /* no such message */
         free(bytes);
         node_down(&hal); node_down(&ivy);
     }

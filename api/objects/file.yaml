@@ -24,5 +24,8 @@ properties:
       files.auto_download (fetch it with .../download), or its sender cannot be reached; `too_large` larger than this
       Puddle takes (files.max_size), never fetched; `failed` gave up (.../download tries again).
   received: { type: integer, minimum: 0, description: Bytes here so far }
+  reason: { type: string, description: "Why a download is waiting or failed, in words (\"nobody there\", \"they do not have it\")" }
 x-methods:
   content: GET /api/v1/files/{file}/content
+  download: POST /api/v1/conversations/{conversation}/messages/{message}/files/{file}/download
+  cancel: POST /api/v1/conversations/{conversation}/messages/{message}/files/{file}/cancel

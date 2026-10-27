@@ -95,6 +95,7 @@ add_library(puddle_core STATIC
   src/core/profile.cpp
   src/core/ratelimit.cpp
   src/core/streams.cpp
+  src/core/transfers.cpp
   src/core/yamltree.cpp)
 target_link_libraries(puddle_core PUBLIC puddle_storage)
 # Only yamltree.cpp sees libyaml's headers: a shared include dir like /opt/homebrew/include would
@@ -149,6 +150,7 @@ target_link_libraries(puddle_api PUBLIC puddle_objects puddle_http)
 
 # federation: the stream API: routes other Puddles call, and how our news reaches them
 add_library(puddle_federation STATIC
+  src/federation/files.cpp
   src/federation/access.cpp
   src/federation/courier.cpp
   src/federation/flow.cpp
@@ -292,7 +294,7 @@ enable_testing()
 # Each layer of src/ includes only the layers it may (tests/layers.cmake).
 add_test(NAME layers COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_CURRENT_SOURCE_DIR}/src -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/layers.cmake)
 
-foreach(t http json store storage files people conversations config yaml profile encoding identity auth reqsig phrase serve router routes link group groupapi groupowner streams ratelimit access owner_streams client outbox inbound open_request flow message messages keysync wireprofile profiles e2e group_e2e)
+foreach(t http json store storage files transfers people conversations config yaml profile encoding identity auth reqsig phrase serve router routes link group groupapi groupowner streams ratelimit access owner_streams client outbox inbound open_request flow message messages keysync wireprofile profiles e2e group_e2e)
   add_executable(${t}_test tests/${t}_test.c)
   target_link_libraries(${t}_test PRIVATE puddle_service)
   add_test(NAME ${t} COMMAND ${t}_test)

@@ -58,10 +58,11 @@ Two new routes, for a peer with an open stream, signed like every other stream r
 
 | Route | Answers |
 |---|---|
-| `GET /stream/v1/files/{file}/chunks` | the chunk hashes, as JSON, plus the size |
-| `GET /stream/v1/files/{file}/chunks/{n}` | chunk `n`, as bytes (`application/octet-stream`) |
+| `GET /stream/v1/files/{file}/chunks?chat=&message=` | the chunk hashes, 32 bytes each, as bytes (the size is in the message) |
+| `GET /stream/v1/files/{file}/chunks/{n}?chat=&message=` | chunk `n`, as bytes (`application/octet-stream`) |
 
-A Puddle serves a file only to a peer in a chat where a message carries it (the DM with them, or a group both are in),
+The request names the message that carries the file and its chat, so no index is needed: a Puddle serves a file only to
+a peer in that chat (the DM with them over an open stream, or a group both are in), only if that message carries it,
 and only the chunks it has. Anything else is a `404`, like everything else that is refused.
 
 **Fetching** is a queue of its own (`core/transfers`), not the outbox: one download at a time per peer, chunks in order,
@@ -82,7 +83,7 @@ Uploading in chunks, so the app and a phone client never send more than 1 MiB at
 | `POST /api/v1/conversations/{id}/messages/send` | gains `files: [{id, name, mime, preview?, w?, h?, duration_ms?}]`; `body` may then be left out |
 | `GET /api/v1/files/{file}` | the `File`: size, state (`available`, `downloading`, `waiting`, `too_large`, `failed`), bytes so far |
 | `GET /api/v1/files/{file}/content` | the bytes, read from disk as they are sent, with `Range` |
-| `POST /api/v1/files/{file}/download` and `/cancel` | fetch one that waits (over the automatic limit), or stop |
+| `POST /api/v1/conversations/{id}/messages/{message}/files/{file}/download` and `/cancel` | fetch one that waits (over the automatic limit) or failed, or stop and throw away what came |
 
 A `Message` gains `files: [File]`. Uploaded files no message uses are thrown away after a day.
 
@@ -92,7 +93,7 @@ A `Message` gains `files: [File]`. Uploaded files no message uses are thrown awa
 <data_dir>/files/<id>              the file, once whole
 <data_dir>/files/<id>.chunks       its chunk hashes
 <data_dir>/files/partial/<id>      a download or upload in progress, and which chunks it has
-<data_dir>/state/files/<id>.json   which messages use it, where it can come from, its state
+<data_dir>/state/transfers/<id>.json  a download: its chat and message, who to ask, how it is going
 ```
 
 Profile pictures stay in `media/` as they are.

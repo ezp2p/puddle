@@ -46,7 +46,7 @@ typedef struct {
     char peer[PUDDLE_USER_ID_LEN + 1];
     char kind[32];             /* what the caller calls it ("access", "result", ...); handed back on `done` */
     char method[8];            /* "POST" (the default) or "GET" */
-    char path[160];            /* the endpoint; a GET may carry a query ("?hash=...") */
+    char path[320];            /* the endpoint; a GET may carry a query ("?hash=...", a file's "?chat=...&message=...") */
     size_t max_reply;          /* the largest answer to take, for a GET that fetches a file; 0 = the usual */
     char *body;                /* a JSON object, NUL-terminated */
     size_t body_len;

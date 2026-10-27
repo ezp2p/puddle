@@ -372,6 +372,43 @@ int main(void)
         CHECK(get(&b, "/api/v1/streams?state=pending_out") == 200 && !json_has("provisional"));  /* the made-up id is gone */
     }
 
+    /* ---- a file in the group: fetched from its sender, or, when the sender is away, from another member ---- */
+    {
+        char kept_url[sizeof url];
+        memcpy(kept_url, url, sizeof url);                                                            /* what the steps after this use */
+        node_down(&c);
+        c.cfg.files_auto_download = -1;                                                              /* carol fetches nothing by herself */
+        CHECK(node_up(&c) == 0);
+        char text[2001], fid[80] = "", up[80] = "", mid[80] = "", mpath[200];
+        for (int i = 0; i < 2000; i++) text[i] = (char)('a' + i % 26);
+        text[2000] = 0;
+        CHECK(post(&a, "/api/v1/files/uploads/create", "{\"size\":2000}") == 201);
+        const char *at = strstr(resp, "\"upload\":\"");
+        if (at) snprintf(up, sizeof up, "%.32s", at + 10);
+        snprintf(url, sizeof url, "/api/v1/files/uploads/%s/chunks/0", up);
+        CHECK(post(&a, url, text) == 200);
+        snprintf(url, sizeof url, "/api/v1/files/uploads/%s/finish", up);
+        CHECK(post(&a, url, "{}") == 201);
+        at = strstr(resp, "\"id\":\"");
+        if (at) snprintf(fid, sizeof fid, "%.64s", at + 6);
+        snprintf(body, sizeof body, "{\"body\":\"the plan\",\"files\":[{\"id\":\"%s\",\"name\":\"plan.txt\",\"mime\":\"text/plain\"}]}", fid);
+        CHECK(post(&a, cpath, body) == 201);
+        at = strstr(resp, "\"id\":\"");
+        if (at) snprintf(mid, sizeof mid, "%.64s", at + 6);
+        snprintf(mpath, sizeof mpath, "/api/v1/conversations/%s/messages", gid);
+        CHECK(wait_has(&b, mpath, "\"state\":\"available\""));                                       /* bob's came by itself */
+        CHECK(wait_has(&c, mpath, "plan.txt") && json_has("\"state\":\"waiting\""));                /* carol's waits for her */
+        node_down(&a);                                                                                /* the sender goes away */
+        snprintf(url, sizeof url, "/api/v1/conversations/%s/messages/%s/files/%s/download", gid, mid, fid);
+        CHECK(post(&c, url, "{}") == 200);
+        snprintf(url, sizeof url, "/api/v1/files/%s", fid);
+        CHECK(wait_has(&c, url, "\"state\":\"available\""));                                        /* from bob */
+        snprintf(url, sizeof url, "/api/v1/files/%s/content", fid);
+        CHECK(get(&c, url) == 200 && !strcmp(resp, text));
+        CHECK(node_up(&a) == 0);
+        memcpy(url, kept_url, sizeof url);
+    }
+
     /* ---- carol leaves: the others see it; friends stay friends ---- */
     snprintf(body, sizeof body, "%s/leave", gpath);
     CHECK(post(&c, body, NULL) == 200);

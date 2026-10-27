@@ -1,6 +1,8 @@
 #include "api/api.h"
 #include "api/request.hpp"
+#include "objects/conversation.hpp"
 #include "objects/file.hpp"
+#include "core/transfers.h"
 #include "storage/files.h"
 
 #include <cstdlib>
@@ -79,7 +81,50 @@ static int file_content(const puddle_call *c, puddle_jw *w)
     return 200;
 }
 
+/* the file `file` of the message `message` in `conversation`, as that message describes it, and the conversation's chat */
+static puddle_file_ref refOf(const puddle_call *c, std::string &chat)
+{
+    auto conv = Conversation::get(c->ctx, puddle_param(c, "conversation"));
+    auto m = conv ? Message::get(c->ctx, conv->id(), puddle_param(c, "message")) : std::nullopt;
+    if (!m)
+        throw Error::notFound();
+    for (const auto &f : m->files())
+        if (!strcmp(f.id, puddle_param(c, "file"))) {
+            chat = conv->chat();
+            return f;
+        }
+    throw Error::notFound();
+}
+
+/* Fetch a file the Puddle did not fetch by itself (over files.auto_download), or try again one that failed. */
+static int download_file(const puddle_call *c, puddle_jw *w)
+{
+    std::string chat;
+    puddle_file_ref ref = refOf(c, chat);
+    const char *code = "internal";
+    int st = c->ctx->courier && c->ctx->courier->file_fetch ? c->ctx->courier->file_fetch(c->ctx, chat.c_str(), puddle_param(c, "message"), ref.id, &code) : 500;
+    if (st)
+        throw Error(st, code);
+    File::of(c->ctx, ref).write(w);
+    return 200;
+}
+
+/* Stop fetching it, and throw away what came. A file that is here whole stays. */
+static int cancel_download(const puddle_call *c, puddle_jw *w)
+{
+    std::string chat;
+    puddle_file_ref ref = refOf(c, chat);
+    if (c->ctx->transfers && puddle_transfers_state(c->ctx->transfers, ref.id, nullptr) != PUDDLE_TR_NONE)
+        puddle_transfers_cancel(c->ctx->transfers, ref.id);
+    File::of(c->ctx, ref).write(w);
+    return 200;
+}
+
+#define MESSAGE_FILE "/api/v1/conversations/{conversation:id}/messages/{message:event}/files/{file:event}"
+
 const puddle_route puddle_file_api_routes[] = {
+    { "POST", MESSAGE_FILE "/download",                                 PUDDLE_AUTH_OWNER, 64,                download_file, NULL },
+    { "POST", MESSAGE_FILE "/cancel",                                   PUDDLE_AUTH_OWNER, 64,                cancel_download, NULL },
     { "POST", "/api/v1/files/uploads/create",                           PUDDLE_AUTH_OWNER, 256,               create_upload, NULL },
     { "GET",  "/api/v1/files/uploads/{upload:token}",                   PUDDLE_AUTH_OWNER, 0,                 get_upload,    NULL },
     { "POST", "/api/v1/files/uploads/{upload:token}/chunks/{n:index}",  PUDDLE_AUTH_OWNER, PUDDLE_FILE_CHUNK, put_chunk,     NULL },

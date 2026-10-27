@@ -147,8 +147,9 @@ bool findInChat(puddle_ctx *ctx, const std::string &chat, const std::string &tar
             throw Error::internal();
         for (size_t i = 0; i < m; i++)
             if (target == v[i].id) {
-                *out = v[i];
+                *out = v[i]; // it is the caller's now: body, files and all
                 v[i].body = NULL;
+                v[i].files = NULL;
                 puddle_view_free(v, m);
                 return true;
             }

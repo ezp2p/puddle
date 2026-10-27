@@ -2,6 +2,7 @@
 
 #include "core/error.hpp"
 #include "storage/files.h"
+#include "core/transfers.h"
 
 #include <cstring>
 
@@ -28,9 +29,14 @@ File File::of(puddle_ctx *ctx, const puddle_file_ref &ref)
     int64_t size = 0, have = 0;
     puddle_file_state st = ctx->files ? puddle_files_state(ctx->files, ref.id, &size, &have) : PUDDLE_FILE_ABSENT;
     f.have_ = have;
+    char why[200] = "";
+    puddle_tr_state tr = ctx->transfers ? puddle_transfers_state(ctx->transfers, ref.id, why) : PUDDLE_TR_NONE;
+    f.reason_ = why;
     if (st == PUDDLE_FILE_WHOLE)
         f.state_ = State::Available;
-    else if (st == PUDDLE_FILE_PARTIAL)
+    else if (tr == PUDDLE_TR_FAILED)
+        f.state_ = State::Failed;
+    else if (tr != PUDDLE_TR_NONE || st == PUDDLE_FILE_PARTIAL)
         f.state_ = State::Downloading;
     else if (ref.size > puddle_files_max_size(ctx->config))
         f.state_ = State::TooLarge; // more than this Puddle takes: never fetched
@@ -70,6 +76,8 @@ void File::write(puddle_jw *w) const
     if (ref_.preview[0])
         puddle_jw_str(w, "preview", ref_.preview);
     puddle_jw_str(w, "state", stateName(state_));
+    if (!reason_.empty() && state_ != State::Available)
+        puddle_jw_str(w, "reason", reason_.c_str());
     puddle_jw_num(w, "received", have_);
     puddle_jw_end_object(w);
 }
