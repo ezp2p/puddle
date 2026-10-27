@@ -100,30 +100,36 @@ ApplicationWindow {
         backend: root.backend
     }
 
+    // A notification about `who` (a person, a group, or "" for the window itself): the system's own where there is one (macOS),
+    // else the tray's message. Either, clicked, opens the window there.
+    function notify(title, body, who) {
+        if (backend.notify(title, body, who))
+            return
+        notified = who
+        tray.showMessage(title, body)
+    }
+    Connections {
+        target: root.backend
+        function onNotificationClicked(who) { root.showWindow(); shell.showPerson(who) }
+    }
+
     // Tell the owner about new things while the window is hidden. The text of a message is never shown here.
     Connections {
         target: root.backend.chats
         function onNewRequest(userId) {
-            if (!root.visible || !root.active) {
-                root.notified = ""
-                tray.showMessage(qsTr("Friend request"),
-                                 qsTr("%1 would like to be your friend.").arg(root.backend.chats.nameOf(userId)))
-            }
+            if (!root.visible || !root.active)
+                root.notify(qsTr("Friend request"), qsTr("%1 would like to be your friend.").arg(root.backend.chats.nameOf(userId)), "")
         }
         function onNewIncoming(userId, unread) {
-            if (!root.visible || !root.active) {
-                root.notified = userId
-                tray.showMessage(root.backend.chats.nameOf(userId), qsTr("New message"))
-            }
+            if (!root.visible || !root.active)
+                root.notify(root.backend.chats.nameOf(userId), qsTr("New message"), userId)
         }
         function onUnreadTotalChanged() { root.updateBadge() }
         function onIncomingRequestsChanged() { root.updateBadge() }
         function onGroupInvitesChanged() { root.updateBadge() }
         function onNewGroupInvite(groupId) {
-            if (!root.visible || !root.active) {
-                root.notified = ""
-                tray.showMessage(qsTr("Group invitation"), qsTr("You were invited to %1.").arg(root.backend.chats.nameOf(groupId)))
-            }
+            if (!root.visible || !root.active)
+                root.notify(qsTr("Group invitation"), qsTr("You were invited to %1.").arg(root.backend.chats.nameOf(groupId)), "")
         }
     }
     function updateBadge() {

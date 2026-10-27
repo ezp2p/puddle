@@ -231,7 +231,13 @@ if(PUDDLE_BUILD_GUI)
     if(APPLE)
       enable_language(OBJCXX)
       target_sources(puddle PRIVATE src/gui/app/dock_mac.mm)
-      target_link_libraries(puddle PRIVATE "-framework AppKit")
+      target_link_libraries(puddle PRIVATE "-framework AppKit" "-framework UserNotifications")
+      # macOS allows notifications only for an app it knows by its bundle id: sign it under that id (the linker's own ad hoc
+      # signature names it "Puddle"), and register it with Launch Services, as scripts/dev.sh starts the executable directly
+      add_custom_command(TARGET puddle POST_BUILD
+        COMMAND codesign --force --deep --sign - "$<TARGET_BUNDLE_DIR:puddle>"
+        COMMAND /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$<TARGET_BUNDLE_DIR:puddle>"
+        VERBATIM)
     endif()
     set_target_properties(puddle PROPERTIES
       OUTPUT_NAME Puddle
@@ -247,7 +253,7 @@ if(PUDDLE_BUILD_GUI)
     target_link_libraries(backend_test PRIVATE puddle_service Qt6::Gui Qt6::Network)
     if(APPLE)
       target_sources(backend_test PRIVATE src/gui/app/dock_mac.mm)
-      target_link_libraries(backend_test PRIVATE "-framework AppKit")
+      target_link_libraries(backend_test PRIVATE "-framework AppKit" "-framework UserNotifications")
     endif()
     add_test(NAME backend COMMAND backend_test)
 
@@ -267,7 +273,7 @@ if(PUDDLE_BUILD_GUI)
     target_link_libraries(ui_test PRIVATE puddle_service Qt6::Quick Qt6::QuickControls2 Qt6::Network Qt6::Test)
     if(APPLE)
       target_sources(ui_test PRIVATE src/gui/app/dock_mac.mm)
-      target_link_libraries(ui_test PRIVATE "-framework AppKit")
+      target_link_libraries(ui_test PRIVATE "-framework AppKit" "-framework UserNotifications")
     endif()
     add_test(NAME ui COMMAND ui_test)
     set_tests_properties(ui PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 180)

@@ -79,7 +79,12 @@ public:
     // macOS: Dock icon only while the window is shown. No-op on other platforms.
     Q_INVOKABLE void setDockVisible(bool visible);
 
+    // A notification from the system's own centre (macOS), about `who` (a user or group id, or ""). False where there is none,
+    // and the caller uses the tray's message instead. Clicking it emits notificationClicked(who).
+    Q_INVOKABLE bool notify(const QString &title, const QString &body, const QString &who = QString());
+
 signals:
+    void notificationClicked(const QString &who);
     void quittingChanged();
     void developerModeChanged();
     void startedChanged();

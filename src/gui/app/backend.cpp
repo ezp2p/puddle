@@ -37,6 +37,8 @@ Backend::Backend(QObject *parent) : QObject(parent)
 {
     qApp->installEventFilter(this);
     developerMode_ = QSettings().value("developerMode", false).toBool();
+    // asks the owner once, at launch, rather than when the first message arrives while they are away
+    puddle_notify_init([](const char *who, void *ctx) { emit static_cast<Backend *>(ctx)->notificationClicked(QString::fromUtf8(who)); }, this);
 
     char cfgPath[PUDDLE_PATH_MAX];
     if (puddle_config_default_path(cfgPath, sizeof cfgPath) == 0) {
@@ -230,6 +232,11 @@ void Backend::setDockBadge(int count)
 void Backend::setDockVisible(bool visible)
 {
     puddle_set_dock_visible(visible);
+}
+
+bool Backend::notify(const QString &title, const QString &body, const QString &who)
+{
+    return puddle_notify(title.toUtf8().constData(), body.toUtf8().constData(), who.toUtf8().constData());
 }
 
 bool Backend::takeFirstHideNotice()
