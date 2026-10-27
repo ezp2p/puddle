@@ -1,0 +1,16 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: RedactEvent
+description: Takes back an earlier message. A request to hide; other Puddles may ignore it.
+allOf:
+  - $ref: "header.yaml"
+  - type: object
+    required: [type, ref]
+    properties:
+      type: { const: "redact" }
+      ref: { $ref: "../wire/ids.yaml#/$defs/EventId", description: The message being taken back }
+unevaluatedProperties: false
+x-sent-by: the author of the message it takes back
+x-rules:
+  - Carries no body
+  - Counts only if by the message's author and later than the message
+  - Wins over any edit, whenever it arrived

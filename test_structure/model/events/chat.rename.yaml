@@ -1,0 +1,15 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: ChatRename
+description: Renames a group.
+allOf:
+  - $ref: "header.yaml"
+  - type: object
+    required: [type, body]
+    properties:
+      type: { const: "chat.rename" }
+      body: { type: string, minLength: 1, maxLength: 100, description: The new name }
+unevaluatedProperties: false
+x-sent-by: any member
+x-rules:
+  - From a member
+  - The newer rename wins

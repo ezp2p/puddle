@@ -1,0 +1,41 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: Message
+description: |
+  One entry in a conversation, as the owner sees it. It is the message's events folded together (../events/message,
+  edit, redact, or one of the group events), plus what only this Puddle knows: `outgoing`, `received_at` and
+  `delivery`.
+type: object
+required: [id, conversation, type, author, ts, outgoing, received_at]
+properties:
+  id: { $ref: "../wire/ids.yaml#/$defs/EventId" }
+  conversation: { type: string, description: "The Conversation's id: the other person's UserId for a DM, the ChatId for a group" }
+  type:
+    type: string
+    enum: [default, group_create, group_rename, group_invite, group_join, group_leave]
+    description: "`default` is something someone wrote; the others are what happened to a group"
+  author: { $ref: "partial_user.yaml" }
+  ts: { $ref: "../wire/ids.yaml#/$defs/Timestamp", description: "The author's clock" }
+  body: { type: string, maxLength: 4000, description: The current text, edits applied; absent once taken back, and on group notices }
+  reply_to: { $ref: "../wire/ids.yaml#/$defs/EventId" }
+  edited_at: { $ref: "../wire/ids.yaml#/$defs/Timestamp", description: The latest edit that counts; absent if never edited or taken back }
+  deleted: { type: boolean, description: "Present, true, once the author took it back" }
+  member: { $ref: "partial_user.yaml", description: "group_invite: who was invited" }
+  name: { type: string, description: "group_create, group_rename: the group's name" }
+  outgoing: { type: boolean, description: Sent by the owner }
+  received_at: { $ref: "../wire/ids.yaml#/$defs/Timestamp", description: When this Puddle stored it }
+  delivery:
+    description: "Only on the owner's own messages that are not delivered yet; absent once they are"
+    type: object
+    required: [state, attempts]
+    properties:
+      state:
+        type: string
+        enum: [queued, retrying, failed, held]
+        description: "`queued` not tried yet, `retrying` could not reach them (see next_at), `failed` given up (retry asks again), `held` waiting for the owner to trust their changed certificate"
+      reason: { type: string }
+      next_at: { $ref: "../wire/ids.yaml#/$defs/Timestamp", description: "With retrying" }
+      attempts: { type: integer, minimum: 0 }
+x-methods:
+  edit: POST /api/v1/conversations/{conversation}/messages/{message}/edit
+  remove: POST /api/v1/conversations/{conversation}/messages/{message}/delete
+  reply: POST /api/v1/conversations/{conversation}/messages/send (with reply_to)

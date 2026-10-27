@@ -1,0 +1,12 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: Header
+description: What every event has. The other fields depend on `type`.
+type: object
+required: [type, chat, sender, ts]
+properties:
+  type: { type: string }
+  chat: { $ref: "../wire/ids.yaml#/$defs/ChatId" }
+  sender: { $ref: "../wire/ids.yaml#/$defs/UserId" }
+  ts:
+    $ref: "../wire/ids.yaml#/$defs/Timestamp"
+    description: The sender's clock. Years 2000 to 2100. Two events from one sender never share a ts.

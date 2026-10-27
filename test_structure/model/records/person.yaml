@@ -1,0 +1,32 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: Person
+description: |
+  Someone this Puddle knows of, and the profiles their Puddle sent us: one for each place we share. Collection "people",
+  key = user id. Kept by src/core/people.h.
+
+  A place is "dm" (what they show us directly) or "group:<group id>" (what they show the members of that group; Ponds
+  will add "pond:<id>"). Each arrives from their Puddle: with their request for a stream or their answer to ours (the
+  direct one only), and with POST /stream/v1/profile whenever their choice or the profile changes. Whichever comes last
+  for a place replaces what we held for it; `profile: null` takes it back and it is forgotten. Each was cleaned when it
+  came (src/wire/wireprofile.h): what was wrong in it was left out, and `notes` says what.
+type: object
+required: [v, id, first_seen, profiles]
+properties:
+  v: { const: 2, description: "1 held a single `profile` and `profile_at`: read as the \"dm\" place" }
+  id: { $ref: "../wire/ids.yaml#/$defs/UserId" }
+  first_seen: { $ref: "../wire/ids.yaml#/$defs/Timestamp", description: "When we first heard of them" }
+  profiles:
+    type: array
+    maxItems: 64
+    items:
+      type: object
+      required: [place, profile, at]
+      properties:
+        place: { type: string, pattern: "^(dm|group:[a-z2-7]{52})$" }
+        profile: { $ref: "../wire/profile.yaml", description: As cleaned on arrival }
+        at: { $ref: "../wire/ids.yaml#/$defs/Timestamp", description: When it arrived }
+        notes: { type: string, description: "What was left out or cut short, one line each; absent if nothing" }
+x-fields:
+  derived: []
+  owners-own: []
+  from-peer: [profiles]

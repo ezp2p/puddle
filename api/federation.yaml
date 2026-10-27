@@ -1,0 +1,606 @@
+openapi: 3.1.0
+info:
+  title: Puddle Stream API
+  version: 0.1.0
+  description: |
+    How one Puddle talks to another over a stream. Not used by apps or phone clients; they use
+    `openapi.yaml`. (This file keeps its old name, `federation.yaml`.)
+
+    This is the thin slice a demo needs: becoming friends, delivering messages, and group invites.
+    Ponds will implement the same core later.
+
+    **There are no public endpoints.** Every request is signed (see `streamSignature`). One that fails
+    any check, up to and including the signature, gets the same `404` as a path that does not exist, so
+    a stranger learns nothing, not even that this is a Puddle. The one request a Puddle must take from
+    someone it doesn't know is `POST /stream/v1/access`, and it answers that identically whatever it
+    decides.
+
+    Conventions:
+    - JSON over HTTPS, versioned under `/stream/v1`. Peers are found by an address, typed once to ask for a stream; ids are learned from the answer.
+    - Bodies are limited per route (4 MiB at most), decided before they are read. A request over its limit is
+      answered `404`, like anything else a stranger sends. Chunked bodies are not supported.
+    - Only GET and POST are used. GET reads and never changes anything; POST does everything else.
+    - **Events are sent as strings.** An event's id is the SHA-256 of its exact bytes, so `event` is the
+      raw JSON text as a string, never re-serialized. See docs/storage.md.
+    - Groups: a group's id is made from its creator, a time and a nonce, and written into its first event, `chat.create`. Messages,
+      edits and redactions are the direct-message events with the group's id as the `chat`. Five more events change the group
+      (`chat.create`, `chat.rename`, `member.invite`, `member.join`, `member.leave`), delivered through `/stream/v1/events` like any
+      other; each Puddle applies the same rules to them, so the same events give the same members (docs/groups.md). Nobody can
+      remove another member.
+    - There is deliberately no endpoint for blocks. A blocked sender is answered exactly like an
+      ordinary pending request, and never told.
+    - Group-only connections (a "scoped stream", state `scoped`) use `/stream/v1/access` with `scope` set, and are answered by an
+      `access/result` with `scoped: true`. Members learn each other's addresses this way (docs/groups.md).
+
+    Still to decide: the exact signature scheme, retries and ordering, and key rotation records.
+
+servers:
+  - url: https://localhost:8443
+
+tags:
+  - name: access
+    description: Becoming trusted
+  - name: delivery
+    description: Messages and profile changes over an existing stream
+  - name: groups
+    description: Group invites
+
+paths:
+  /stream/v1/identity:
+    get:
+      tags: [access]
+      operationId: getIdentityChain
+      summary: This Puddle's key chain
+      description: |
+        Signed like everything else, answered only to a known peer. Used by an owner recovering after
+        losing a device, who signs with keys re-derived from their recovery phrase.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChainBody" }
+    post:
+      tags: [access]
+      operationId: pushIdentityChain
+      summary: Tell a peer your keys rolled
+      description: |
+        Sent after a roll to every peer that holds our chain (an active stream, or a request of ours still waiting),
+        ahead of anything else queued for them: what else is waiting was signed with the new key, which they will
+        not believe until they have this. The recipient takes it only if it is the chain it already holds for that id
+        plus more records, each verifying; anything else is ignored. The request is authenticated by the new chain in
+        the body (the signing key has just changed), which any stranger could do with a chain of their own, so it is
+        **always answered `202`**: what counts is that it continues a chain we hold, which only the owner of the keys can
+        produce. Items already queued for the peer are signed again (the key id is outside the signed bytes), and
+        what carried our old chain (a request, an answer) is rewritten to carry the new.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChainBody" }
+      responses:
+        "202": { description: Received }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /stream/v1/address:
+    post:
+      tags: [access]
+      operationId: pushAddress
+      summary: Tell a peer where to reach you now
+      description: |
+        Where the sender is now, signed by its current key. Sent to every active stream when its address or its
+        TLS certificate changes (it notices at start). The highest `seq` wins; one that is not newer, or that
+        carries no addresses, leaves what we hold alone. A `tls_fp` in it is the fingerprint of the sender's new
+        certificate: since the record is signed by a key we already trust, it is accepted without asking, and anything
+        held back for the owner on account of that certificate is released. (A certificate that changes **without**
+        being announced still holds sending until the owner says it is fine.) Addresses we would never connect to
+        (unspecified, multicast, link-local) are refused. Answered `400 bad_record` for a record that does not check
+        out, `204` otherwise.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AddressRecord" }
+      responses:
+        "204": { description: Recorded }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /stream/v1/access:
+    post:
+      tags: [access]
+      operationId: requestAccess
+      summary: Ask for a stream
+      description: |
+        The one request a Puddle takes from a stranger. It is signed with the requester's key, checkable
+        because the requester's `chain` is in the body. A request that does not check out (malformed, a
+        chain that is not the requester's, a bad or missing signature, a replay) is answered `404`, exactly
+        like a path that does not exist. One that does is **always answered `202` with an empty body,
+        whatever is decided**: blocked, refused by policy, rate-limited, over capacity, approved at once or
+        left waiting for the owner are indistinguishable, and dropped ones are dropped silently. The
+        requester's `profile` is there only if they chose one to show the target directly; it is cleaned like any
+        received profile (see `pushProfile`), and its pictures are fetched once the stream is open. At most 96 KiB. The outcome arrives later at the requester's `access/result`, or by polling
+        `access/status`. Set `scope` to ask for a group-only connection: the requester's own signed `member.join` for a group is the proof, and
+        the target approves if it is in that group, the requester is invited to it (or already in), the join is the requester's own and signed by the
+        key in the chain sent, and the requester is not blocked.
+
+        **The request may be signed for no recipient**: where the signature names the recipient's user id it may name `*`,
+        because the requester often has only an address and does not know who lives there. This route is the only one that
+        accepts that; everywhere else a signature for anyone but the recipient is a `404`. The cost is that a replay of the
+        request inside the five-minute window can make it appear at another Puddle. The target keeps the `ticket` with the
+        request and returns it in its answer.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AccessRequest" }
+      responses:
+        "202": { description: Received. Says nothing about what will happen. }
+
+  /stream/v1/access/result:
+    post:
+      tags: [access]
+      operationId: sendAccessResult
+      summary: Tell the requester what the owner decided
+      description: |
+        Called by the target on the requester's Puddle once the owner accepts or declines (or at once, when an
+        invite or an open policy let them in). Like the request, it is proven by the chain in its body: the
+        requester has no keys of the target's yet, and often does not know its id (it asked an address), so it accepts an
+        answer only if the `ticket` in it is one the requester made and has not yet had answered, and the chain belongs
+        to the id the answer claims and signs it. That is when the requester learns who lives at the address; the
+        ticket is then spent. Anything else is dropped. **Always `202` once it authenticates**
+        (a stranger can authenticate with any key of their own, so the answer must say nothing); an answer that is
+        accepted shows only in the requester's own state. A decline carries the responder's chain too, as the
+        requester could not otherwise tell it from a forgery.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AccessResult" }
+      responses:
+        "202": { description: Received }
+
+  /stream/v1/access/status:
+    post:
+      tags: [access]
+      operationId: getAccessStatus
+      summary: What became of the request I sent you
+      description: |
+        For a requester whose Puddle missed the answer. A POST rather than a GET, and chain-proven like the request,
+        because the target may hold nothing about the requester (a request it ignored leaves no trace), and so
+        could not otherwise tell who is asking. It answers `approved` (with its own `responder` details) only to
+        a requester it has an active stream with, `declined` to one whose stream it closed, and **`pending` to
+        everyone else**: blocked, ignored because it is closed to requests, never heard of. So no answer reveals a
+        block, a closed door, or that the request was seen.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [requester]
+              properties:
+                requester: { $ref: "#/components/schemas/Peer" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AccessState" }
+
+  /stream/v1/close:
+    post:
+      tags: [access]
+      operationId: closeStream
+      summary: Tell the peer this stream is closed
+      description: |
+        Sent when the owner deletes a stream (or withdraws a request that is still waiting). A block sends nothing.
+        Signed with a key the recipient already holds, so it can be answered plainly: `403 no_stream` if there is
+        no open stream or request from the sender to close.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                scope: { $ref: "#/components/schemas/Scope" }
+      responses:
+        "204": { description: Closed }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/NoStream" }
+
+  /stream/v1/events:
+    post:
+      tags: [delivery]
+      operationId: deliverEvents
+      summary: Deliver signed events for one chat
+      description: |
+        Messages (edits, deletes and group membership events follow). Signed by the sender's **current** key,
+        so a key that has since been replaced, which is what a stolen phone leaves behind, cannot deliver. Safe
+        to repeat: events already held are reported as `duplicate`. The sender must have an open stream
+        (`403 no_stream`), and `chat` must be the direct-message chat between the two of you (`400`).
+        At most 100 events and 256 KiB; more than that is refused whole. Each event is then judged on its own, and
+        a `rejected` entry says why: `malformed`, `too_large`, `bad_id` (the id is not the SHA-256 of the bytes),
+        `bad_signature`, `unknown_key` (signed by a key that is not the sender's current one),
+        `unsupported_type`, `wrong_chat`, `wrong_sender` (the event names someone other than the sender),
+        `bad_time` (not between the years 2000 and 2100), `bad_body`, `storage_error`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Delivery" }
+      responses:
+        "200":
+          description: Per-event outcome
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeliveryResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /stream/v1/profile:
+    post:
+      tags: [delivery]
+      operationId: pushProfile
+      summary: The profile the sender shows you, in a place you share
+      description: |
+        A profile is shown per place: directly (no `group`), or in a group both are in (`group`; Ponds will add their
+        own). The sender's owner chose it for that place, and that choice is their consent for it to go there; nothing
+        is sent where nothing was chosen. Sent when the choice or the profile changes, when a stream opens, and when
+        someone joins a group. `profile: null` takes it back: forget what you held for that place. Needs an open stream
+        (`403 no_stream`).
+
+        The receiver rebuilds the profile from the fields it understands and **never refuses it for what is in it**: a
+        field that is wrong (a colour that is not `#rrggbb`, a picture reference with a malformed hash, a kind of image
+        it does not take, a link that is not http or https) is left out, text over its limit is cut to it, and a short
+        note says what was done; fields it does not know are skipped without a word. Only something that is not a JSON
+        object is set aside (`204`, nothing kept). A profile for a group the receiver does not share with the sender is
+        set aside the same way. The pictures it points at that the receiver does not hold are then fetched from the
+        sender.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [profile]
+              properties:
+                profile:
+                  oneOf: [{ $ref: "#/components/schemas/Profile" }, { type: "null" }]
+                group: { $ref: "#/components/schemas/UserId", description: The group it is shown in; absent for the direct one }
+      responses:
+        "204": { description: Recorded (or set aside) }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /stream/v1/media:
+    get:
+      tags: [delivery]
+      operationId: getMedia
+      summary: An image from the sender's profile
+      description: |
+        Only images in a profile the owner shows *you* (directly, or in a group you share) are served, and only over an
+        open stream; anything else is `404`,
+        as if it did not exist. The hash is the SHA-256 of the file; the fetcher checks it, the size and the kind of
+        image against what the profile said, and keeps nothing that does not match. The size cap is a placeholder
+        (25 MiB), and what a receiver does about oversized or booby-trapped images is still open.
+      parameters:
+        - name: hash
+          in: query
+          required: true
+          schema: { type: string, pattern: "^[0-9a-f]{64}$" }
+      responses:
+        "200":
+          description: The image
+          content:
+            image/png: { schema: { type: string, format: binary } }
+            image/jpeg: { schema: { type: string, format: binary } }
+            image/gif: { schema: { type: string, format: binary } }
+            image/webp: { schema: { type: string, format: binary } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /stream/v1/group/invite:
+    post:
+      tags: [groups]
+      operationId: inviteToGroup
+      summary: Invite a friend into a group
+      description: |
+        From a friend only (`403 no_stream` otherwise). The body is the group's `chat.create`, the sender's signed `member.invite` naming the
+        recipient, and who is in the group with the addresses they can be reached at (for the group-only connections made on joining). The
+        recipient checks the group's id, the invitation (the sender's own word, signed by their current key) and that the sender is a member; it
+        takes the roster on the sender's word. Answered `202` whatever the owner decides later (they are asked); `400` for something malformed.
+        The recipient says yes by telling the members with `member.join` (to those it has no stream with, in a group-only connection request);
+        no by `member.leave` to the one who invited.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GroupInvite" }
+      responses:
+        "202": { description: Received }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { description: Not a friend }
+
+components:
+  securitySchemes:
+    streamSignature:
+      type: apiKey
+      in: header
+      name: X-Puddle-Signature
+      description: |
+        `v1 id=<sender id>; kid=<key id>; ts=<ms>; nonce=<base64>; sig=<base64>`, where `kid` is the hex
+        SHA-256 of the sender's signing public key and `sig` is an Ed25519 signature over the lines
+        `puddle-request-v1`, method, request target (path and query), hex SHA-256 of the body, `ts`,
+        `nonce`, and the recipient's user id. The recipient checks it is the recipient, `ts` is within
+        five minutes of its clock, the nonce is new, `kid` is the sender's current key, and the
+        signature. Full rules in docs/streams.md.
+
+  schemas:
+    UserId:
+      type: string
+      pattern: "^[a-z2-7]{52}$"
+    EventId:
+      type: string
+      pattern: "^[0-9a-f]{64}$"
+    ChatId:
+      type: string
+      pattern: "^[A-Za-z0-9_-]{1,128}$"
+
+    Hex:
+      type: string
+      description: A color, lowercase "#rrggbb"
+      pattern: "^#[0-9a-f]{6}$"
+
+    Color:
+      type: object
+      description: One color is solid; two to five make a gradient
+      required: [colors]
+      properties:
+        colors:
+          type: array
+          minItems: 1
+          maxItems: 5
+          items: { $ref: "#/components/schemas/Hex" }
+        angle:
+          type: integer
+          minimum: 0
+          maximum: 360
+          description: Gradient direction in degrees (default 180). Ignored for a solid color.
+
+    MediaRef:
+      type: object
+      description: An image, fetched by hash from `/stream/v1/media`
+      required: [hash, mime, size]
+      properties:
+        hash: { type: string, pattern: "^[0-9a-f]{64}$" }
+        mime: { type: string, enum: [image/png, image/jpeg, image/gif, image/webp] }
+        size: { type: integer, format: int64 }
+
+    Profile:
+      type: object
+      description: |
+        How a person appears in one place they share with someone (docs/profiles.md). Every field is optional; one
+        with no `display_name` is shown by the user id. Limits (characters): display_name 64, blurb 160, about 2000,
+        pronouns 32, a link's text 64; a link's url is at most 512 bytes. See `pushProfile` for what a receiver does
+        with what does not keep to them.
+      properties:
+        display_name: { type: string, maxLength: 64 }
+        avatar: { $ref: "#/components/schemas/MediaRef" }
+        blurb: { type: string, maxLength: 160, description: A short line }
+        about: { type: string, maxLength: 2000, description: The longer description }
+        pronouns: { type: string, maxLength: 32 }
+        color: { $ref: "#/components/schemas/Color" }
+        banner: { $ref: "#/components/schemas/MediaRef" }
+        background: { $ref: "#/components/schemas/MediaRef" }
+        links:
+          type: array
+          maxItems: 10
+          description: Where else to find them, such as a game tag; the url is optional
+          items:
+            type: object
+            required: [text]
+            properties:
+              text: { type: string, minLength: 1, maxLength: 64 }
+              url: { type: string, maxLength: 512, pattern: "^[Hh][Tt][Tt][Pp][Ss]?://" }
+
+
+    Chain:
+      type: string
+      maxLength: 65536
+      description: |
+        A Puddle's identity chain: the text of its `chain.jsonl`, one record per line, exactly as written
+        (`{"record":{...},"sig":"..."}`), because the signatures cover the exact bytes. Verified with the
+        rules in docs/identity.md; the reader pins it to the id they expect.
+
+    ChainBody:
+      type: object
+      required: [chain]
+      properties:
+        chain: { $ref: "#/components/schemas/Chain" }
+
+    AddressRecord:
+      type: object
+      description: |
+        `record` is the exact JSON text
+        `{"type":"address","id":..,"addresses":[..],"tls_fp":"<64 hex>","seq":N,"ts":..}` (`tls_fp` optional), and `sig`
+        is `<key id>:<base64>` over `puddle-address-v1\n` followed by those bytes, made with the sender's current key.
+      required: [record, sig]
+      properties:
+        record: { type: string }
+        sig: { type: string }
+
+    Peer:
+      type: object
+      required: [id, address, chain]
+      properties:
+        id: { $ref: "#/components/schemas/UserId" }
+        profile:
+          $ref: "#/components/schemas/Profile"
+          description: The one the sender shows the receiver directly; absent if they chose none
+        address:
+          type: string
+          description: host:port this Puddle can be reached at
+        chain: { $ref: "#/components/schemas/Chain" }
+
+    Scope:
+      type: object
+      description: Limits a stream to groups. Absent means a full friendship.
+      required: [group, join]
+      properties:
+        group: { $ref: "#/components/schemas/ChatId" }
+        join:
+          $ref: "#/components/schemas/SignedEvent"
+          description: The requester's own `member.join` for the group, signed by the key in the chain they sent
+
+    AccessRequest:
+      type: object
+      required: [requester]
+      properties:
+        requester: { $ref: "#/components/schemas/Peer" }
+        message: { type: string, maxLength: 500 }
+        invite:
+          type: string
+          description: Token from an invite link; a valid one is approved at once
+        ticket:
+          type: string
+          pattern: "^[0-9a-f]{32}$"
+          description: Random, made by the requester for this request; the answer repeats it so the requester knows which request it answers
+        scope: { $ref: "#/components/schemas/Scope" }
+
+    AccessState:
+      type: object
+      required: [state]
+      properties:
+        state: { type: string, enum: [pending, approved, declined] }
+        responder:
+          description: "With `approved`: who the target is, as in an access result"
+          $ref: "#/components/schemas/Peer"
+
+    AccessResult:
+      type: object
+      required: [responder, approved]
+      properties:
+        responder: { $ref: "#/components/schemas/Peer" }
+        approved: { type: boolean }
+        scoped:
+          type: boolean
+          description: Yes to a group-only connection. It answers only a request made for a group, never a friend request, and carries no ticket.
+        ticket:
+          type: string
+          pattern: "^[0-9a-f]{32}$"
+          description: The ticket from the request this answers, when it had one. It is what lets a requester who asked an address learn the responder's id.
+        scope: { $ref: "#/components/schemas/Scope" }
+
+    SignedEvent:
+      type: object
+      required: [id, event, sig]
+      properties:
+        id: { $ref: "#/components/schemas/EventId" }
+        event:
+          type: string
+          description: The event's exact JSON text. `id` is the SHA-256 of these bytes.
+        sig:
+          type: string
+          description: |
+            `<key id>:<base64 signature>`: the key id is the hex SHA-256 of the signing public key, and the
+            signature is Ed25519 over `puddle-event-v1\n` followed by the event's bytes. The key id is outside
+            the signed bytes, so a Puddle that has changed keys can sign the same event again without
+            changing its id.
+
+    Delivery:
+      type: object
+      required: [chat, events]
+      properties:
+        chat: { $ref: "#/components/schemas/ChatId" }
+        events:
+          type: array
+          maxItems: 100
+          items: { $ref: "#/components/schemas/SignedEvent" }
+
+    DeliveryResult:
+      type: object
+      required: [accepted, duplicate, rejected]
+      properties:
+        accepted:
+          type: array
+          items: { $ref: "#/components/schemas/EventId" }
+        duplicate:
+          type: array
+          items: { $ref: "#/components/schemas/EventId" }
+        rejected:
+          type: array
+          items:
+            type: object
+            required: [id, reason]
+            properties:
+              id: { $ref: "#/components/schemas/EventId" }
+              reason: { type: string }
+
+    GroupInvite:
+      type: object
+      required: [group, create, invite, members]
+      properties:
+        group: { $ref: "#/components/schemas/ChatId" }
+        create:
+          type: object
+          description: The group's first event
+          required: [event, sig]
+          properties:
+            event: { type: string }
+            sig: { type: string }
+        invite:
+          type: object
+          description: The sender's signed `member.invite` naming the recipient
+          required: [event, sig]
+          properties:
+            event: { type: string }
+            sig: { type: string }
+        members:
+          type: array
+          description: Everyone in it or invited, with where to reach them where the sender knows
+          items:
+            type: object
+            required: [id, state, ts]
+            properties:
+              id: { $ref: "#/components/schemas/UserId" }
+              state: { type: string, enum: [invited, member] }
+              ts: { type: integer, format: int64, description: The time of the event that put them in this state }
+              address: { type: string }
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+        code:
+          type: string
+          description: |
+            Only given to an authenticated peer: `clock_skew` (the reply says its time), `replayed`,
+            `no_stream`. A request that fails authentication gets a plain `404` with no code.
+
+  responses:
+    BadRequest:
+      description: Malformed or invalid input
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: No such thing, or not one you are allowed to see
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unauthorized:
+      description: Authenticated, but not acceptable now (`clock_skew`, `replayed`)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NoStream:
+      description: "Authenticated, but you share no open stream with us (code `no_stream`)"
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+security:
+  - streamSignature: []

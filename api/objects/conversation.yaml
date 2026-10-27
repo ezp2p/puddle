@@ -1,0 +1,23 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: Conversation
+description: |
+  A DM or a group chat. GET /api/v1/conversations/{conversation}. The list (GET /api/v1/conversations) has every DM with
+  messages in it and every group the owner is in, newest activity first. One on its own can be asked for by id for any
+  friend, and for a group whatever the owner's standing in it.
+type: object
+required: [id, kind, name, unread, sort_ts]
+properties:
+  id: { type: string, description: "The other person's UserId for a DM, the ChatId for a group" }
+  kind: { type: string, enum: [dm, group] }
+  name: { type: string, description: "The other person's display name for a DM, the group's name for a group" }
+  unread: { type: integer, minimum: 0, description: Messages that arrived after the owner last read it }
+  sort_ts: { $ref: "../wire/ids.yaml#/$defs/Timestamp", description: "What the list is ordered by: the last message, or when a group was made if nothing has been said" }
+  last_message: { $ref: "message_preview.yaml" }
+  recipient: { $ref: "partial_user.yaml", description: "dm only: the other person" }
+  stream: { $ref: "stream.yaml#/$defs/StreamState", description: "dm only: whether a message can be sent now" }
+  group: { $ref: "group.yaml#/$defs/GroupSummary", description: "group only: the group without its member list, so a page of conversations fits in one answer" }
+x-methods:
+  messages: GET /api/v1/conversations/{conversation}/messages
+  send: POST /api/v1/conversations/{conversation}/messages/send
+  mark_read: POST /api/v1/conversations/{conversation}/read
+  retry: POST /api/v1/conversations/{conversation}/retry

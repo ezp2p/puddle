@@ -1,0 +1,34 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: Group
+description: |
+  A group chat the owner is in or invited to. Who is in it comes from folding its group events (../events/chat.*,
+  member.*); `my` and `invited_by` are this Puddle's own. GET /api/v1/groups/{group}.
+type: object
+required: [id, name, my, creator, members, created_at, updated_at]
+properties:
+  id: { $ref: "../wire/ids.yaml#/$defs/ChatId" }
+  name: { type: string, maxLength: 100 }
+  my: { type: string, enum: [invited, in, left, declined], description: "`invited`: waiting for the owner's answer" }
+  creator: { $ref: "partial_user.yaml" }
+  invited_by: { $ref: "partial_user.yaml", description: "With `my: invited`" }
+  members: { type: array, maxItems: 50, items: { $ref: "member.yaml" }, description: "Everyone in it or invited, the owner included" }
+  created_at: { $ref: "../wire/ids.yaml#/$defs/Timestamp" }
+  updated_at: { $ref: "../wire/ids.yaml#/$defs/Timestamp" }
+x-methods:
+  invite: POST /api/v1/groups/{group}/invite
+  accept: POST /api/v1/groups/{group}/accept
+  decline: POST /api/v1/groups/{group}/decline
+  leave: POST /api/v1/groups/{group}/leave
+  rename: POST /api/v1/groups/{group}/rename
+$defs:
+  GroupSummary:
+    type: object
+    required: [id, name, my, creator, member_count, created_at, updated_at]
+    properties:
+      id: { $ref: "../wire/ids.yaml#/$defs/ChatId" }
+      name: { type: string }
+      my: { type: string, enum: [invited, in, left, declined] }
+      creator: { $ref: "partial_user.yaml" }
+      member_count: { type: integer, minimum: 0 }
+      created_at: { $ref: "../wire/ids.yaml#/$defs/Timestamp" }
+      updated_at: { $ref: "../wire/ids.yaml#/$defs/Timestamp" }
