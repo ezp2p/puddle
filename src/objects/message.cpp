@@ -5,6 +5,8 @@
 #include "base/log.h"
 #include "objects/user.hpp"
 #include "objects/file.hpp"
+#include "core/transfers.h"
+#include "storage/files.h"
 #include "core/streams.h"
 #include "core/group.h"
 #include "events/group_events.h"
@@ -307,6 +309,9 @@ Message Message::remove(puddle_ctx *ctx) const
     if (!el)
         throw Error::internal();
     sendEvent(ctx, group, conversation_, chat_, event, el, id);
+    for (const auto &f : files_) // the last message carrying a file takes it with it
+        if (ctx->files && puddle_files_unref(ctx->files, f.id, chat_.c_str(), id_.c_str()) == 0)
+            puddle_transfers_forget(ctx->transfers, ctx->files, f.id);
     Message m = *this;
     m.body_.reset();
     m.files_.clear();

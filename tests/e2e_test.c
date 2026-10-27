@@ -1135,6 +1135,43 @@ int main(void)
         CHECK(fetched);
         snprintf(url, sizeof url, "/api/v1/conversations/%s/messages/%064d/files/%s/download", hal.uid, 1, fid2);
         CHECK(post(&ivy, url, "{}") == 404);                                                        /* no such message */
+        CHECK(get(&ivy, "/api/v1/files/usage") == 200 && json_has("\"files\":2") && json_has("\"bytes\":5242880"));
+
+        /* ---- a file goes with the last message that carries it, on both sides ---- */
+        snprintf(msg, sizeof msg, "{\"body\":\"again\",\"files\":[{\"id\":\"%s\",\"name\":\"tide again.bin\",\"mime\":\"application/octet-stream\"}]}", fid);
+        snprintf(url, sizeof url, "/api/v1/conversations/%s/messages/send", ivy.uid);
+        CHECK(post(&hal, url, msg) == 201);                                                          /* the first file, in a second message */
+        char mid3[80];
+        json_str(resp, "id", mid3, sizeof mid3);
+        snprintf(url, sizeof url, "/api/v1/conversations/%s/messages", hal.uid);
+        arrived = 0;
+        for (int i = 0; i < 200 && !arrived; i++) {
+            arrived = get(&ivy, url) == 200 && json_has("tide again.bin");
+            if (!arrived) usleep(50000);
+        }
+        CHECK(arrived);
+        snprintf(url, sizeof url, "/api/v1/conversations/%s/messages/%s/delete", ivy.uid, mid);
+        CHECK(post(&hal, url, "{}") == 200);                                                         /* the first message goes... */
+        snprintf(url, sizeof url, "/api/v1/conversations/%s/messages/%s/delete", ivy.uid, mid2);
+        CHECK(post(&hal, url, "{}") == 200);                                                         /* ...and the big one */
+        int gone = 0;
+        snprintf(url, sizeof url, "/api/v1/files/%s", fid2);
+        for (int i = 0; i < 200 && !gone; i++) {
+            gone = get(&ivy, url) == 404;
+            if (!gone) usleep(50000);
+        }
+        CHECK(gone && get(&hal, url) == 404);                                                        /* nothing else carried it: gone on both sides */
+        snprintf(url, sizeof url, "/api/v1/files/%s", fid);
+        CHECK(get(&hal, url) == 200 && get(&ivy, url) == 200);                                       /* the second message still carries this one */
+        snprintf(url, sizeof url, "/api/v1/conversations/%s/messages/%s/delete", ivy.uid, mid3);
+        CHECK(post(&hal, url, "{}") == 200);
+        snprintf(url, sizeof url, "/api/v1/files/%s", fid);
+        gone = 0;
+        for (int i = 0; i < 200 && !gone; i++) {
+            gone = get(&ivy, url) == 404;
+            if (!gone) usleep(50000);
+        }
+        CHECK(gone && get(&hal, url) == 404);
         free(bytes);
         node_down(&hal); node_down(&ivy);
     }

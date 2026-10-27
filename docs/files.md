@@ -93,10 +93,16 @@ A `Message` gains `files: [File]`. Uploaded files no message uses are thrown awa
 <data_dir>/files/<id>              the file, once whole
 <data_dir>/files/<id>.chunks       its chunk hashes
 <data_dir>/files/partial/<id>      a download or upload in progress, and which chunks it has
+<data_dir>/files/refs/<id>            which messages carry it, and when it was first seen
 <data_dir>/state/transfers/<id>.json  a download: its chat and message, who to ask, how it is going
 ```
 
 Profile pictures stay in `media/` as they are.
+
+A message adds itself to its files' `refs` when it is sent or arrives (fetched or not), and a deletion by its author
+takes it off; when the last goes, the file goes, and so does any download of it. Once an hour the downloads worker
+sweeps away what no message has carried for a day (an upload never sent, or a file whose message never arrived whole)
+and uploads left unfinished for a day. `GET /api/v1/files/usage` says how many files are kept and the room they take.
 
 ## In the desktop app
 

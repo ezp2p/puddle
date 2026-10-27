@@ -13,6 +13,7 @@
  *   <data_dir>/files/partial/<id>.have     one byte per chunk: 1 once that chunk is here and checked
  *   <data_dir>/files/partial/<id>.size     its size, in decimal
  *   <data_dir>/files/uploads/<token>...    the same three for a file the owner is sending us, before it has an id
+ *   <data_dir>/files/refs/<id>             which messages carry it: "made <ms>", then "<chat> <message>" a line each
  *
  * Safe to use from several threads at once. */
 
@@ -64,6 +65,24 @@ int puddle_files_remove(puddle_files *f, const char *id);
 /* Every file here, whole or partial: `fn` per id, until it returns nonzero. */
 typedef int (*puddle_file_fn)(void *user, const char *id, puddle_file_state state);
 void puddle_files_each(puddle_files *f, puddle_file_fn fn, void *user);
+
+/* ---- which messages carry it: a file goes with the last of them (docs/files.md) ---- */
+
+/* Message `message` in `chat` carries the file (again is fine). The file need not be here yet. 0 or -1. */
+int puddle_files_ref(puddle_files *f, const char *id, const char *chat, const char *message, int64_t now_ms);
+
+/* It no longer does (it was deleted). How many messages still carry it, or -1. At 0 the caller lets the file go. */
+int puddle_files_unref(puddle_files *f, const char *id, const char *chat, const char *message);
+
+/* How many messages carry it. */
+int puddle_files_ref_count(puddle_files *f, const char *id);
+
+/* Throw away every file here (whole or partial) that no message has carried for `grace_ms`: one uploaded and never sent,
+ * or whose messages were all deleted while it was arriving. `gone(user, id)` hears of each. Returns how many. */
+int puddle_files_sweep(puddle_files *f, int64_t now_ms, int64_t grace_ms, void (*gone)(void *user, const char *id), void *user);
+
+/* How many files are here, and the bytes they take (partial ones by what has arrived). */
+void puddle_files_usage(puddle_files *f, int64_t *count, int64_t *bytes);
 
 /* ---- fetching one from another Puddle ---- */
 

@@ -225,6 +225,8 @@ Message Conversation::send(const std::string &text, const std::string &replyTo, 
         if (st)
             throw Error(st, code ? code : "internal");
     }
+    for (const auto &f : refs) // the file stays as long as a message carries it
+        puddle_files_ref(ctx_->files, f.id, chat_.c_str(), id, puddle_ctx_now_ms(ctx_));
     puddle_view_msg v;
     memset(&v, 0, sizeof v);
     snprintf(v.id, sizeof v.id, "%s", id);

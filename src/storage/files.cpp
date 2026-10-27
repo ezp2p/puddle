@@ -16,7 +16,7 @@
 #include <vector>
 
 struct puddle_files {
-    std::string dir, partial, uploads; /* <data_dir>/files, and its two folders */
+    std::string dir, partial, uploads, refs; /* <data_dir>/files, and its folders */
     std::mutex mu;
     std::unordered_map<std::string, int64_t> touched; /* upload token -> when a chunk last came (0: not since we started) */
 };
@@ -134,7 +134,8 @@ puddle_files *puddle_files_open(const char *data_dir, char *err, size_t errlen)
     f->dir = std::string(data_dir) + "/files";
     f->partial = f->dir + "/partial";
     f->uploads = f->dir + "/uploads";
-    if (puddle_mkdir_p(f->partial.c_str()) != 0 || puddle_mkdir_p(f->uploads.c_str()) != 0) {
+    f->refs = f->dir + "/refs";
+    if (puddle_mkdir_p(f->partial.c_str()) != 0 || puddle_mkdir_p(f->uploads.c_str()) != 0 || puddle_mkdir_p(f->refs.c_str()) != 0) {
         snprintf(err, errlen, "cannot make %s: %s", f->dir.c_str(), strerror(errno));
         delete f;
         return NULL;
@@ -489,4 +490,144 @@ int puddle_files_upload_expire(puddle_files *f, int64_t now_ms, int64_t max_age_
     for (const auto &t : old)
         drop_upload_locked(f, t);
     return (int)old.size();
+}
+
+/* ---------------------------------------------------------------- which messages carry it */
+
+namespace {
+struct Refs {
+    int64_t made = 0;
+    std::vector<std::string> lines; /* "<chat> <message>" */
+};
+} // namespace
+
+static Refs read_refs(puddle_files *f, const char *id)
+{
+    Refs r;
+    std::string text = slurp(f->refs + "/" + id, 1 << 20);
+    size_t at = 0;
+    while (at < text.size()) {
+        size_t nl = text.find('\n', at);
+        std::string line = text.substr(at, nl == std::string::npos ? std::string::npos : nl - at);
+        at = nl == std::string::npos ? text.size() : nl + 1;
+        if (line.compare(0, 5, "made ") == 0)
+            r.made = strtoll(line.c_str() + 5, NULL, 10);
+        else if (!line.empty())
+            r.lines.push_back(line);
+    }
+    return r;
+}
+
+static int write_refs(puddle_files *f, const char *id, const Refs &r)
+{
+    std::string text = "made " + std::to_string(r.made) + "\n";
+    for (const auto &l : r.lines)
+        text += l + "\n";
+    return put_small(f->refs, f->refs + "/" + id, text.data(), text.size());
+}
+
+int puddle_files_ref(puddle_files *f, const char *id, const char *chat, const char *message, int64_t now_ms)
+{
+    if (!puddle_file_id_valid(id) || !chat || !message || strchr(chat, ' ') || strchr(chat, '\n') || strchr(message, '\n'))
+        return -1;
+    std::lock_guard<std::mutex> hold(f->mu);
+    Refs r = read_refs(f, id);
+    std::string line = std::string(chat) + " " + message;
+    for (const auto &l : r.lines)
+        if (l == line)
+            return 0;
+    if (!r.made)
+        r.made = now_ms;
+    r.lines.push_back(line);
+    return write_refs(f, id, r);
+}
+
+int puddle_files_unref(puddle_files *f, const char *id, const char *chat, const char *message)
+{
+    if (!puddle_file_id_valid(id))
+        return -1;
+    std::lock_guard<std::mutex> hold(f->mu);
+    Refs r = read_refs(f, id);
+    std::string line = std::string(chat) + " " + message;
+    for (size_t i = 0; i < r.lines.size(); i++)
+        if (r.lines[i] == line) {
+            r.lines.erase(r.lines.begin() + (long)i);
+            if (r.lines.empty())
+                return puddle_remove_file((f->refs + "/" + id).c_str()) == 0 ? 0 : -1;
+            if (write_refs(f, id, r) != 0)
+                return -1;
+            break;
+        }
+    return (int)r.lines.size();
+}
+
+int puddle_files_ref_count(puddle_files *f, const char *id)
+{
+    if (!puddle_file_id_valid(id))
+        return 0;
+    std::lock_guard<std::mutex> hold(f->mu);
+    return (int)read_refs(f, id).lines.size();
+}
+
+struct sweep_list {
+    std::vector<std::string> ids;
+};
+
+static int collect(void *user, const char *id, puddle_file_state)
+{
+    ((sweep_list *)user)->ids.push_back(id);
+    return 0;
+}
+
+int puddle_files_sweep(puddle_files *f, int64_t now_ms, int64_t grace_ms, void (*gone)(void *user, const char *id), void *user)
+{
+    sweep_list all;
+    puddle_files_each(f, collect, &all);
+    int removed = 0;
+    for (const auto &id : all.ids) {
+        bool drop = false;
+        {
+            std::lock_guard<std::mutex> hold(f->mu);
+            Refs r = read_refs(f, id.c_str());
+            if (r.lines.empty()) {
+                if (!r.made) { /* not seen before (kept before refs were): its day starts now */
+                    r.made = now_ms;
+                    write_refs(f, id.c_str(), r);
+                } else {
+                    drop = now_ms - r.made > grace_ms;
+                }
+            }
+        }
+        if (drop && puddle_files_remove(f, id.c_str()) == 0) {
+            puddle_remove_file((f->refs + "/" + id).c_str());
+            removed++;
+            if (gone)
+                gone(user, id.c_str());
+        }
+    }
+    return removed;
+}
+
+struct usage_sum {
+    puddle_files *f;
+    int64_t count, bytes;
+};
+
+static int add_usage(void *user, const char *id, puddle_file_state)
+{
+    usage_sum *u = (usage_sum *)user;
+    int64_t have = 0;
+    if (puddle_files_state(u->f, id, NULL, &have) != PUDDLE_FILE_ABSENT) {
+        u->count++;
+        u->bytes += have;
+    }
+    return 0;
+}
+
+void puddle_files_usage(puddle_files *f, int64_t *count, int64_t *bytes)
+{
+    usage_sum u = { f, 0, 0 };
+    puddle_files_each(f, add_usage, &u);
+    *count = u.count;
+    *bytes = u.bytes;
 }

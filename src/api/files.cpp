@@ -61,6 +61,21 @@ static int cancel_upload(const puddle_call *c, puddle_jw *w)
     return 200;
 }
 
+/* How many files are kept here, and the room they take. */
+static int usage(const puddle_call *c, puddle_jw *w)
+{
+    int64_t count = 0, bytes = 0;
+    if (c->ctx->files)
+        puddle_files_usage(c->ctx->files, &count, &bytes);
+    puddle_jw_object(w);
+    puddle_jw_num(w, "files", count);
+    puddle_jw_num(w, "bytes", bytes);
+    puddle_jw_num(w, "max_size", puddle_files_max_size(c->ctx->config));
+    puddle_jw_num(w, "auto_download", puddle_files_auto_download(c->ctx->config));
+    puddle_jw_end_object(w);
+    return 200;
+}
+
 static int get_file(const puddle_call *c, puddle_jw *w)
 {
     auto f = File::here(c->ctx, puddle_param(c, "file"));
@@ -130,6 +145,7 @@ const puddle_route puddle_file_api_routes[] = {
     { "POST", "/api/v1/files/uploads/{upload:token}/chunks/{n:index}",  PUDDLE_AUTH_OWNER, PUDDLE_FILE_CHUNK, put_chunk,     NULL },
     { "POST", "/api/v1/files/uploads/{upload:token}/finish",            PUDDLE_AUTH_OWNER, 64,                finish_upload, NULL },
     { "POST", "/api/v1/files/uploads/{upload:token}/cancel",            PUDDLE_AUTH_OWNER, 64,                cancel_upload, NULL },
+    { "GET",  "/api/v1/files/usage",                                    PUDDLE_AUTH_OWNER, 0,                 usage,         NULL },
     { "GET",  "/api/v1/files/{file:event}",                             PUDDLE_AUTH_OWNER, 0,                 get_file,      NULL },
     { "GET",  "/api/v1/files/{file:event}/content",                     PUDDLE_AUTH_OWNER, 0,                 file_content,  NULL },
 };

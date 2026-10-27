@@ -181,21 +181,40 @@ void puddle_federation_fetch(void *user, const char *peer, const char *path, siz
     puddle_federation_send((const puddle_outbox_hooks *)user, &it, reply);
 }
 
+/* Its author took a message back: its files go with it, unless another message still carries them. */
+static void taken_back(puddle_ctx *ctx, const char *chat, const char *sender, const char *target)
+{
+    puddle_file_ref *refs;
+    size_t n;
+    char author[PUDDLE_USER_ID_LEN + 1];
+    if (files_of(ctx, chat, target, &refs, &n, author) != 0)
+        return;
+    if (!strcmp(author, sender)) /* only the author's own redaction counts (events/message.h) */
+        for (size_t i = 0; i < n; i++)
+            if (puddle_files_unref(ctx->files, refs[i].id, chat, target) == 0)
+                puddle_transfers_forget(ctx->transfers, ctx->files, refs[i].id);
+    free(refs);
+}
+
 void puddle_files_arrived(puddle_ctx *ctx, const char *chat, const char *sender, const char *event, size_t len, const char *id)
 {
-    if (!ctx->transfers || !ctx->files)
+    if (!ctx->files)
         return;
     puddle_message m;
     const char *why;
-    if (puddle_message_parse(event, len, &m, &why) != 0)
+    if (puddle_chat_event_parse(event, len, &m, &why) != 0)
         return;
+    if (m.type == PUDDLE_EV_REDACT)
+        taken_back(ctx, chat, sender, m.ref);
     puddle_file_ref *refs;
     size_t n;
-    if (m.files && puddle_file_refs_parse(m.files, strlen(m.files), &refs, &n) == 0) {
-        int64_t limit = puddle_files_auto_download(ctx->config);
-        for (size_t i = 0; i < n; i++)
-            if (refs[i].size <= limit && start(ctx, chat, id, sender, &refs[i]) != 0)
+    if (m.type == PUDDLE_EV_MESSAGE && m.files && puddle_file_refs_parse(m.files, strlen(m.files), &refs, &n) == 0) {
+        int64_t limit = puddle_files_auto_download(ctx->config), now = puddle_ctx_now_ms(ctx);
+        for (size_t i = 0; i < n; i++) {
+            puddle_files_ref(ctx->files, refs[i].id, chat, id, now); /* kept while the message is, fetched or not */
+            if (ctx->transfers && refs[i].size <= limit && start(ctx, chat, id, sender, &refs[i]) != 0)
                 puddle_log(PUDDLE_LOG_WARN, "cannot start fetching file %.12s…", refs[i].id);
+        }
         free(refs);
     }
     puddle_message_free(&m);

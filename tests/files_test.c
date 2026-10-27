@@ -150,6 +150,32 @@ int main(void)
     CHECK(puddle_files_remove(r, id) == 0);
     CHECK(puddle_files_state(r, "nothex", NULL, NULL) == PUDDLE_FILE_ABSENT && puddle_files_path(r, "../etc", path, sizeof path) == 1);
 
+    /* ---- a file stays while a message carries it ---- */
+    {
+        char kept[65];
+        CHECK(upload(s, b, kept) == 0 && !strcmp(kept, id));                                       /* the sender's copy is still here */
+        const char *chat = "dddddddddddddddddddddddddddddddddddddddddddddddddddd";
+        CHECK(puddle_files_ref(s, id, chat, "m1", 1000) == 0 && puddle_files_ref(s, id, chat, "m2", 1000) == 0);
+        CHECK(puddle_files_ref(s, id, chat, "m1", 1000) == 0 && puddle_files_ref_count(s, id) == 2);   /* again: still two */
+        CHECK(puddle_files_ref(s, id, "bad chat", "m1", 1000) == -1);
+        int64_t nfiles, used;
+        puddle_files_usage(s, &nfiles, &used);
+        CHECK(nfiles == 1 && used == (int64_t)SIZE);
+        CHECK(puddle_files_sweep(s, 1000LL * 24 * 3600 * 1000, 1000, NULL, NULL) == 0);            /* carried: never swept */
+        CHECK(puddle_files_unref(s, id, chat, "m1") == 1 && puddle_files_unref(s, id, chat, "m1") == 1);
+        CHECK(puddle_files_unref(s, id, chat, "m2") == 0 && puddle_files_ref_count(s, id) == 0);   /* the last: the caller lets it go */
+        /* one uploaded and never sent is cleared away after its day */
+        char lone[65];
+        unsigned char *b2 = bytes(9);
+        CHECK(upload(s, b2, lone) == 0);
+        free(b2);
+        CHECK(puddle_files_sweep(s, 5000, 1000, NULL, NULL) == 0);                                  /* first seen now: its day starts */
+        CHECK(puddle_files_sweep(s, 5500, 1000, NULL, NULL) == 0 && puddle_files_state(s, lone, NULL, NULL) == PUDDLE_FILE_WHOLE);
+        CHECK(puddle_files_ref(s, lone, chat, "m3", 5600) == 0);                                   /* sent after all: it stays */
+        CHECK(puddle_files_sweep(s, 9000, 1000, NULL, NULL) == 1);                                 /* `id` went (nothing carries it); `lone` did not */
+        CHECK(puddle_files_state(s, lone, NULL, NULL) == PUDDLE_FILE_WHOLE && puddle_files_state(s, id, NULL, NULL) == PUDDLE_FILE_ABSENT);
+    }
+
     /* ---- an upload the owner never finished goes after a while ---- */
     {
         char tok[PUDDLE_UPLOAD_TOKEN_LEN + 1];

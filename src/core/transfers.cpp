@@ -19,6 +19,8 @@
 
 #define COLLECTION "transfers"
 #define GIVE_UP_MS (7LL * 24 * 3600 * 1000) /* nobody had it for a week */
+#define DAY_MS (24LL * 3600 * 1000)
+#define SWEEP_EVERY_MS (3600LL * 1000)
 
 namespace {
 
@@ -42,6 +44,7 @@ struct puddle_transfers {
     std::vector<Transfer> items;
     std::thread worker;
     bool stop = false;
+    int64_t swept_ms = 0;
 };
 
 static int64_t now_of(const puddle_transfers *t) { return t->hooks.now_ms ? t->hooks.now_ms() : puddle_wall_ms(); }
@@ -224,11 +227,28 @@ static run_result run_one(puddle_transfers *t, const Transfer &x, std::string &w
     return RUN_DONE;
 }
 
+/* files no message carries, and uploads nobody finished: once an hour */
+static void sweep(puddle_transfers *t, int64_t now)
+{
+    int files = puddle_files_sweep(t->files, now, DAY_MS, NULL, NULL);
+    int uploads = puddle_files_upload_expire(t->files, now, DAY_MS);
+    if (files || uploads)
+        puddle_log(PUDDLE_LOG_INFO, "cleared away %d file%s no message uses, and %d unfinished upload%s", files, files == 1 ? "" : "s",
+                   uploads, uploads == 1 ? "" : "s");
+}
+
 static void work(puddle_transfers *t)
 {
     std::unique_lock<std::mutex> lock(t->mu);
     while (!t->stop) {
         int64_t now = now_of(t), soonest = INT64_MAX;
+        if (now - t->swept_ms >= SWEEP_EVERY_MS) {
+            t->swept_ms = now;
+            lock.unlock();
+            sweep(t, now);
+            lock.lock();
+            continue;
+        }
         Transfer *next = nullptr;
         for (auto &x : t->items) {
             if (x.state != PUDDLE_TR_QUEUED)
@@ -400,4 +420,12 @@ void puddle_transfers_retry_now(puddle_transfers *t)
                 x.next_ms = 0;
     }
     t->wake.notify_all();
+}
+
+void puddle_transfers_forget(puddle_transfers *t, puddle_files *files, const char *id)
+{
+    if (t)
+        puddle_transfers_cancel(t, id);
+    if (files)
+        puddle_files_remove(files, id);
 }

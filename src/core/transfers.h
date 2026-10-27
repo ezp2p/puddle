@@ -7,7 +7,8 @@
  * arrives (storage/files.h), from the first who has it. When nobody can be reached it waits and tries again, longer each
  * time, and gives up after a week.
  *
- * One worker thread runs one download at a time. Downloads are kept in <data_dir>/state/transfers/<id>.json, so they
+ * One worker thread runs one download at a time. Once an hour it also clears up (storage/files.h): files no message has
+ * carried for a day, and uploads left unfinished for a day. Downloads are kept in <data_dir>/state/transfers/<id>.json, so they
  * carry on after a restart. How a request travels is the `get` hook's (federation/files.h). */
 
 #include "core/delivery.h"
@@ -57,6 +58,9 @@ puddle_tr_state puddle_transfers_state(puddle_transfers *t, const char *id, char
 
 /* Try every waiting download now, rather than when its wait is over (someone came back online). */
 void puddle_transfers_retry_now(puddle_transfers *t);
+
+/* No message carries the file any more: stop fetching it, and throw it away whole or partial. */
+void puddle_transfers_forget(puddle_transfers *t, puddle_files *files, const char *id);
 
 /* How long to wait before the next try, after `attempts` failed ones. */
 int64_t puddle_transfer_retry_delay_ms(int attempts);

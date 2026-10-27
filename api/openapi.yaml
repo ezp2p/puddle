@@ -444,6 +444,24 @@ paths:
   /api/v1/files/uploads/{upload}/cancel:
     parameters: [{ $ref: "#/components/parameters/Upload" }]
     post: { tags: [files], summary: Throw an upload away, responses: { "200": { $ref: "#/components/responses/Upload" } } }
+  /api/v1/files/usage:
+    get:
+      tags: [files]
+      summary: The files kept here, the room they take, and the limits in force
+      description: "A file is kept while a message carries it, and goes with the last one deleted; one uploaded and never sent goes after a day."
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [files, bytes, max_size, auto_download]
+                properties:
+                  files: { type: integer, minimum: 0 }
+                  bytes: { type: integer, minimum: 0, description: "Partial files count what has arrived" }
+                  max_size: { type: integer, description: files.max_size in puddle.yaml }
+                  auto_download: { type: integer, description: "files.auto_download (0: never by itself)" }
   /api/v1/files/{file}:
     parameters: [{ $ref: "#/components/parameters/File" }]
     get: { tags: [files], summary: "A file that is here, whole or partly", responses: { "200": { $ref: "#/components/responses/File" }, "404": { $ref: "#/components/responses/NotFound" } } }
