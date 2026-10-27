@@ -211,6 +211,8 @@ if(PUDDLE_BUILD_GUI)
         src/gui/qml/shell/ContextBar.qml
         src/gui/qml/dialogs/NewConversationDialog.qml
         src/gui/qml/chat/ChatPage.qml
+        src/gui/qml/chat/MessageFiles.qml
+        src/gui/qml/chat/MediaViewer.qml
         src/gui/qml/settings/PersonRow.qml
         src/gui/qml/settings/LogPage.qml
         src/gui/qml/components/Avatar.qml

@@ -1,3 +1,4 @@
+import QtCore
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Dialogs
@@ -84,6 +85,51 @@ Pane {
         }
         onSent: caption = ""
     }
+    // ---- the files of messages: saved where the owner says, opened with the system's app ----
+    property var pendingFile: null      // waiting to reach the app's cache, then `pendingAction` is done with it
+    property string pendingAction: ""
+    function whenHere(f, action) {
+        if (chats.fileUrl(f.id, f.name) !== "") doFile(f, action)
+        else { pendingFile = f; pendingAction = action }
+    }
+    function doFile(f, action) {
+        if (action === "save") {
+            saver.file = f
+            saver.selectedFile = StandardPaths.writableUrl(StandardPaths.DownloadLocation) + "/" + encodeURIComponent(f.name)
+            saver.open()
+        } else if (chats.isRisky(f.name, f.mime)) {
+            riskyConfirm.ask(qsTr("Open %1?").arg(f.name), qsTr("This is a program or a script. Opening it could run it on your computer. Open it only if you trust who sent it."),
+                             qsTr("Open"), () => page.chats.openFile(f.id, f.name))
+        } else if (!chats.openFile(f.id, f.name)) {
+            chats.failed(qsTr("%1 could not be opened.").arg(f.name))
+        }
+    }
+    function saveFile(f) { whenHere(f, "save") }
+    function openFile(f) { whenHere(f, "open") }
+    Connections {
+        target: page.chats
+        function onFileReady(id) {
+            if (page.pendingFile && id === page.pendingFile.id) {
+                const f = page.pendingFile
+                page.pendingFile = null
+                page.doFile(f, page.pendingAction)
+            }
+        }
+    }
+    FileDialog {
+        id: saver
+        property var file: null
+        title: qsTr("Save as")
+        fileMode: FileDialog.SaveFile
+        onAccepted: if (file) page.chats.saveFile(file.id, file.name, selectedFile)
+    }
+    ConfirmDialog { id: riskyConfirm }
+    MediaViewer {
+        id: mediaViewer
+        chats: page.chats
+        onSave: f => page.saveFile(f)
+    }
+
     FileDialog {
         id: picker
         title: qsTr("Choose files to send")
@@ -303,7 +349,7 @@ Pane {
                             TextEdit {
                                 id: bodyText
                                 objectName: "messageText"
-                                visible: !msg.editing
+                                visible: !msg.editing && (msg.model.deleted === true || (msg.model.body || "") !== "" || !msg.model.files)
                                 Layout.fillWidth: true
                                 readOnly: true
                                 selectByMouse: true
@@ -317,6 +363,17 @@ Pane {
                                 textFormat: TextEdit.PlainText
                                 Accessible.role: Accessible.StaticText
                                 Accessible.name: msg.model.senderName + ": " + text
+                            }
+                            MessageFiles {
+                                visible: msg.model.deleted !== true && !!msg.model.files && msg.model.files.length > 0
+                                Layout.fillWidth: true
+                                Layout.topMargin: 4
+                                chats: page.chats
+                                files: msg.model.files || []
+                                messageId: msg.model.id
+                                onViewMedia: (list, i) => mediaViewer.show(list, i)
+                                onSaveFile: f => page.saveFile(f)
+                                onOpenFile: f => page.openFile(f)
                             }
                             // what became of it, when it has not been delivered yet
                             RowLayout {

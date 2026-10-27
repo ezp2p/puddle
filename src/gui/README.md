@@ -22,7 +22,8 @@ src/gui/
                       HomePage: what shows when nothing is open
                       ContextBar: the panel at the right of an open conversation: members of a group, or a person's profile and what can be done about them.
                       Beside the conversation when the window is at least Theme.contextBreakpoint wide, a drawer over it when not
-    chat/             ChatPage: one conversation
+    chat/             ChatPage: one conversation. MessageFiles: a message's photos and videos as a grid (the sender's blurred preview until
+                      each is here) and other files as cards. MediaViewer: a photo or a video over the whole window
     dialogs/          NewConversationDialog: the "+": message one friend or start a group, or add a friend by address; also asks more friends into a group
     settings/         the settings page (activity log, developer mode, who is blocked) and PersonRow, the blocked-person row
     components/       small things used everywhere: Card (a floating panel), PanelToggle (the fold-away circle), Avatar, Icon, ContextTrigger (right-click), FieldMenu (text box menu),
@@ -60,4 +61,6 @@ are there. Colours that follow light or dark mode come from `palette` where they
 - `tests/ui_test.cpp` loads `qml/shell/Shell.qml` straight from this folder and drives it with real mouse and key events. It finds things by
   `objectName`, so keep those when you restyle; rename one and the test needs the new name.
 - `tests/chats_test.cpp` and `tests/backend_test.cpp` test `app/` without a window.
+- Videos play only on the system's own platform (on macOS, AVFoundation answers through its event loop), not the offscreen one the
+  tests use. `PUDDLE_TEST_VIDEO=<a short clip> ./build/ui_test` runs the video part too, with the window showing.
 - Run all of them with `scripts/build.sh`; to try the window by hand use `scripts/dev.sh alice` (and `bob`, … for more).

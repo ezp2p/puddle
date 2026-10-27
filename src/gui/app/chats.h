@@ -123,6 +123,23 @@ public:
     Q_INVOKABLE void trust(const QString &userId);       // accept their changed certificate
     Q_INVOKABLE void request(const QString &link, const QString &note, const QString &profile = QString());
 
+    // ---- files in messages (docs/files.md) ----
+    // The file `id` (called `name`) as a file on this computer, to show or play: its URL once it is in the app's cache, else ""
+    // and it is fetched from the Puddle now if the Puddle has it whole (fileProgress on the way, then fileReady).
+    Q_INVOKABLE QString fileUrl(const QString &id, const QString &name);
+    Q_INVOKABLE bool fileFetching(const QString &id) const { return downloading_.contains(id); }
+    // Ask the Puddle to fetch a file of a message in the open chat that it did not fetch by itself, or failed to; or to stop.
+    Q_INVOKABLE void fetchFile(const QString &messageId, const QString &fileId);
+    Q_INVOKABLE void cancelFile(const QString &messageId, const QString &fileId);
+    // Keep a copy where the owner says (a file: URL from a save dialog). False if it is not here yet or cannot be written.
+    Q_INVOKABLE bool saveFile(const QString &id, const QString &name, const QUrl &to);
+    // Open it with the system's own app for its kind.
+    Q_INVOKABLE bool openFile(const QString &id, const QString &name);
+    // A program or a script: opening it could run something, so the window asks first.
+    Q_INVOKABLE static bool isRisky(const QString &name, const QString &mime);
+    Q_INVOKABLE static QString sizeText(double bytes);   // "3.2 MB"
+    void setFileCacheDir(const QString &dir) { fileCacheDir_ = dir; }
+
     // The picture with this hash as a file: its URL, or "" while it is being fetched (then avatarReady is emitted).
     Q_INVOKABLE QString avatarFor(const QString &hash);
     void setCacheDir(const QString &dir) { cacheDir_ = dir; }
@@ -149,6 +166,8 @@ signals:
     void groupLeft();
     void avatarReady(const QString &hash);
     void uploadProgress(const QString &key, double fraction);
+    void fileProgress(const QString &id, double fraction);
+    void fileReady(const QString &id);
     void filesSent();
     void filesFailed(const QString &why);
     void profilesChanged();
@@ -184,7 +203,9 @@ private:
     bool groupsLoaded_ = false;
     QString curName_, curAvatar_, curColor_, curState_;
     bool curCert_ = false, hasOlder_ = false, attentive_ = true;
-    QString myName_, myAvatar_, cacheDir_;
+    QString myName_, myAvatar_, cacheDir_, fileCacheDir_;
+    QSet<QString> downloading_;
+    QString cachedPath(const QString &id, const QString &name) const;
     QSet<QString> fetching_;
     QString current_;
     QHash<QString, QString> names_, avatars_, colors_;

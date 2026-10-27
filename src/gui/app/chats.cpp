@@ -1,4 +1,6 @@
 #include "chats.h"
+#include <QLocale>
+#include <QDesktopServices>
 
 #include <QFileInfo>
 
@@ -77,7 +79,7 @@ Chats::Chats(QObject *parent)
     : QObject(parent),
       people_({ "id", "name", "state", "note", "error", "certificate_changed", "avatar", "color", "updated_at", "address", "provisional" }),
       conversations_({ "id", "kind", "user", "group", "name", "avatar", "color", "stream", "last", "lastBy", "unread", "members" }, nullptr, "id"),
-      messages_({ "id", "sender", "senderName", "ts", "body", "outgoing", "edited", "deleted", "reply_to", "avatar", "tint", "grouped",
+      messages_({ "id", "sender", "senderName", "ts", "body", "files", "outgoing", "edited", "deleted", "reply_to", "avatar", "tint", "grouped",
                   "dayStart", "replyName", "replyText", "replyMissing", "deliveryState", "deliveryReason", "deliveryNext", "kind", "noticeText" }),
       blocked_({ "id", "user", "name", "created_at" }, nullptr, "user"),
       profiles_({ "id", "display_name", "avatar", "default" }),
@@ -86,6 +88,7 @@ Chats::Chats(QObject *parent)
       sidebar_({ "key", "kind", "id", "name", "avatar", "color", "preview", "lastTs", "unread", "state", "members", "note", "invitedBy", "section" }, nullptr, "key")
 {
     cacheDir_ = QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + "/avatars";
+    fileCacheDir_ = QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + "/files";
     timer_.setInterval(2000);
     connect(&timer_, &QTimer::timeout, this, &Chats::refresh);
 }
@@ -170,6 +173,102 @@ void Chats::refreshProfiles()
         profiles_.setItems(rows);
         emit profilesChanged();
     });
+}
+
+// ---- files in messages ----
+
+static bool isFileId(const QString &id)
+{
+    static const QRegularExpression hex(QStringLiteral("^[0-9a-f]{64}$"));
+    return hex.match(id).hasMatch();
+}
+
+// <cache>/files/<id>.<ext>: named by its id, with the extension its name has, so a player can tell what it is
+QString Chats::cachedPath(const QString &id, const QString &name) const
+{
+    QString ext = QFileInfo(name).suffix().toLower();
+    static const QRegularExpression ok(QStringLiteral("^[a-z0-9]{1,8}$"));
+    return fileCacheDir_ + "/" + id + (ok.match(ext).hasMatch() ? "." + ext : QString());
+}
+
+QString Chats::fileUrl(const QString &id, const QString &name)
+{
+    if (!isFileId(id))
+        return QString();
+    const QString path = cachedPath(id, name);
+    if (QFile::exists(path))
+        return QUrl::fromLocalFile(path).toString();
+    if (downloading_.contains(id))
+        return QString();
+    downloading_.insert(id);
+    QDir().mkpath(fileCacheDir_);
+    api_.download(QStringLiteral("/api/v1/files/%1/content").arg(id), path,
+                  [this, id](qint64 got, qint64 total) { if (total > 0) emit fileProgress(id, double(got) / double(total)); },
+                  [this, id](bool ok) {
+                      downloading_.remove(id);
+                      if (ok)
+                          emit fileReady(id);
+                  });
+    return QString();
+}
+
+void Chats::fetchFile(const QString &messageId, const QString &fileId)
+{
+    if (current_.isEmpty() || !isFileId(fileId))
+        return;
+    post(path("conversations", current_, QStringLiteral("messages/%1/files/%2/download").arg(messageId, fileId)), QJsonObject{},
+         tr("The file could not be fetched."));
+}
+
+void Chats::cancelFile(const QString &messageId, const QString &fileId)
+{
+    if (current_.isEmpty() || !isFileId(fileId))
+        return;
+    post(path("conversations", current_, QStringLiteral("messages/%1/files/%2/cancel").arg(messageId, fileId)), QJsonObject{},
+         tr("The download could not be stopped."));
+}
+
+bool Chats::saveFile(const QString &id, const QString &name, const QUrl &to)
+{
+    const QString from = cachedPath(id, name), dest = to.toLocalFile();
+    if (!QFile::exists(from) || dest.isEmpty())
+        return false;
+    QFile::remove(dest);
+    if (!QFile::copy(from, dest)) {
+        emit failed(tr("%1 could not be saved there.").arg(name));
+        return false;
+    }
+    return true;
+}
+
+bool Chats::openFile(const QString &id, const QString &name)
+{
+    const QString from = cachedPath(id, name);
+    if (!QFile::exists(from))
+        return false;
+    // a copy under its own name, so the system's app shows that name and knows the kind of file
+    QString safe = QFileInfo(name).fileName();
+    safe.remove(QRegularExpression(QStringLiteral("[\\x00-\\x1f/\\\\:]")));
+    if (safe.isEmpty() || safe.startsWith('.'))
+        safe = "file" + safe;
+    const QString dir = fileCacheDir_ + "/open/" + id.left(16), to = dir + "/" + safe;
+    QDir().mkpath(dir);
+    if (!QFile::exists(to) && !QFile::copy(from, to))
+        return false;
+    return QDesktopServices::openUrl(QUrl::fromLocalFile(to));
+}
+
+bool Chats::isRisky(const QString &name, const QString &mime)
+{
+    static const QStringList exts = { "app", "command", "sh", "bash", "zsh", "csh", "py", "pl", "rb", "js", "jar", "exe", "msi", "bat", "cmd", "com",
+                                      "ps1", "vbs", "scr", "pkg", "dmg", "deb", "rpm", "run", "bin", "appimage", "apk", "workflow", "scpt", "terminal" };
+    return exts.contains(QFileInfo(name).suffix().toLower()) || mime.contains(QLatin1String("executable")) || mime.contains(QLatin1String("script")) ||
+           mime == QLatin1String("application/x-msdownload");
+}
+
+QString Chats::sizeText(double bytes)
+{
+    return QLocale().formattedDataSize(qint64(bytes), 1, QLocale::DataSizeSIFormat);
 }
 
 QString Chats::avatarFor(const QString &hash)
@@ -611,7 +710,9 @@ void Chats::renderMessages()
                 m.insert("replyMissing", true);
             } else {
                 m.insert("replyName", r.value("outgoing").toBool() ? tr("You") : !nameIn(r.value("author")).isEmpty() ? nameIn(r.value("author")) : nameOf(r.value("sender").toString()));
-                m.insert("replyText", r.value("deleted").toBool() ? QString() : r.value("body").toString().simplified().left(100));
+                const QString said = r.value("body").toString().simplified().left(100);
+                const QJsonArray rf = r.value("files").toArray();
+                m.insert("replyText", r.value("deleted").toBool() ? QString() : !said.isEmpty() || rf.isEmpty() ? said : rf.at(0).toObject().value("name").toString());
             }
         }
         prev = m;

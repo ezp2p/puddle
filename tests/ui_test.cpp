@@ -3,6 +3,7 @@
 #include <QClipboard>
 #include <QFile>
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QImage>
 #include <QMimeData>
 #include <QRegularExpression>
@@ -146,7 +147,10 @@ static bool shows(const QString &text) { return shown().contains(text); }
 
 int main(int argc, char **argv)
 {
-    qputenv("QT_QPA_PLATFORM", "offscreen");
+    /* Playing a video needs the system's own event loop (on macOS, AVFoundation answers through it), so a run with
+     * PUDDLE_TEST_VIDEO=<a short clip> shows its window; the checks of the window having focus then depend on the desktop. */
+    if (qgetenv("PUDDLE_TEST_VIDEO").isEmpty())
+        qputenv("QT_QPA_PLATFORM", "offscreen");
     QTemporaryDir home;
     CHECK(home.isValid());
     qputenv("HOME", home.path().toUtf8());
@@ -158,7 +162,7 @@ int main(int argc, char **argv)
     QDir().mkpath(home.path() + "/.config/puddle");
     QFile cf(home.path() + "/.config/puddle/puddle.yaml");
     CHECK(cf.open(QIODevice::WriteOnly));
-    cf.write(QString("address: \"127.0.0.1\"\nport: %1\n").arg(port).toUtf8());
+    cf.write(QString("address: \"127.0.0.1\"\nport: %1\nfiles:\n  auto_download: 1 KiB\n").arg(port).toUtf8()); /* files over 1 KiB wait to be asked for */
     cf.close();
 
     Node bob;
@@ -758,6 +762,56 @@ int main(int argc, char **argv)
                 CHECK(pv.size() > 0 && pv.size() <= 1024);
             }
             CHECK(until([&] { return all("attachment").isEmpty(); }, 3000));                          /* the tray is empty again */
+            /* shown in the conversation: the photo itself, and the text file as a card */
+            CHECK(until([&] { return all("mediaTile").size() == 1 && all("fileCard").size() == 1 && find_text("fileName", "notes.txt"); }, 5000));
+            CHECK(until([&] { QQuickItem *i = find("mediaImage"); return i && i->property("status").toInt() == 1; }, 5000));
+
+            /* ---- Bob sends a photo: bigger than the window's Puddle fetches by itself, so it waits for a click ---- */
+            const QString sunset = home.path() + "/sunset.png";
+            QImage warm(640, 480, QImage::Format_RGB32);
+            warm.fill(QColor(230, 120, 40));
+            CHECK(warm.save(sunset, "PNG"));
+            B.sendFiles("from bob", QString(), { QVariantMap{ { "key", "b1" }, { "path", sunset }, { "name", "sunset.png" }, { "mime", "image/png" },
+                                                             { "w", 640 }, { "h", 480 } } });
+            CHECK(until([&] { return shows("from bob"); }, 10000));
+            CHECK(until([&] { return find("downloadFile") != nullptr; }, 5000));                     /* waiting, with a Download button */
+            CHECK(click(find("downloadFile")));
+            CHECK(until([&] {
+                int ready = 0;
+                for (QQuickItem *i : all("mediaImage")) ready += i->property("status").toInt() == 1;
+                return ready == 2;
+            }, 10000));                                                                                  /* fetched, then shown */
+            CHECK(find("downloadFile") == nullptr);
+
+            /* ---- clicked: over the whole window; Escape puts it away ---- */
+            QList<QQuickItem *> tiles = all("mediaTile");
+            CHECK(tiles.size() == 2 && click(tiles.last()));
+            CHECK(until([&] { QQuickItem *i = find("viewerImage"); return i && i->property("status").toInt() == 1; }, 5000));
+            CHECK(find("viewerClose") != nullptr);
+            key(Qt::Key_Escape);
+            CHECK(until([&] { return find("viewerImage") == nullptr; }, 3000));
+
+            /* ---- a video (only with PUDDLE_TEST_VIDEO=<a short clip>, as making one needs a tool the build does not):
+               its first frame, size and length go with it, and it plays in the window ---- */
+            const QString clip = QString::fromLocal8Bit(qgetenv("PUDDLE_TEST_VIDEO"));
+            if (!clip.isEmpty()) {
+                md = new QMimeData;
+                md->setUrls({ QUrl::fromLocalFile(clip) });
+                QGuiApplication::clipboard()->setMimeData(md);
+                CHECK(click(find("composer")));
+                key(Qt::Key_V, Qt::ControlModifier);
+                CHECK(until([&] { return all("attachment").size() == 1 && find("sendButton")->property("ready").toBool(); }, 10000));
+                key(Qt::Key_Return);
+                CHECK(until([&] { return last_files().size() == 1 && last_files().at(0).toObject().value("mime").toString().startsWith("video/"); }, 10000));
+                const QJsonObject v = last_files().at(0).toObject();
+                fprintf(stderr, "video as sent: %s\n", QJsonDocument(v).toJson(QJsonDocument::Compact).left(300).constData());
+                CHECK(v.value("w").toInt() > 0 && v.value("h").toInt() > 0 && v.value("duration_ms").toInt() > 0 && !v.value("preview").toString().isEmpty());
+                CHECK(until([&] { return all("mediaTile").size() == 3; }, 5000));
+                CHECK(click(all("mediaTile").last()));
+                CHECK(until([&] { QQuickItem *s = find("seek"); return s && s->property("value").toDouble() > 300; }, 15000));   /* playing */
+                key(Qt::Key_Escape);
+                CHECK(until([&] { return find("seek") == nullptr; }, 3000));
+            }
 
             /* taken out again before sending; a copied picture becomes a file of its own */
             md = new QMimeData;
