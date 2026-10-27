@@ -489,6 +489,51 @@ static void test_places(void)
     puddle_profiles_close(p);
 }
 
+/* which profiles changed while Puddle was stopped */
+static void test_edited_by_hand(void)
+{
+    char err[300], old[PUDDLE_PROFILE_ID_MAX + 1], ids[PUDDLE_MAX_PROFILES][PUDDLE_PROFILE_ID_MAX + 1], path[800];
+    const char *code;
+    puddle_config c = fresh(NULL);
+    puddle_profiles *p = puddle_profiles_open(&c, old, err, sizeof err);
+    CHECK(p != NULL);
+    if (!p)
+        return;
+    CHECK(puddle_profiles_take_edited(p, ids, PUDDLE_MAX_PROFILES) == 1 && !strcmp(ids[0], "default")); /* never kept track of: once */
+    CHECK(puddle_profiles_take_edited(p, ids, PUDDLE_MAX_PROFILES) == 0);
+    puddle_profile w;
+    memset(&w, 0, sizeof w);
+    snprintf(w.id, sizeof w.id, "work");
+    w.display_name = strdup("Ali at work");
+    CHECK(puddle_profiles_save(p, &w, 1, &code, err, sizeof err) == 0);
+    puddle_profile_free(&w);
+    puddle_profiles_close(p);
+
+    p = puddle_profiles_open(&c, old, err, sizeof err); /* saved by Puddle itself: the API told everyone already */
+    CHECK(p && puddle_profiles_take_edited(p, ids, PUDDLE_MAX_PROFILES) == 0);
+    puddle_profiles_close(p);
+
+    snprintf(path, sizeof path, "%s/profiles/work.yaml", c.data_dir); /* edited by hand while stopped */
+    FILE *f = fopen(path, "w");
+    fputs("# mine\ndisplay_name: \"Ali, working\"\n", f);
+    fclose(f);
+    p = puddle_profiles_open(&c, old, err, sizeof err);
+    CHECK(p && puddle_profiles_take_edited(p, ids, PUDDLE_MAX_PROFILES) == 1 && !strcmp(ids[0], "work"));
+    CHECK(p && puddle_profiles_take_edited(p, ids, PUDDLE_MAX_PROFILES) == 0);
+    puddle_profiles_close(p);
+
+    f = fopen(path, "w"); /* only its comments and spacing */
+    fputs("# changed my mind about the comment\ndisplay_name:    \"Ali, working\"\n\n", f);
+    fclose(f);
+    p = puddle_profiles_open(&c, old, err, sizeof err);
+    CHECK(p && puddle_profiles_take_edited(p, ids, PUDDLE_MAX_PROFILES) == 0);
+    CHECK(p && puddle_profiles_remove(p, "work") == 0);
+    puddle_profiles_close(p);
+    p = puddle_profiles_open(&c, old, err, sizeof err); /* removed: nothing left to tell */
+    CHECK(p && puddle_profiles_take_edited(p, ids, PUDDLE_MAX_PROFILES) == 0);
+    puddle_profiles_close(p);
+}
+
 int main(void)
 {
     const char *base = getenv("TMPDIR");
@@ -500,6 +545,7 @@ int main(void)
     test_images_are_forgiving();
     test_folder();
     test_places();
+    test_edited_by_hand();
     nftw(root, rm_cb, 16, FTW_DEPTH | FTW_PHYS);
     return failures ? 1 : 0;
 }

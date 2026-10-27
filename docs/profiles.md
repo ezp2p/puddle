@@ -16,7 +16,10 @@ what arrives), `src/core/people.cpp` (what others show us), `src/federation/prof
 
 One YAML file per profile in the data folder: `<data_dir>/profiles/<id>.yaml`. The file's name is the profile's id,
 which only the owner sees (`a-z`, `0-9`, `-`, `_`, up to 32). Puddle writes these files when a profile is created or
-changed through the owner API (`/api/v1/profiles/...`). They can also be edited by hand while Puddle is not running.
+changed through the owner API (`/api/v1/profiles/...`). They can also be edited by hand while Puddle is not running:
+at the next start, everyone shown a profile that changed is told, as after an edit in the app. What counts as a change is
+what is sent of it, so a comment or a change of spacing tells no one. To know, Puddle keeps a SHA-256 of each profile as
+it last wrote it, in `state/profile-sums.tsv`.
 
     # A Puddle profile.
     display_name: "Ali"

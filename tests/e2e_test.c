@@ -374,6 +374,25 @@ static int json_has(const char *needle) { return strstr(resp, needle) != NULL; }
 
 static void rmtree(const char *p) { nftw(p, rm_cb, 16, FTW_DEPTH | FTW_PHYS); }
 
+/* edit a file by hand: its first `from` becomes `to`. 1, or 0 if it is not there */
+static int replace_in_file(const char *path, const char *from, const char *to)
+{
+    static char buf[40000], out[41000];
+    FILE *f = fopen(path, "rb");
+    if (!f) return 0;
+    size_t n = fread(buf, 1, sizeof buf - 1, f);
+    fclose(f);
+    buf[n] = '\0';
+    char *at = strstr(buf, from);
+    if (!at) return 0;
+    snprintf(out, sizeof out, "%.*s%s%s", (int)(at - buf), buf, to, at + strlen(from));
+    f = fopen(path, "wb");
+    if (!f) return 0;
+    fputs(out, f);
+    fclose(f);
+    return 1;
+}
+
 int main(void)
 {
     signal(SIGPIPE, SIG_IGN);
@@ -861,6 +880,45 @@ int main(void)
         }
     }
     (void)err;
+
+    /* ---- a profile edited by hand while the Puddle was stopped: told at the next start, once ---- */
+    {
+        node fay, gus;
+        CHECK(node_make(&fay, "fay", "Fay") == 0 && node_make(&gus, "gus", "Gus") == 0);
+        request(&gus, &fay, "hi Fay", NULL, 201);
+        CHECK(wait_state(&fay, gus.uid, PUDDLE_STREAM_PENDING_IN));
+        stream_body(body, sizeof body, gus.uid);
+        CHECK(post(&fay, sp("accept"), body) == 200);                                              /* Gus sees her "main" */
+        CHECK(wait_state(&gus, fay.uid, PUDDLE_STREAM_ACTIVE) && outboxes_empty(&fay, &gus) && has_profile(&gus, fay.uid, "\"Fay\""));
+        node_down(&gus);                                                                            /* away: what Fay sends waits, and can be counted */
+        char file[900];
+        snprintf(file, sizeof file, "%s/profiles/main.yaml", fay.cfg.data_dir);
+
+        node_down(&fay);
+        CHECK(node_up(&fay) == 0);
+        CHECK(outbox_count(&fay, gus.uid, NULL) == 0);                                              /* nothing changed: nothing to tell */
+        node_down(&fay);
+        CHECK(replace_in_file(file, "display_name: \"Fay\"", "# a note of her own\ndisplay_name:   \"Fay\""));
+        CHECK(node_up(&fay) == 0);
+        CHECK(outbox_count(&fay, gus.uid, NULL) == 0);                                              /* a comment and spacing are not a change */
+        node_down(&fay);
+        CHECK(replace_in_file(file, "\"Fay\"", "\"Fay Renamed\""));
+        CHECK(node_up(&fay) == 0);
+        CHECK(outbox_count(&fay, gus.uid, NULL) == 1);                                              /* renamed in the file: Gus is told */
+        node_down(&fay);
+        CHECK(node_up(&fay) == 0);
+        CHECK(outbox_count(&fay, gus.uid, NULL) == 1);                                              /* ...once, not at every start */
+
+        CHECK(node_up(&gus) == 0);
+        puddle_outbox_retry_now(puddle_server_outbox(fay.srv), gus.uid);
+        int seen = 0;
+        for (int i = 0; i < 200 && !seen; i++) {
+            seen = has_profile(&gus, fay.uid, "Fay Renamed");
+            if (!seen) usleep(50000);
+        }
+        CHECK(seen);
+        node_down(&fay); node_down(&gus);
+    }
 
     node_down(&alice); node_down(&bob); node_down(&carol); node_down(&dave); node_down(&eve);
     rmtree(root);

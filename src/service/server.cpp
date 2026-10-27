@@ -255,6 +255,12 @@ puddle_server *puddle_server_create(const puddle_config *cfg, char *err, size_t 
     {
         size_t np = puddle_profiles_ids(s->profiles, NULL, 0);
         puddle_log(PUDDLE_LOG_INFO, "%zu profile%s in %s/profiles", np, np == 1 ? "" : "s", cfg->data_dir);
+        /* a profile edited by hand while we were stopped: everyone shown it hears, as after an edit in the app */
+        char edited[PUDDLE_MAX_PROFILES][PUDDLE_PROFILE_ID_MAX + 1];
+        size_t ne = puddle_profiles_take_edited(s->profiles, edited, PUDDLE_MAX_PROFILES);
+        for (size_t i = 0; i < ne && i < PUDDLE_MAX_PROFILES; i++)
+            if (s->ctx.courier->profile_changed(&s->ctx, edited[i]) != 0)
+                puddle_log(PUDDLE_LOG_WARN, "profile '%s' changed while Puddle was stopped, but not everyone shown it could be told", edited[i]);
     }
     s->tls = puddle_tls_context(cfg->dir, err, errlen);
     if (!s->tls)

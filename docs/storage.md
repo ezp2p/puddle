@@ -19,6 +19,7 @@ Identity, signing and encryption are in [identity.md](identity.md).
       profiles/<id>.yaml                   the owner's profiles, one file each (docs/profiles.md)
       media/<sha256>                       images (profile pictures, banners, attachments), named by content hash
       state/profile-places.tsv             which profile each place sees: "dm:<user>" or "group:<group>" (docs/profiles.md)
+      state/profile-sums.tsv               each profile as Puddle last wrote it (a SHA-256), to notice one edited by hand
       state/streams/<user id>.json         one file per peer: state, verified key chain, addresses, note (docs/streams.md)
       state/people/<user id>.json          the profiles their Puddle sent us, one per place we share, and when (core/people.h)
       state/conversations/<id>.json        a conversation's summary and when the owner last read it (core/conversations.h)

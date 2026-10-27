@@ -116,6 +116,12 @@ int puddle_profiles_save(puddle_profiles *p, const puddle_profile *pr, int creat
 /* Delete the profile and its file. 0, 1 no such profile, -1. */
 int puddle_profiles_remove(puddle_profiles *p, const char *id);
 
+/* The profiles that changed since Puddle last wrote them itself: their files were edited by hand while it was stopped (or
+ * Puddle has not kept track of them before). Their ids, sorted, into `ids` (up to `cap`); returns how many. From then on
+ * they count as written, so call it once at startup and tell every place showing them. What a profile is compared by is
+ * what is sent of it, so a comment or a change of spacing in its file is not a change. Kept in <data_dir>/state/profile-sums.tsv. */
+size_t puddle_profiles_take_edited(puddle_profiles *p, char (*ids)[PUDDLE_PROFILE_ID_MAX + 1], size_t cap);
+
 /* Keep an image the owner gave us (its bytes) in <data_dir>/media, and describe it in `out`. 0, or -1 with the reason in
  * `err` (not a png, jpg, gif or webp; empty; over the size limit; cannot be written). */
 int puddle_profiles_add_image(puddle_profiles *p, const unsigned char *data, size_t len, puddle_media *out, char *err, size_t errlen);

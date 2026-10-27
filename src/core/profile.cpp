@@ -735,7 +735,58 @@ struct puddle_profiles {
     std::string data_dir, dir; /* dir: <data_dir>/profiles */
     std::mutex mu;
     std::vector<puddle_profile> items; /* sorted by id */
+    puddle_storage *storage;           /* for SUMS */
 };
+
+/* What each profile was when Puddle last wrote it itself, as the SHA-256 of what is sent of it ("<id>\t<hex>" lines): a
+ * single document in the "state" collection. A profile that no longer matches was edited by hand while Puddle was stopped. */
+#define SUMS "profile-sums.tsv"
+
+static void sum_of(const puddle_profile *pr, char out[65])
+{
+    std::string buf(PUDDLE_PROFILE_JSON_MAX + 64, '\0');
+    puddle_jw w;
+    puddle_jw_init(&w, &buf[0], buf.size());
+    puddle_jw_object(&w);
+    puddle_profile_write_fields(&w, pr);
+    puddle_jw_end_object(&w);
+    size_t n = puddle_jw_finish(&w);
+    puddle_sha256_hex(buf.data(), n, out);
+}
+
+/* the kept sums, by id; empty if there are none yet */
+static std::vector<std::pair<std::string, std::string>> read_sums_locked(puddle_profiles *p)
+{
+    std::vector<std::pair<std::string, std::string>> out;
+    char *doc;
+    size_t len;
+    if (puddle_record_get(p->storage, "state", SUMS, &doc, &len) != 0)
+        return out;
+    for (char *line = doc, *next; line && *line; line = next) {
+        next = strchr(line, '\n');
+        if (next)
+            *next++ = '\0';
+        char *tab = strchr(line, '\t');
+        if (tab && strlen(tab + 1) == 64) {
+            *tab = '\0';
+            out.emplace_back(line, tab + 1);
+        }
+    }
+    free(doc);
+    return out;
+}
+
+/* the sum of every profile as it is now */
+static int write_sums_locked(puddle_profiles *p)
+{
+    std::string doc;
+    for (const auto &q : p->items) {
+        char sum[65];
+        sum_of(&q, sum);
+        doc += std::string(q.id) + "\t" + sum + "\n";
+    }
+    return puddle_record_put(p->storage, "state", SUMS, doc.data(), doc.size());
+}
 
 static std::string file_in(const std::string &dir, const char *id)
 {
@@ -841,6 +892,11 @@ puddle_profiles *puddle_profiles_open(const puddle_config *cfg, char old_default
     }
     p->data_dir = cfg->data_dir;
     p->dir = p->data_dir + "/profiles";
+    p->storage = puddle_storage_open_files(cfg->data_dir, err, errlen);
+    if (!p->storage) {
+        puddle_profiles_close(p);
+        return NULL;
+    }
     if (!puddle_path_exists(p->dir.c_str()) && make_folder(p, cfg, old_default, err, errlen) != 0) {
         puddle_profiles_close(p);
         return NULL;
@@ -860,7 +916,30 @@ void puddle_profiles_close(puddle_profiles *p)
         return;
     for (auto &q : p->items)
         puddle_profile_free(&q);
+    puddle_storage_close(p->storage);
     delete p;
+}
+
+size_t puddle_profiles_take_edited(puddle_profiles *p, char (*ids)[PUDDLE_PROFILE_ID_MAX + 1], size_t cap)
+{
+    std::lock_guard<std::mutex> hold(p->mu);
+    const auto kept = read_sums_locked(p);
+    size_t n = 0;
+    for (const auto &q : p->items) {
+        char sum[65];
+        sum_of(&q, sum);
+        bool same = false;
+        for (const auto &k : kept)
+            same = same || (k.first == q.id && k.second == sum);
+        if (!same) {
+            if (n < cap)
+                memcpy(ids[n], q.id, PUDDLE_PROFILE_ID_MAX + 1);
+            n++;
+        }
+    }
+    if (n && write_sums_locked(p) != 0)
+        puddle_log(PUDDLE_LOG_WARN, "cannot keep %s/state/%s: hand-edited profiles may be sent again at the next start", p->data_dir.c_str(), SUMS);
+    return n;
 }
 
 static puddle_profile *find_locked(puddle_profiles *p, const char *id)
@@ -938,6 +1017,7 @@ int puddle_profiles_save(puddle_profiles *p, const puddle_profile *pr, int creat
         p->items.push_back(copy);
         sort_items(p);
     }
+    write_sums_locked(p); /* the caller tells everyone; if this fails, the next start only tells them again */
     return 0;
 }
 
@@ -950,6 +1030,7 @@ int puddle_profiles_remove(puddle_profiles *p, const char *id)
                 return -1;
             puddle_profile_free(&p->items[i]);
             p->items.erase(p->items.begin() + (long)i);
+            write_sums_locked(p);
             return 0;
         }
     return 1;
