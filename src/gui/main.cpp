@@ -10,7 +10,7 @@ int main(int argc, char **argv)
 {
     QGuiApplication app(argc, argv);
     app.setApplicationName("Puddle");
-    app.setOrganizationName("sloporation");
+    app.setOrganizationName("ezp2p");
     app.setWindowIcon(QIcon(":/qt/qml/Puddle/src/gui/assets/puddle.png"));
     // Closing the window hides to the tray; the app keeps serving until Quit.
     app.setQuitOnLastWindowClosed(false);

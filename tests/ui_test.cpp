@@ -147,7 +147,7 @@ int main(int argc, char **argv)
     qputenv("HOME", home.path().toUtf8());
     QGuiApplication app(argc, argv);
     QQuickStyle::setStyle("Basic");
-    app.setOrganizationName("sloporation-ui-test");
+    app.setOrganizationName("ezp2p-ui-test");
 
     const unsigned port = free_port();
     QDir().mkpath(home.path() + "/.config/puddle");

@@ -1,7 +1,7 @@
 # C++ port: working log
 
 The overnight port of Puddle from C to C++, with the owner API reshaped around objects (`docs/objects.md`).
-Everything is uncommitted on `master`. Each step below says what changed, and whether the build and tests passed.
+Committed to `rewrite/cpp` in `ezp2p/puddle`. Each step below says what changed, and whether the build and tests passed.
 
 The plan, in order:
 

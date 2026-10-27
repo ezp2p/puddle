@@ -6,13 +6,13 @@ Easiest self hosted chat application conceivable.
 
 Two programs, built from one CMake project:
 
-- `puddled` — headless service (C, OpenSSL)
-- `Puddle` — the desktop app (C core + Qt 6 Quick/QML). It embeds the same server
+- `puddled` — headless service (C++, OpenSSL)
+- `Puddle` — the desktop app (C++ core + Qt 6 Quick/QML). It embeds the same server
   as `puddled`, so desktop users only need this one program.
 
 ### Requirements
 
-CMake 3.21+, a C11/C++17 compiler, OpenSSL 3.0+, libyaml, and (for the GUI) Qt 6 with Quick, Quick Controls 2 and Svg (the icons are SVG files).
+CMake 3.21+, a C11/C++20 compiler, OpenSSL 3.0+, libyaml, and (for the GUI) Qt 6 with Quick, Quick Controls 2 and Svg (the icons are SVG files).
 
 macOS (Homebrew):
 

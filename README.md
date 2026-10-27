@@ -20,7 +20,7 @@
 <!-- PROJECT LOGO -->
 <br />
 <div align="center">
-  <a href="https://github.com/sloporation/puddle">
+  <a href="https://github.com/ezp2p/puddle">
     <img src="images/logo.svg" alt="Logo" width="80" height="80">
   </a>
 
@@ -64,7 +64,7 @@
 <!-- ABOUT THE PROJECT -->
 ## About The Project
 
-[![Puddle demo][product-screenshot]](images/demo.gif)
+[![Puddle demo][product-screenshot]](images/demo.mov)
 
 Puddle allows you to run your own chats directly on your computer without any 
 servers inbetween.
@@ -79,13 +79,13 @@ port.
 
 ### Built With
 
-* [![C][C-lang]][C-url]
+* [![C++][C-lang]][C-url]
 * [![Qt][Qt-badge]][Qt-url]
 * [![OpenSSL][OpenSSL-badge]][OpenSSL-url]
 * [![libyaml][libyaml-badge]][libyaml-url]
 * [![CMake][CMake-badge]][CMake-url]
 
-The core (storage, identity, streams, the HTTPS server) is plain C11 on 
+The core (storage, identity, streams, the HTTPS server) is C++20 on 
 OpenSSL 3, shared by `puddled`, the headless Puddle, and by the desktop app, 
 which is Qt 6 (Quick/QML). Configuration and profiles are YAML, read with 
 libyaml.
@@ -176,19 +176,19 @@ Just create Github issues.
 
 <!-- MARKDOWN LINKS & IMAGES -->
 <!-- https://www.markdownguide.org/basic-syntax/#reference-style-links -->
-[contributors-shield]: https://img.shields.io/github/contributors/sloporation/puddle.svg?style=for-the-badge
-[contributors-url]: https://github.com/sloporation/puddle/graphs/contributors
-[forks-shield]: https://img.shields.io/github/forks/sloporation/puddle.svg?style=for-the-badge
-[forks-url]: https://github.com/sloporation/puddle/network/members
-[stars-shield]: https://img.shields.io/github/stars/sloporation/puddle.svg?style=for-the-badge
-[stars-url]: https://github.com/sloporation/puddle/stargazers
-[issues-shield]: https://img.shields.io/github/issues/sloporation/puddle.svg?style=for-the-badge
-[issues-url]: https://github.com/sloporation/puddle/issues
-[license-shield]: https://img.shields.io/github/license/sloporation/puddle.svg?style=for-the-badge
-[license-url]: https://github.com/sloporation/puddle/blob/master/LICENSE.txt
-[product-screenshot]: images/demo.gif
-[C-lang]: https://img.shields.io/badge/C11-A8B9CC?style=for-the-badge&logo=c&logoColor=black
-[C-url]: https://en.cppreference.com/w/c/11
+[contributors-shield]: https://img.shields.io/github/contributors/ezp2p/puddle.svg?style=for-the-badge
+[contributors-url]: https://github.com/ezp2p/puddle/graphs/contributors
+[forks-shield]: https://img.shields.io/github/forks/ezp2p/puddle.svg?style=for-the-badge
+[forks-url]: https://github.com/ezp2p/puddle/network/members
+[stars-shield]: https://img.shields.io/github/stars/ezp2p/puddle.svg?style=for-the-badge
+[stars-url]: https://github.com/ezp2p/puddle/stargazers
+[issues-shield]: https://img.shields.io/github/issues/ezp2p/puddle.svg?style=for-the-badge
+[issues-url]: https://github.com/ezp2p/puddle/issues
+[license-shield]: https://img.shields.io/github/license/ezp2p/puddle.svg?style=for-the-badge
+[license-url]: https://github.com/ezp2p/puddle/blob/main/LICENSE.txt
+[product-screenshot]: images/logo.svg
+[C-lang]: https://img.shields.io/badge/C%2B%2B20-00599C?style=for-the-badge&logo=cplusplus&logoColor=white
+[C-url]: https://en.cppreference.com/w/cpp/20
 [Qt-badge]: https://img.shields.io/badge/Qt_6-41CD52?style=for-the-badge&logo=qt&logoColor=white
 [Qt-url]: https://www.qt.io/
 [OpenSSL-badge]: https://img.shields.io/badge/OpenSSL_3-721412?style=for-the-badge&logo=openssl&logoColor=white

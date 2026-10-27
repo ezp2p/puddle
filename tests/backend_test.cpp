@@ -54,7 +54,7 @@ int main(int argc, char **argv)
 {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QGuiApplication app(argc, argv);
-    app.setOrganizationName("sloporation-test");
+    app.setOrganizationName("ezp2p-test");
 
     QTemporaryDir home;
     CHECK(home.isValid());

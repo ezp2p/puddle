@@ -234,7 +234,7 @@ if(PUDDLE_BUILD_GUI)
     set_target_properties(puddle PROPERTIES
       OUTPUT_NAME Puddle
       MACOSX_BUNDLE_BUNDLE_NAME Puddle
-      MACOSX_BUNDLE_GUI_IDENTIFIER io.github.sloporation.puddle
+      MACOSX_BUNDLE_GUI_IDENTIFIER io.github.ezp2p.puddle
       MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION})
     install(TARGETS puddle BUNDLE DESTINATION . RUNTIME DESTINATION bin)
 
