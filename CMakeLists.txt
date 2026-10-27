@@ -74,6 +74,7 @@ target_link_libraries(puddle_base PUBLIC puddle_platform OpenSSL::Crypto Threads
 # storage: the chat logs and media on disk
 add_library(puddle_storage STATIC
   src/storage/storage.cpp
+  src/storage/files.cpp
   src/storage/media.cpp
   src/storage/store.cpp)
 target_link_libraries(puddle_storage PUBLIC puddle_base)
@@ -289,7 +290,7 @@ enable_testing()
 # Each layer of src/ includes only the layers it may (tests/layers.cmake).
 add_test(NAME layers COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_CURRENT_SOURCE_DIR}/src -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/layers.cmake)
 
-foreach(t http json store storage people conversations config yaml profile encoding identity auth reqsig phrase serve router routes link group groupapi groupowner streams ratelimit access owner_streams client outbox inbound open_request flow message messages keysync wireprofile profiles e2e group_e2e)
+foreach(t http json store storage files people conversations config yaml profile encoding identity auth reqsig phrase serve router routes link group groupapi groupowner streams ratelimit access owner_streams client outbox inbound open_request flow message messages keysync wireprofile profiles e2e group_e2e)
   add_executable(${t}_test tests/${t}_test.c)
   target_link_libraries(${t}_test PRIVATE puddle_service)
   add_test(NAME ${t} COMMAND ${t}_test)
