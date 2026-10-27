@@ -22,6 +22,8 @@ public:
 
     void get(const QString &path, Reply done);
     void post(const QString &path, const QJsonObject &body, Reply done);
+    // POST `bytes` as they are (a chunk of a file being uploaded).
+    void postBytes(const QString &path, const QByteArray &bytes, Reply done);
 
     // A picture or other file the Puddle holds, by its path ("/api/v1/media?hash=..."), as raw bytes.
     void getBytes(const QString &path, std::function<void(int status, const QByteArray &bytes)> done);

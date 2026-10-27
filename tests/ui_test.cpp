@@ -1,6 +1,10 @@
 // The app's window, driven like a person would: real mouse and key events on the real QML, against a real Puddle (the
 // app's Backend) and a second real Puddle that plays the friend. Offscreen.
 #include <QClipboard>
+#include <QFile>
+#include <QJsonArray>
+#include <QImage>
+#include <QMimeData>
 #include <QRegularExpression>
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
@@ -13,6 +17,7 @@
 #include <QQuickStyle>
 
 #include "../src/gui/app/backend.h"
+#include "../src/gui/app/composer.h"
 #include "testnode.h"
 
 static int failures;
@@ -172,6 +177,7 @@ int main(int argc, char **argv)
     A.setInterval(100);
     CHECK(until([&] { return A.connected(); }));
 
+    qmlRegisterType<Composer>("Puddle.Files", 1, 0, "Composer");
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty("appBackend", &backend);
     const QString qml = QString(R"(
@@ -714,6 +720,62 @@ int main(int argc, char **argv)
             CHECK(!A.hasOlder());                                                                       /* all the way back */
             CHECK(msgs->at(0).value("kind").toString() == "message" && msgs->at(0).value("deleted").toBool());   /* the first thing said (later taken back) is there */
         }
+        /* ---- files: pasted into the box (as the picker and a drop add them too), shown waiting, sent with the message ---- */
+        {
+            CHECK(click(dm_row("Bob")));
+            CHECK(until([&] { return A.current() == bob.uid && find("composer") != nullptr; }, 3000));
+            const QString photo = home.path() + "/beach.png", notes = home.path() + "/notes.txt";
+            QImage img(400, 300, QImage::Format_RGB32);
+            img.fill(QColor(30, 120, 200));
+            CHECK(img.save(photo, "PNG"));
+            {
+                QFile f(notes);
+                CHECK(f.open(QIODevice::WriteOnly) && f.write("bring towels\n") > 0);
+            }
+            auto *md = new QMimeData;
+            md->setUrls({ QUrl::fromLocalFile(photo), QUrl::fromLocalFile(notes) });
+            QGuiApplication::clipboard()->setMimeData(md);
+            CHECK(click(find("composer")));
+            key(Qt::Key_V, Qt::ControlModifier);                                                     /* paste: files, not their names as text */
+            CHECK(until([&] { return all("attachment").size() == 2; }, 3000));
+            CHECK(find("composer")->property("text").toString().isEmpty());
+            CHECK(until([&] { return find("sendButton")->property("ready").toBool(); }, 5000));        /* each looked at first */
+            typeText("for saturday");
+            key(Qt::Key_Return);
+            B.open(backend.myId());
+            auto last_files = [&]() -> QJsonArray {
+                return msgs_b->rowCount() ? msgs_b->at(msgs_b->rowCount() - 1).value("files").toArray() : QJsonArray();
+            };
+            CHECK(until([&] { return last_files().size() == 2; }, 10000));
+            {
+                const QJsonArray fs = last_files();
+                const QJsonObject p0 = fs.at(0).toObject(), p1 = fs.at(1).toObject();
+                CHECK(p0.value("name").toString() == "beach.png" && p0.value("mime").toString() == "image/png" && p0.value("w").toInt() == 400 &&
+                      p0.value("h").toInt() == 300 && !p0.value("preview").toString().isEmpty());          /* a photo: its size, and a tiny preview */
+                CHECK(p1.value("name").toString() == "notes.txt" && p1.value("mime").toString() == "text/plain" && !p1.contains("preview"));
+                CHECK(msgs_b->at(msgs_b->rowCount() - 1).value("body").toString() == "for saturday");
+                QByteArray pv = QByteArray::fromBase64(p0.value("preview").toString().toLatin1());
+                CHECK(pv.size() > 0 && pv.size() <= 1024);
+            }
+            CHECK(until([&] { return all("attachment").isEmpty(); }, 3000));                          /* the tray is empty again */
+
+            /* taken out again before sending; a copied picture becomes a file of its own */
+            md = new QMimeData;
+            md->setUrls({ QUrl::fromLocalFile(notes) });
+            QGuiApplication::clipboard()->setMimeData(md);
+            CHECK(click(find("composer")));
+            key(Qt::Key_V, Qt::ControlModifier);
+            CHECK(until([&] { return all("attachment").size() == 1; }, 3000));
+            CHECK(click(find("removeAttachment")));
+            CHECK(until([&] { return all("attachment").isEmpty(); }, 3000));
+            QGuiApplication::clipboard()->setImage(img);
+            CHECK(click(find("composer")));
+            key(Qt::Key_V, Qt::ControlModifier);
+            CHECK(until([&] { return all("attachment").size() == 1; }, 3000));                            /* saved as a PNG, to go like any file */
+            CHECK(click(find("removeAttachment")));
+            CHECK(until([&] { return all("attachment").isEmpty(); }, 3000));
+        }
+
         /* ---- right-click on a conversation: the group's menu, and the friend's ---- */
         {
             QQuickItem *g = dm_row("Bob's trip");

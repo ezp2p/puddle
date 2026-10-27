@@ -1,5 +1,7 @@
 #include "chats.h"
 
+#include <QFileInfo>
+
 #include <QClipboard>
 #include <QCryptographicHash>
 #include <QDateTime>
@@ -718,6 +720,115 @@ void Chats::send(const QString &text, const QString &replyTo)
     if (!replyTo.isEmpty())
         o.insert("reply_to", replyTo);
     post(path("conversations", current_, "messages/send"), o, tr("The message could not be sent."));
+}
+
+// ---- sending files ----
+
+struct Chats::FileSend {
+    QString conversation, text, replyTo;
+    QVariantList files;        // as sendFiles was given them
+    QStringList ids;           // each one's id, once uploaded
+};
+
+static constexpr qint64 kChunk = 1 << 20; // the Puddle's chunk size (storage/files.h)
+
+void Chats::sendFiles(const QString &text, const QString &replyTo, const QVariantList &files)
+{
+    if (files.isEmpty())
+        return send(text, replyTo);
+    if (current_.isEmpty())
+        return;
+    auto job = std::make_shared<FileSend>();
+    job->conversation = current_; // the chat it was written in, even if the owner opens another meanwhile
+    job->text = text.trimmed();
+    job->replyTo = replyTo;
+    job->files = files;
+    uploadFile(job, 0);
+}
+
+void Chats::uploadFile(std::shared_ptr<FileSend> job, int index)
+{
+    if (index == job->files.size())
+        return sendWithFiles(job);
+    const QVariantMap f = job->files.at(index).toMap();
+    const qint64 size = QFileInfo(f.value("path").toString()).size();
+    if (size <= 0) {
+        emit filesFailed(tr("%1 is empty or cannot be read.").arg(f.value("name").toString()));
+        return;
+    }
+    api_.post(QStringLiteral("/api/v1/files/uploads/create"), QJsonObject{ { "size", size } }, [this, job, index, f, size](int status, const QJsonDocument &doc) {
+        if (status != 201) {
+            const QString code = doc.object().value("error").toString();
+            emit filesFailed(code == QLatin1String("too_large") ? tr("%1 is larger than your Puddle takes.").arg(f.value("name").toString())
+                                                               : tr("%1 could not be sent.").arg(f.value("name").toString()));
+            return;
+        }
+        uploadChunk(job, index, doc.object().value("upload").toString(), 0, int((size + kChunk - 1) / kChunk));
+    });
+}
+
+void Chats::uploadChunk(std::shared_ptr<FileSend> job, int index, const QString &token, int n, int count)
+{
+    const QVariantMap f = job->files.at(index).toMap();
+    const QString key = f.value("key").toString();
+    QFile file(f.value("path").toString());
+    QByteArray bytes;
+    if (file.open(QIODevice::ReadOnly) && file.seek(n * kChunk))
+        bytes = file.read(kChunk);
+    if (bytes.isEmpty()) {
+        emit filesFailed(tr("%1 could not be read.").arg(f.value("name").toString()));
+        return;
+    }
+    const QString upload = QStringLiteral("/api/v1/files/uploads/") + token;
+    api_.postBytes(upload + QStringLiteral("/chunks/%1").arg(n), bytes, [this, job, index, token, n, count, key, upload, f](int status, const QJsonDocument &) {
+        if (status != 200) {
+            emit filesFailed(tr("%1 could not be sent.").arg(f.value("name").toString()));
+            return;
+        }
+        emit uploadProgress(key, double(n + 1) / count);
+        if (n + 1 < count)
+            return uploadChunk(job, index, token, n + 1, count);
+        api_.post(upload + QStringLiteral("/finish"), QJsonObject{}, [this, job, index, f](int status, const QJsonDocument &doc) {
+            if (status != 201) {
+                emit filesFailed(tr("%1 could not be sent.").arg(f.value("name").toString()));
+                return;
+            }
+            job->ids << doc.object().value("id").toString();
+            uploadFile(job, index + 1);
+        });
+    });
+}
+
+void Chats::sendWithFiles(std::shared_ptr<FileSend> job)
+{
+    QJsonArray files;
+    for (int i = 0; i < job->files.size(); i++) {
+        const QVariantMap f = job->files.at(i).toMap();
+        QJsonObject o{ { "id", job->ids.at(i) }, { "name", f.value("name").toString() }, { "mime", f.value("mime").toString() } };
+        if (f.value("w").toInt() > 0 && f.value("h").toInt() > 0) {
+            o.insert("w", f.value("w").toInt());
+            o.insert("h", f.value("h").toInt());
+        }
+        if (f.value("duration_ms").toLongLong() > 0)
+            o.insert("duration_ms", f.value("duration_ms").toLongLong());
+        if (!f.value("preview").toString().isEmpty())
+            o.insert("preview", f.value("preview").toString());
+        files.append(o);
+    }
+    QJsonObject o{ { "files", files } };
+    if (!job->text.isEmpty())
+        o.insert("body", job->text);
+    if (!job->replyTo.isEmpty())
+        o.insert("reply_to", job->replyTo);
+    api_.post(path("conversations", job->conversation, "messages/send"), o, [this](int status, const QJsonDocument &doc) {
+        if (status != 201) {
+            const QString code = doc.object().value("error").toString();
+            emit filesFailed(code == QLatin1String("no_stream") ? tr("You are not connected to them right now.") : tr("The message could not be sent."));
+            return;
+        }
+        emit filesSent();
+        refresh();
+    });
 }
 
 void Chats::edit(const QString &messageId, const QString &text)

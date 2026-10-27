@@ -89,6 +89,10 @@ public:
     Q_INVOKABLE QVariantMap messageAt(int row) const { return messages_.at(row).toVariantMap(); }
     Q_INVOKABLE void retry();                           // try again to deliver what is stuck in the open chat
     Q_INVOKABLE void send(const QString &text, const QString &replyTo = QString());
+    // A message with files, to the open chat: each of `files` ({key, path, name, mime, w?, h?, duration_ms?, preview?}) is
+    // uploaded a chunk at a time (uploadProgress), then the message goes with them (filesSent), or not (filesFailed).
+    // `text` may be empty.
+    Q_INVOKABLE void sendFiles(const QString &text, const QString &replyTo, const QVariantList &files);
     Q_INVOKABLE void edit(const QString &messageId, const QString &text);
     Q_INVOKABLE void remove(const QString &messageId);
 
@@ -144,6 +148,9 @@ signals:
     void groupCreated(const QString &groupId);
     void groupLeft();
     void avatarReady(const QString &hash);
+    void uploadProgress(const QString &key, double fraction);
+    void filesSent();
+    void filesFailed(const QString &why);
     void profilesChanged();
     void currentInfoChanged();
     void hasOlderChanged();
@@ -193,6 +200,10 @@ private:
     qint64 olderNext_ = -1;                 // the offset of the next page back; -1 when there is none
     bool loadedOlder_ = false, loadingOlder_ = false;
     void renderMessages();
+    struct FileSend;
+    void uploadFile(std::shared_ptr<FileSend> job, int index);
+    void uploadChunk(std::shared_ptr<FileSend> job, int index, const QString &token, int n, int count);
+    void sendWithFiles(std::shared_ptr<FileSend> job);
     bool bridging_ = false; // more arrived since the last look than one page holds: reading back until what is new joins up with what is held
     void bridgeGap(const QString &user, std::shared_ptr<QSet<QString>> held, qint64 offset, int pages);
     // A message of ours that is still being delivered, further back than the newest page, is read again (its page is) until the state is fresh.

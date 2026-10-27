@@ -10,6 +10,8 @@ src/gui/
     chats.*           what the window shows, kept fresh from the owner API: people, conversations, messages, groups
     apiclient.*       the HTTPS calls to the owner API
     jsonlistmodel.*   the list model every ListView reads
+    composer.*        the files waiting to go with a message (QML: import Puddle.Files): their type, size and tiny preview,
+                      photos with Qt's image reading and videos from their first frame (Qt Multimedia)
     dock*             macOS Dock visibility
   qml/              the screens, by what they are about
     Main.qml          the window itself: first-run, errors, the tray, notifications

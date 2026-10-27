@@ -178,7 +178,7 @@ install(TARGETS puddled RUNTIME DESTINATION bin)
 # --- Puddle: the desktop app (Qt). Embeds the server, so nothing else is needed.
 option(PUDDLE_BUILD_GUI "Build the Qt desktop app" ON)
 if(PUDDLE_BUILD_GUI)
-  find_package(Qt6 COMPONENTS Quick QuickControls2 Network Svg Test QUIET) # Svg: the icons are SVG files
+  find_package(Qt6 COMPONENTS Quick QuickControls2 Network Svg Multimedia Test QUIET) # Svg: the icons are SVG files; Multimedia: videos
   if(Qt6_FOUND)
     qt_standard_project_setup()
     qt_policy(SET QTP0001 NEW)
@@ -192,7 +192,9 @@ if(PUDDLE_BUILD_GUI)
       src/gui/app/apiclient.cpp
       src/gui/app/apiclient.h
       src/gui/app/jsonlistmodel.cpp
-      src/gui/app/jsonlistmodel.h)
+      src/gui/app/jsonlistmodel.h
+      src/gui/app/composer.cpp
+      src/gui/app/composer.h)
     file(GLOB PUDDLE_ICONS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} CONFIGURE_DEPENDS src/gui/assets/icons/tabler/*.svg)
     # Theme is a singleton: the colours and sizes everything else reads
     set_source_files_properties(src/gui/qml/theme/Theme.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
@@ -232,7 +234,7 @@ if(PUDDLE_BUILD_GUI)
         src/gui/qml/components/WheelScroll.qml
         src/gui/qml/theme/Theme.qml
       RESOURCES src/gui/assets/puddle.png ${PUDDLE_ICONS})
-    target_link_libraries(puddle PRIVATE puddle_service Qt6::Quick Qt6::QuickControls2 Qt6::Network Qt6::Svg)
+    target_link_libraries(puddle PRIVATE puddle_service Qt6::Quick Qt6::QuickControls2 Qt6::Network Qt6::Svg Qt6::Multimedia)
     if(APPLE)
       enable_language(OBJCXX)
       target_sources(puddle PRIVATE src/gui/app/dock_mac.mm)
@@ -271,11 +273,11 @@ if(PUDDLE_BUILD_GUI)
 
     # The window, driven with real mouse and key events against two real Puddles.
     add_executable(ui_test tests/ui_test.cpp src/gui/app/backend.cpp src/gui/app/backend.h src/gui/app/chats.cpp src/gui/app/chats.h
-      src/gui/app/apiclient.cpp src/gui/app/apiclient.h src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h)
+      src/gui/app/apiclient.cpp src/gui/app/apiclient.h src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/composer.cpp src/gui/app/composer.h)
     set_target_properties(ui_test PROPERTIES AUTOMOC ON)
     target_include_directories(ui_test PRIVATE src/gui/app)
     target_compile_definitions(ui_test PRIVATE PUDDLE_GUI_DIR="${CMAKE_SOURCE_DIR}/src/gui/qml")
-    target_link_libraries(ui_test PRIVATE puddle_service Qt6::Quick Qt6::QuickControls2 Qt6::Network Qt6::Test)
+    target_link_libraries(ui_test PRIVATE puddle_service Qt6::Quick Qt6::QuickControls2 Qt6::Network Qt6::Multimedia Qt6::Test)
     if(APPLE)
       target_sources(ui_test PRIVATE src/gui/app/dock_mac.mm)
       target_link_libraries(ui_test PRIVATE "-framework AppKit" "-framework UserNotifications")

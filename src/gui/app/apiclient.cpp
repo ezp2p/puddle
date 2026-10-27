@@ -80,6 +80,16 @@ void ApiClient::post(const QString &path, const QJsonObject &body, Reply done)
     watch(net_.post(req, QJsonDocument(body).toJson(QJsonDocument::Compact)), std::move(done));
 }
 
+void ApiClient::postBytes(const QString &path, const QByteArray &bytes, Reply done)
+{
+    if (!ready_)
+        return done(0, QJsonDocument());
+    QNetworkRequest req = request(path);
+    req.setHeader(QNetworkRequest::ContentTypeHeader, "application/octet-stream");
+    req.setTransferTimeout(60000); // a chunk is 1 MiB: room for a slow link to a Puddle elsewhere
+    watch(net_.post(req, bytes), std::move(done));
+}
+
 void ApiClient::getBytes(const QString &path, std::function<void(int, const QByteArray &)> done)
 {
     if (!ready_)

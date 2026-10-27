@@ -5,6 +5,7 @@
 #include <QQuickStyle>
 
 #include "app/backend.h"
+#include "app/composer.h"
 
 int main(int argc, char **argv)
 {
@@ -17,6 +18,8 @@ int main(int argc, char **argv)
 
     // "Basic" is fully restylable; the native macOS/Windows styles restrict customization.
     QQuickStyle::setStyle("Basic");
+
+    qmlRegisterType<Composer>("Puddle.Files", 1, 0, "Composer"); // the files waiting to go with a message
 
     Backend backend; // declared before the engine so it outlives the QML objects using it
     QQmlApplicationEngine engine;
