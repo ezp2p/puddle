@@ -1,8 +1,10 @@
 #include "http/serve.h"
+#include "platform/fsutil.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 static int failures;
 #define CHECK(cond) do { if (!(cond)) { fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); failures++; } } while (0)
@@ -90,11 +92,22 @@ static puddle_http_handler handler(void)
     return h;
 }
 
+static char disk_path[600];
+
 /* a route that can answer with a file */
 static size_t route_big(void *u, const puddle_request *r, int owner_ok, const unsigned char *body, size_t n, char *out, size_t cap, int *status,
                         puddle_big *big)
 {
     (void)u; (void)owner_ok; (void)body; (void)n;
+    if (!strcmp(r->path, "/disk") || !strcmp(r->path, "/disk-lost")) { /* read from disk as it is sent */
+        big->fd = puddle_fd_open(disk_path, PUDDLE_F_READ);
+        big->has_file = big->fd >= 0;
+        big->file_len = 150000;
+        if (!strcmp(r->path, "/disk-lost"))
+            return 0; /* failed after opening it: it must still be closed */
+        *status = 200;
+        return puddle_http_head(200, "video/mp4", "", (size_t)big->file_len, out, cap);
+    }
     if (!strcmp(r->path, "/file") || !strcmp(r->path, "/lost")) {
         big->len = 200000;
         big->data = malloc(big->len);
@@ -301,6 +314,43 @@ int main(void)
     const char *right = "GET /small HTTP/1.1\r\nAuthorization: Bearer ok\r\n\r\n";
     CHECK(run(&f, wrong, strlen(wrong), 0, &info) == 200 && strcmp(info.auth, "wrong token") == 0 && !seen.owner);
     CHECK(run(&f, right, strlen(right), 0, &info) == 200 && strcmp(info.auth, "owner token") == 0 && seen.owner);
+
+    /* ---- a file on disk as the answer, longer than one piece of the copy ---- */
+    {
+        const char *base = getenv("TMPDIR");
+        snprintf(disk_path, sizeof disk_path, "%s/puddle-serve-XXXXXX", base ? base : "/tmp");
+        int tfd = mkstemp(disk_path);
+        unsigned char *bytes = malloc(150000);
+        for (size_t i = 0; i < 150000; i++) bytes[i] = (unsigned char)(i * 13 + 1);
+        CHECK(tfd >= 0 && write(tfd, bytes, 150000) == 150000);
+        close(tfd);
+        puddle_http_handler h = handler();
+        h.route_big = route_big;
+        const char *req = "GET /disk HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer ok\r\n\r\n";
+        memset(&f, 0, sizeof f);
+        f.data = (const unsigned char *)req;
+        f.len = strlen(req);
+        f.chunk = (size_t)-1;
+        f.close_at = f.fail_at = f.tick_from = -1;
+        f.clock = 1000;
+        g_fake = &f;
+        puddle_io io = { fake_read, fake_write, &f };
+        CHECK(puddle_http_serve(&h, &io, &info) == 200);
+        const char *body = strstr(f.out, "\r\n\r\n");
+        CHECK(body && strstr(f.out, "Content-Length: 150000\r\n"));
+        body += 4;
+        CHECK(f.outlen == (size_t)(body - f.out) + 150000 && memcmp(body, bytes, 150000) == 0);      /* headers, then the file, all of it */
+        req = "GET /disk-lost HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer ok\r\n\r\n";
+        memset(&f, 0, sizeof f);
+        f.data = (const unsigned char *)req;
+        f.len = strlen(req);
+        f.chunk = (size_t)-1;
+        f.close_at = f.fail_at = f.tick_from = -1;
+        f.clock = 1000;
+        CHECK(puddle_http_serve(&h, &io, &info) == 500 && !strstr(f.out, "\x01\x0e"));          /* failed: an error, not the file */
+        free(bytes);
+        unlink(disk_path);
+    }
 
     /* ---- a file as the answer ---- */
     {

@@ -2,6 +2,7 @@
 #define PUDDLE_HTTP_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -15,6 +16,7 @@ typedef struct {
     char signature[1024];      /* X-Puddle-Signature, "" if absent */
     size_t content_length;     /* 0 if absent */
     int expect_continue;       /* the client asked "100-continue" before sending its body */
+    char range[64];            /* Range, "" if absent */
 } puddle_request;
 
 /* Parse the request line and the headers we use of a (complete) header block. Anything that could make two
@@ -23,11 +25,21 @@ typedef struct {
  * supported), or an Expect other than 100-continue. 0 = ok, -1 = malformed. */
 int puddle_http_parse(const char *buf, size_t len, puddle_request *req);
 
-/* A body too big for the response buffer: malloc'd, sent after the headers, then freed by whoever sends it. */
+/* A body too big for the response buffer, sent after the headers by whoever sends them: either `data` (malloc'd, freed once
+ * sent), or, if `has_file`, `file_len` bytes read from the open descriptor `fd` where it stands (closed once sent). A file is
+ * sent as it is read, so its size costs no memory. */
 typedef struct {
     unsigned char *data;
     size_t len;
+    int has_file;
+    int fd;
+    int64_t file_len;
 } puddle_big;
+
+/* A `Range` header for a body of `total` bytes. Only one range of bytes is honoured ("bytes=a-b", "bytes=a-", "bytes=-n");
+ * anything else, or none, is the whole body: 0. A range that can be served: 1, with its first byte and length. One that starts
+ * past the end: -1 (answer 416). */
+int puddle_http_range(const char *range, int64_t total, int64_t *offset, int64_t *len);
 
 /* The status line and headers for a body of `content_length` bytes of `content_type`, ending with the blank line (the body
  * itself is sent separately). `extra_headers` is "" or lines each ending \r\n. Returns the length, or 0 if it does not fit. */

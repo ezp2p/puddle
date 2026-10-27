@@ -32,11 +32,16 @@ extern "C" {
 
 typedef enum { PUDDLE_AUTH_OWNER, PUDDLE_AUTH_PEER, PUDDLE_AUTH_CHAIN, PUDDLE_AUTH_CHAIN_OPEN } puddle_auth_kind;
 
-/* An answer that is a file, not JSON: a handler fills this (data is malloc'd; the router sends and frees it). */
+/* An answer that is a file, not JSON: a handler fills this, with `data` (malloc'd; the router sends and frees it) or with an
+ * open file (puddle_answer_file), which is sent as it is read and may be asked for in part (`Range`). */
 typedef struct {
     unsigned char *data;
     size_t len;
-    char mime[40];
+    char mime[80];
+    int has_file;
+    int fd;
+    int64_t file_size;
+    int immutable; /* the same path always answers the same bytes: it may be cached for good */
 } puddle_blob;
 
 #define PUDDLE_PATH_PARAMS 3
@@ -116,6 +121,10 @@ int puddle_fail(puddle_jw *w, int status, const char *code);
  * that. Then answer with the file: 1, or 0 if it is not held (the handler says 404). */
 int puddle_query_media_hash(const puddle_call *call, char out[PUDDLE_QUERY_VALUE_MAX]);
 int puddle_answer_media(const puddle_call *call, const char *hash);
+
+/* Answer with the file at `path`, read as it is sent, honouring one `Range` (206, or 416 past its end). `immutable`: its bytes
+ * never change at this path (a file named by its hash). 1, or 0 if it cannot be opened (the handler says 404). */
+int puddle_answer_file(const puddle_call *call, const char *path, const char *mime, int immutable);
 
 #ifdef __cplusplus
 }

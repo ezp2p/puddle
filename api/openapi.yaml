@@ -16,6 +16,9 @@ info:
     - Errors are objects/error.yaml: `{"error": "<code>", "message"?}`.
     - Lists come in pages (page.yaml): `items` and `next`, asked for with `limit` + `offset`. Messages come newest
       page first, each page oldest first; other lists newest first.
+    - An answer that is a file rather than JSON (a picture, a file's contents) is sent as it is read from disk, with
+      `Accept-Ranges: bytes`. One `Range` is honoured (`206 Partial Content`, or `416` past the end); several are answered
+      with the whole file.
     - This API changes as the apps need it. The stream API (../federation) is the one that has to stay put.
 
 servers:

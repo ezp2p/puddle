@@ -35,6 +35,8 @@ int64_t puddle_fd_write(int fd, const void *buf, size_t len);
 int puddle_fd_write_all(int fd, const void *buf, size_t len);
 /* The end of the file, which is where the next append lands; -1 on error. */
 int64_t puddle_fd_end(int fd);
+/* Move to `offset` from the start, for the next read or write: the offset, or -1. */
+int64_t puddle_fd_seek(int fd, int64_t offset);
 int puddle_fd_truncate(int fd, int64_t len);
 /* The size of an open regular file; -1 if it is not one. */
 int64_t puddle_fd_size(int fd);

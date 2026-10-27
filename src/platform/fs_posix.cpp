@@ -55,6 +55,11 @@ int64_t puddle_fd_end(int fd)
     return lseek(fd, 0, SEEK_END);
 }
 
+int64_t puddle_fd_seek(int fd, int64_t offset)
+{
+    return lseek(fd, (off_t)offset, SEEK_SET);
+}
+
 int puddle_fd_truncate(int fd, int64_t len)
 {
     return ftruncate(fd, (off_t)len);

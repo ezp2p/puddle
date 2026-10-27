@@ -97,6 +97,11 @@ int64_t puddle_fd_end(int fd)
     return _lseeki64(fd, 0, SEEK_END);
 }
 
+int64_t puddle_fd_seek(int fd, int64_t offset)
+{
+    return _lseeki64(fd, offset, SEEK_SET);
+}
+
 int puddle_fd_truncate(int fd, int64_t len)
 {
     return _chsize_s(fd, len) == 0 ? 0 : -1;

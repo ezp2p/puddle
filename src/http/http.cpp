@@ -10,6 +10,8 @@ static const char *reason(int status)
     case 200: return "OK";
     case 202: return "Accepted";
     case 204: return "No Content";
+    case 206: return "Partial Content";
+    case 416: return "Range Not Satisfiable";
     case 201: return "Created";
     case 409: return "Conflict";
     case 400: return "Bad Request";
@@ -107,7 +109,7 @@ int puddle_http_parse(const char *buf, size_t len, puddle_request *req)
     /* headers: only Authorization and X-Puddle-Signature matter */
     const char *p = eol + 1;
     const char *end = buf + len;
-    int seen_auth = 0, seen_sig = 0, seen_len = 0, seen_expect = 0;
+    int seen_auth = 0, seen_sig = 0, seen_len = 0, seen_expect = 0, seen_range = 0;
     while (p < end) {
         const char *le = (const char *)memchr(p, '\n', (size_t)(end - p));
         if (!le)
@@ -135,6 +137,8 @@ int puddle_http_parse(const char *buf, size_t len, puddle_request *req)
             dst = req->authorization; cap = sizeof req->authorization; seen = &seen_auth;
         } else if (nl == 18 && puddle_ascii_ncasecmp(p, "X-Puddle-Signature", 18) == 0) {
             dst = req->signature; cap = sizeof req->signature; seen = &seen_sig;
+        } else if (nl == 5 && puddle_ascii_ncasecmp(p, "Range", 5) == 0) {
+            dst = req->range; cap = sizeof req->range; seen = &seen_range;
         }
         if (nl == 14 && puddle_ascii_ncasecmp(p, "Content-Length", 14) == 0) {
             if (seen_len || vl == 0 || vl > 10)
@@ -167,4 +171,52 @@ int puddle_http_parse(const char *buf, size_t len, puddle_request *req)
         p = le + 1;
     }
     return 0;
+}
+
+/* digits only, into *out; 0, or -1 if there are none or too many */
+static int range_number(const char *s, size_t n, int64_t *out)
+{
+    if (n == 0 || n > 18)
+        return -1;
+    int64_t v = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (s[i] < '0' || s[i] > '9')
+            return -1;
+        v = v * 10 + (s[i] - '0');
+    }
+    *out = v;
+    return 0;
+}
+
+int puddle_http_range(const char *range, int64_t total, int64_t *offset, int64_t *len)
+{
+    *offset = 0;
+    *len = total;
+    if (!range || strncmp(range, "bytes=", 6) != 0)
+        return 0;
+    const char *r = range + 6, *dash = strchr(r, '-');
+    if (!dash || strchr(r, ','))
+        return 0; /* not one range: the whole body, as RFC 9110 allows */
+    int64_t first, last;
+    if (dash == r) { /* the last n bytes */
+        if (range_number(dash + 1, strlen(dash + 1), &last) != 0 || last == 0)
+            return 0;
+        if (total == 0)
+            return -1;
+        *offset = last >= total ? 0 : total - last;
+        *len = total - *offset;
+        return 1;
+    }
+    if (range_number(r, (size_t)(dash - r), &first) != 0)
+        return 0;
+    if (first >= total)
+        return -1;
+    last = total - 1;
+    if (dash[1] && (range_number(dash + 1, strlen(dash + 1), &last) != 0 || last < first))
+        return 0;
+    if (last >= total)
+        last = total - 1;
+    *offset = first;
+    *len = last - first + 1;
+    return 1;
 }
