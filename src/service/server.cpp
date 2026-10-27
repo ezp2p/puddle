@@ -12,6 +12,7 @@
 #include "http/router.h"
 #include "http/serve.h"
 #include "storage/store.h"
+#include "storage/files.h"
 #include "federation/groupflow.h"
 #include "core/conversations.h"
 #include "core/group.h"
@@ -63,6 +64,7 @@ struct puddle_server {
     puddle_conversations *conversations;
     puddle_groups *groups;
     puddle_outbox *outbox;
+    puddle_files *files;
     puddle_bucket *anon_bucket;
     puddle_keyed *access_limit;
     puddle_replay *replay;
@@ -205,6 +207,9 @@ puddle_server *puddle_server_create(const puddle_config *cfg, char *err, size_t 
     s->people = puddle_people_open(cfg->data_dir, err, errlen);
     if (!s->people)
         goto fail;
+    s->files = puddle_files_open(cfg->data_dir, err, errlen);
+    if (!s->files)
+        goto fail;
     s->conversations = puddle_conversations_open(cfg->data_dir, err, errlen);
     if (!s->conversations)
         goto fail;
@@ -247,7 +252,7 @@ puddle_server *puddle_server_create(const puddle_config *cfg, char *err, size_t 
         goto fail;
     }
     s->ctx = (puddle_ctx){ .config = &s->cfg, .identity = s->identity, .store = s->store, .profiles = s->profiles,
-                           .assignments = s->assignments, .streams = s->streams, .people = s->people, .conversations = s->conversations, .groups = s->groups, .outbox = s->outbox, .replay = s->replay,
+                           .assignments = s->assignments, .streams = s->streams, .people = s->people, .conversations = s->conversations, .groups = s->groups, .outbox = s->outbox, .files = s->files, .replay = s->replay,
                            .anon_bucket = s->anon_bucket, .access_limit = s->access_limit, .roll_slot = s->roll_slot,
                            .peer_key = puddle_streams_peer_key, .peer_key_user = s->streams, .courier = &puddle_federation_courier };
     s->router = (puddle_router){ .ctx = &s->ctx };
@@ -341,6 +346,7 @@ void puddle_server_destroy(puddle_server *s)
     puddle_outbox_close(s->outbox); /* stops its worker before what the worker uses goes away */
     puddle_streams_close(s->streams);
     puddle_people_close(s->people);
+    puddle_files_close(s->files);
     puddle_groups_close(s->groups);
     puddle_bucket_free(s->anon_bucket);
     puddle_keyed_free(s->access_limit);

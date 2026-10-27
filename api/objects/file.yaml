@@ -1,0 +1,28 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: File
+description: |
+  A file sent in a chat (docs/files.md), as a message describes it, with how much of it is here. Its id names its bytes
+  wherever they are: the SHA-256 of its chunks' SHA-256s (each chunk 1 MiB, the last shorter). Read its bytes from
+  `/api/v1/files/{id}/content` once it is `available`. Got on its own (`GET /api/v1/files/{id}`), only `id`, `size`,
+  `state` and `received` are known; `name`, `mime` and the rest come with the message that carries it.
+type: object
+required: [id, size, state, received]
+properties:
+  id: { type: string, pattern: "^[0-9a-f]{64}$" }
+  name: { type: string, maxLength: 255, description: "A file name, never a path: no / or \\, no control characters, not . or .." }
+  mime: { type: string, maxLength: 127, description: "What the sender says it is, such as image/jpeg. A reader checks the bytes before showing anything inline." }
+  size: { type: integer, minimum: 1, description: Bytes }
+  w: { type: integer, minimum: 1, maximum: 100000, description: "A picture's or video's width, to lay it out before it arrives (with h)" }
+  h: { type: integer, minimum: 1, maximum: 100000 }
+  duration_ms: { type: integer, minimum: 1, description: "A video's or sound's length" }
+  preview: { type: string, contentEncoding: base64, description: "A tiny image the sender made (at most 1 KiB): shown blurred until the file is here" }
+  state:
+    type: string
+    enum: [available, downloading, waiting, too_large, failed]
+    description: |
+      `available` here whole; `downloading` on its way (see `received`); `waiting` not fetched yet: larger than
+      files.auto_download (fetch it with .../download), or its sender cannot be reached; `too_large` larger than this
+      Puddle takes (files.max_size), never fetched; `failed` gave up (.../download tries again).
+  received: { type: integer, minimum: 0, description: Bytes here so far }
+x-methods:
+  content: GET /api/v1/files/{file}/content

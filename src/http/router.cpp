@@ -38,6 +38,14 @@ static int param_ok(const char *type, size_t tl, const char *v, size_t vl)
     }
     if (tl == 7 && !memcmp(type, "profile", 7))
         return puddle_profile_id_valid(tmp);
+    if (tl == 5 && !memcmp(type, "index", 5)) { /* a count from 0: digits, no leading zero, below a million */
+        if (vl > 6 || (vl > 1 && tmp[0] == '0'))
+            return 0;
+        for (size_t i = 0; i < vl; i++)
+            if (tmp[i] < '0' || tmp[i] > '9')
+                return 0;
+        return 1;
+    }
     if (tl == 5 && !memcmp(type, "token", 5)) {
         if (vl > 64)
             return 0;

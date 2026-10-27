@@ -1,6 +1,7 @@
 #include "objects/conversation.hpp"
 
 #include "core/conversations.h"
+#include "storage/files.h"
 #include "core/error.hpp"
 #include "core/identity.h"
 #include "objects/stream.hpp"
@@ -23,8 +24,17 @@ std::string ownId(puddle_ctx *ctx)
     return id;
 }
 
-std::string previewOf(const char *body)
+std::string previewOf(const char *body, const char *files)
 {
+    if ((!body || !*body) && files) { // files alone: say what they are
+        puddle_file_ref *refs;
+        size_t n;
+        if (puddle_file_refs_parse(files, strlen(files), &refs, &n) != 0)
+            return "";
+        std::string out = n == 1 ? refs[0].name : std::to_string(n) + " files";
+        free(refs);
+        return out;
+    }
     std::string out;
     size_t chars = 0;
     for (const unsigned char *p = (const unsigned char *)body; *p && chars < 120;) {
@@ -148,7 +158,7 @@ void Conversation::summarise()
     t.load(ctx_, chat_, 200);
     if (t.m) {
         const puddle_view_msg &last = t.view[t.m - 1];
-        last_ = Last{ last.id, last.sender, previewOf(last.body ? last.body : ""), last.ts, last.deleted != 0 };
+        last_ = Last{ last.id, last.sender, previewOf(last.body ? last.body : "", last.files), last.ts, last.deleted != 0 };
         sortTs_ = last.ts;
         for (size_t k = 0; k < t.m; k++)
             if (me != t.view[k].sender && !t.view[k].deleted && t.view[k].rts > marker && unread_ < 99)
@@ -174,7 +184,7 @@ void Conversation::summarise()
     puddle_conversations_put(kept, &rec, generation); // if it cannot be kept, it is worked out again next time
 }
 
-Message Conversation::send(const std::string &text, const std::string &replyTo)
+Message Conversation::send(const std::string &text, const std::string &replyTo, const std::vector<puddle_file_ref> &files)
 {
     std::string me = ownId(ctx_);
     if (kind_ == Kind::Dm) {
@@ -185,10 +195,23 @@ Message Conversation::send(const std::string &text, const std::string &replyTo)
     } else if (!group_ || group_->mine() != PUDDLE_GROUP_IN) {
         throw Error::conflict("not_in_group");
     }
+    if (files.size() > PUDDLE_MESSAGE_MAX_FILES)
+        throw Error::badRequest("too_many_files", "a message carries at most " + std::to_string(PUDDLE_MESSAGE_MAX_FILES) + " files");
+    if (files.empty() && text.empty())
+        throw Error::badRequest("bad_body");
+    std::vector<puddle_file_ref> refs = files;
+    for (auto &f : refs) {
+        int64_t size = 0;
+        if (!ctx_->files || puddle_files_state(ctx_->files, f.id, &size, nullptr) != PUDDLE_FILE_WHOLE)
+            throw Error::badRequest("no_such_file", std::string("file ") + f.id + " has not been uploaded");
+        f.size = size;
+        if (!puddle_file_ref_ok(&f))
+            throw Error::badRequest("bad_file", std::string("file ") + f.id + ": a name (no folders), a type such as image/jpeg, and a small preview");
+    }
     char event[PUDDLE_EVENT_MAX_BYTES], id[PUDDLE_ID_HEX + 1];
     int64_t ts = puddle_event_next_ts(puddle_ctx_now_ms(ctx_));
-    size_t el = puddle_message_build(chat_.c_str(), me.c_str(), ts, text.data(), text.size(), replyTo.empty() ? NULL : replyTo.c_str(), event,
-                                     sizeof event);
+    size_t el = puddle_message_build_files(chat_.c_str(), me.c_str(), ts, text.data(), text.size(), replyTo.empty() ? NULL : replyTo.c_str(),
+                                           refs.data(), refs.size(), event, sizeof event);
     if (!el)
         throw Error::badRequest(); // a reply reference that is not an id, or a message too large to send
     if (kind_ == Kind::Dm) {
@@ -210,6 +233,13 @@ Message Conversation::send(const std::string &text, const std::string &replyTo)
     v.ts = ts;
     v.rts = puddle_ctx_now_ms(ctx_);
     v.body = const_cast<char *>(text.c_str()); // read, not kept: fromView copies it
+    std::string filesJson;
+    if (!refs.empty()) { // as the event has them
+        puddle_span fv;
+        if (puddle_json_member(event, el, "files", &fv) == 0)
+            filesJson.assign(fv.p, fv.len);
+        v.files = const_cast<char *>(filesJson.c_str());
+    }
     return Message::fromView(v, id_, chat_);
 }
 

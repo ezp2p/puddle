@@ -24,6 +24,7 @@ typedef struct puddle_people puddle_people;
 typedef struct puddle_conversations puddle_conversations;
 typedef struct puddle_groups puddle_groups;
 typedef struct puddle_outbox puddle_outbox;
+typedef struct puddle_files puddle_files;
 typedef struct puddle_replay puddle_replay;
 typedef struct puddle_bucket puddle_bucket;
 typedef struct puddle_keyed puddle_keyed;
@@ -67,6 +68,7 @@ struct puddle_ctx {
     puddle_conversations *conversations;   /* conversation summaries; NULL = work each out from its log every time */
     puddle_groups *groups;                 /* the group chats we are in or invited to; NULL in tests that have none */
     puddle_outbox *outbox;                 /* what we owe other Puddles; NULL in tests that do not send */
+    puddle_files *files;                   /* files sent in chats (storage/files.h); NULL in tests that keep none */
     puddle_replay *replay;                 /* one nonce memory for the whole Puddle */
     puddle_bucket *anon_bucket;            /* work done for strangers before they are authenticated; NULL = unlimited */
     puddle_keyed *access_limit;            /* requests for a stream, per requester; NULL = unlimited */

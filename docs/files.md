@@ -75,12 +75,12 @@ Uploading in chunks, so the app and a phone client never send more than 1 MiB at
 
 | Route | Does |
 |---|---|
-| `POST /api/v1/files/uploads/create` `{name, size, mime}` | starts an upload: `{upload, chunk_size}` |
+| `POST /api/v1/files/uploads/create` `{size}` | starts an upload: `{upload, chunk_size, chunks}` (name and type come with the message) |
 | `POST /api/v1/files/uploads/{upload}/chunks/{n}` (bytes) | one chunk |
 | `POST /api/v1/files/uploads/{upload}/finish` | checks it is whole: the `File` |
 | `POST /api/v1/files/uploads/{upload}/cancel` | throws it away |
-| `POST /api/v1/conversations/{id}/messages/send` | gains `files: [{id, preview?, w?, h?, duration_ms?}]` |
-| `GET /api/v1/files/{file}` | the `File`: name, mime, size, state (`available`, `downloading`, `waiting`, `failed`, `gone`), bytes so far |
+| `POST /api/v1/conversations/{id}/messages/send` | gains `files: [{id, name, mime, preview?, w?, h?, duration_ms?}]`; `body` may then be left out |
+| `GET /api/v1/files/{file}` | the `File`: size, state (`available`, `downloading`, `waiting`, `too_large`, `failed`), bytes so far |
 | `GET /api/v1/files/{file}/content` | the bytes, read from disk as they are sent, with `Range` |
 | `POST /api/v1/files/{file}/download` and `/cancel` | fetch one that waits (over the automatic limit), or stop |
 

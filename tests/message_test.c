@@ -287,5 +287,90 @@ int main(void)
     puddle_identity_close(alice);
     puddle_identity_close(bob);
     nftw(root, rm_cb, 16, FTW_DEPTH | FTW_PHYS);
+    /* ---- files in a message ---- */
+    {
+        puddle_file_ref f[11];
+        memset(f, 0, sizeof f);
+        for (int k = 0; k < 11; k++) {
+            snprintf(f[k].id, sizeof f[k].id, "%064x", k + 1);
+            snprintf(f[k].name, sizeof f[k].name, "IMG_%d.jpg", k);
+            snprintf(f[k].mime, sizeof f[k].mime, "image/jpeg");
+            f[k].size = 3000000;
+        }
+        f[0].w = 4032; f[0].h = 3024;
+        snprintf(f[0].preview, sizeof f[0].preview, "UklGRhIAAABXRUJQVlA4IAYAAAAwAQCdASo=");
+        snprintf(f[1].name, sizeof f[1].name, "swim.mov"); snprintf(f[1].mime, sizeof f[1].mime, "video/quicktime"); f[1].duration_ms = 14200;
+        char fe[PUDDLE_EVENT_MAX_BYTES];
+        size_t fl = puddle_message_build_files(c1, ua, T, "from the beach", 14, NULL, f, 2, fe, sizeof fe);
+        CHECK(fl > 0 && strstr(fe, "\"files\":[{\"id\":\"") && strstr(fe, "\"duration_ms\":14200") && strstr(fe, "\"w\":4032,\"h\":3024"));
+        puddle_message fm;
+        CHECK(puddle_message_parse(fe, fl, &fm, &why) == 0 && !strcmp(fm.body, "from the beach") && fm.files && fm.files[0] == '[');
+        puddle_file_ref *got = NULL;
+        size_t ng = 0;
+        CHECK(fm.files && puddle_file_refs_parse(fm.files, strlen(fm.files), &got, &ng) == 0 && ng == 2 && !strcmp(got[1].name, "swim.mov") &&
+              got[0].w == 4032 && !strcmp(got[0].preview, f[0].preview) && got[1].duration_ms == 14200 && got[0].size == 3000000);
+        free(got);
+        puddle_message_free(&fm);
+        fl = puddle_message_build_files(c1, ua, T, "", 0, NULL, f, 1, fe, sizeof fe);                  /* a photo alone, no words */
+        CHECK(fl > 0 && !strstr(fe, "\"body\"") && puddle_message_parse(fe, fl, &fm, &why) == 0 && fm.body && !fm.body[0] && fm.files);
+        puddle_message_free(&fm);
+        CHECK(puddle_message_build_files(c1, ua, T, "", 0, NULL, f, 0, fe, sizeof fe) == 0);           /* nothing at all */
+        CHECK(puddle_message_build_files(c1, ua, T, "x", 1, NULL, f, 11, fe, sizeof fe) == 0);         /* more than ten */
+        CHECK(puddle_message_build_files(c1, ua, T, "x", 1, NULL, f, 10, fe, sizeof fe) > 0);
+        /* what a file may not be */
+        const char *names[] = { "", ".", "..", "a/b.jpg", "..\\x", "tab\tname", "line\nname", "bell\a" };
+        for (size_t k = 0; k < sizeof names / sizeof *names; k++) {
+            puddle_file_ref b = f[2];
+            snprintf(b.name, sizeof b.name, "%s", names[k]);
+            CHECK(!puddle_file_ref_ok(&b));
+        }
+        const char *mimes[] = { "", "image", "image/", "/jpeg", "image/jpeg/x", "image jpeg", "text/plain; charset=utf-8" };
+        for (size_t k = 0; k < sizeof mimes / sizeof *mimes; k++) {
+            puddle_file_ref b = f[2];
+            snprintf(b.mime, sizeof b.mime, "%s", mimes[k]);
+            CHECK(!puddle_file_ref_ok(&b));
+        }
+        {
+            puddle_file_ref b = f[2];
+            CHECK(puddle_file_ref_ok(&b));
+            b.size = 0; CHECK(!puddle_file_ref_ok(&b));
+            b = f[2]; b.w = 10; CHECK(!puddle_file_ref_ok(&b));                                         /* a width needs a height */
+            b = f[2]; snprintf(b.id, sizeof b.id, "XYZ"); CHECK(!puddle_file_ref_ok(&b));
+            b = f[2]; snprintf(b.preview, sizeof b.preview, "not base64!"); CHECK(!puddle_file_ref_ok(&b));
+            b = f[2]; memset(b.preview, 'A', 1396); b.preview[1396] = 0; CHECK(!puddle_file_ref_ok(&b));   /* over 1 KiB of picture */
+            b = f[2]; snprintf(b.name, sizeof b.name, "résumé (final).pdf"); snprintf(b.mime, sizeof b.mime, "application/pdf");
+            CHECK(puddle_file_ref_ok(&b));
+        }
+        /* a receiver refuses files that break the rules, and files on anything but a message */
+        char raw[1500];
+        snprintf(raw, sizeof raw, "{\"type\":\"message\",\"chat\":\"%s\",\"sender\":\"%s\",\"ts\":%lld,\"files\":[{\"id\":\"%s\",\"name\":\"../../etc/passwd\",\"mime\":\"text/plain\",\"size\":5}]}",
+                 c1, ua, (long long)T, f[0].id);
+        CHECK(puddle_message_parse(raw, strlen(raw), &fm, &why) == -1 && !strcmp(why, "bad_files"));
+        snprintf(raw, sizeof raw, "{\"type\":\"message\",\"chat\":\"%s\",\"sender\":\"%s\",\"ts\":%lld,\"files\":[]}", c1, ua, (long long)T);
+        CHECK(puddle_message_parse(raw, strlen(raw), &fm, &why) == -1);
+        snprintf(raw, sizeof raw, "{\"type\":\"edit\",\"chat\":\"%s\",\"sender\":\"%s\",\"ts\":%lld,\"body\":\"b\",\"ref\":\"%s\",\"files\":[{\"id\":\"%s\",\"name\":\"a\",\"mime\":\"a/b\",\"size\":5}]}",
+                 c1, ua, (long long)T, ref, f[0].id);
+        CHECK(puddle_chat_event_parse(raw, strlen(raw), &fm, &why) == -1);                              /* an edit never changes the files */
+        snprintf(raw, sizeof raw, "{\"type\":\"message\",\"chat\":\"%s\",\"sender\":\"%s\",\"ts\":%lld,\"files\":[{\"id\":\"%s\",\"name\":\"a.bin\",\"mime\":\"application/x-later\",\"size\":5,\"later\":true}]}",
+                 c1, ua, (long long)T, f[0].id);
+        CHECK(puddle_message_parse(raw, strlen(raw), &fm, &why) == 0);                                  /* what a later Puddle adds is left alone */
+        puddle_message_free(&fm);
+
+        /* in the view: a message keeps its files; deleting it lets them go */
+        char e1[PUDDLE_EVENT_MAX_BYTES], e2[600];
+        size_t l1 = puddle_message_build_files(c1, ua, T + 10, "look", 4, NULL, f, 2, e1, sizeof e1);
+        puddle_event two[2];
+        memset(two, 0, sizeof two);
+        two[0].event = e1; two[0].event_len = l1; puddle_sha256_hex(e1, l1, two[0].id);
+        puddle_view_msg *view;
+        size_t count;
+        CHECK(puddle_chat_view(two, 1, &view, &count) == 0 && count == 1 && view[0].files && strstr(view[0].files, "swim.mov"));
+        puddle_view_free(view, count);
+        size_t l2 = puddle_redact_build(c1, ua, T + 20, two[0].id, e2, sizeof e2);
+        two[1].event = e2; two[1].event_len = l2; puddle_sha256_hex(e2, l2, two[1].id);
+        CHECK(puddle_chat_view(two, 2, &view, &count) == 0 && count == 1 && view[0].deleted && !view[0].files);
+        puddle_view_free(view, count);
+    }
+
     return failures ? 1 : 0;
 }

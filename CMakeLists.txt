@@ -116,6 +116,7 @@ target_link_libraries(puddle_events PUBLIC puddle_core)
 # objects: the owner API's objects: User, Stream, Conversation, Message, Group
 add_library(puddle_objects STATIC
   src/objects/conversation.cpp
+  src/objects/file.cpp
   src/objects/group.cpp
   src/objects/message.cpp
   src/objects/stream.cpp
@@ -137,6 +138,7 @@ target_link_libraries(puddle_http PUBLIC OpenSSL::SSL)
 # api: the owner API: routes that use the objects
 add_library(puddle_api STATIC
   src/api/conversations.cpp
+  src/api/files.cpp
   src/api/groups.cpp
   src/api/profiles.cpp
   src/api/request.cpp

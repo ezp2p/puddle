@@ -76,7 +76,8 @@ typedef int (*puddle_chain_key_fn)(puddle_ctx *ctx, const unsigned char *body, s
  *   id     a user id or a group id (52 characters of base32)
  *   event  an event id (64 hex)
  *   token  an invite token (letters, digits, '-' and '_', up to 64)
- *   profile  one of the owner's profile ids (a-z, 0-9, '-' and '_', up to 32) */
+ *   profile  one of the owner's profile ids (a-z, 0-9, '-' and '_', up to 32)
+ *   index  a number counting from 0 (digits, no leading zero, below a million): a chunk of a file */
 typedef struct {
     const char *method;                    /* "GET" or "POST" only */
     const char *path;

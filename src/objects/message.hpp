@@ -15,6 +15,7 @@
 
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace puddle {
 
@@ -52,6 +53,7 @@ public:
     Type type() const { return type_; }
     bool deleted() const { return deleted_; }
     const std::optional<std::string> &body() const { return body_; }
+    const std::vector<puddle_file_ref> &files() const { return files_; }
 
     Message edit(puddle_ctx *ctx, const std::string &text) const;
     Message remove(puddle_ctx *ctx) const;
@@ -65,6 +67,7 @@ private:
     std::string id_, conversation_, chat_, sender_, ref_, member_, name_;
     Type type_ = Type::Default;
     std::optional<std::string> body_;
+    std::vector<puddle_file_ref> files_;
     int64_t ts_ = 0, rts_ = 0;
     std::optional<int64_t> editedTs_;
     bool deleted_ = false;

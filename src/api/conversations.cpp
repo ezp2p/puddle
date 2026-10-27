@@ -54,6 +54,50 @@ static int list_messages(const puddle_call *c, puddle_jw *w)
     return 200;
 }
 
+/* "files": [{id, name, mime, w?, h?, duration_ms?, preview?}]: files the owner uploaded, as the message will describe them
+ * (the size is what was uploaded). Any one of them wrong is a 400. */
+static std::vector<puddle_file_ref> filesOf(puddle_span arr)
+{
+    std::vector<puddle_file_ref> out;
+    size_t cur = 0;
+    puddle_span item;
+    int rc;
+    while ((rc = puddle_json_array_next(arr, &cur, &item)) == 1) {
+        if (out.size() == PUDDLE_MESSAGE_MAX_FILES)
+            throw Error::badRequest("too_many_files", "a message carries at most " + std::to_string(PUDDLE_MESSAGE_MAX_FILES) + " files");
+        puddle_file_ref f{};
+        puddle_span v;
+        auto str = [&](const char *key, char *dst, size_t cap, bool need) {
+            int m = puddle_json_member(item.p, item.len, key, &v);
+            if ((m == 1 && need) || m < 0 || (m == 0 && puddle_json_string(v, dst, cap) != 0))
+                throw Error::badRequest("bad_file", std::string("files: ") + key);
+        };
+        auto num = [&](const char *key) -> int64_t {
+            int64_t n = 0;
+            int m = puddle_json_member(item.p, item.len, key, &v);
+            if (m < 0 || (m == 0 && puddle_json_int64(v, &n) != 0))
+                throw Error::badRequest("bad_file", std::string("files: ") + key);
+            return n;
+        };
+        if (!puddle_json_valid_object(item.p, item.len))
+            throw Error::badRequest("bad_file");
+        str("id", f.id, sizeof f.id, true);
+        str("name", f.name, sizeof f.name, true);
+        str("mime", f.mime, sizeof f.mime, true);
+        str("preview", f.preview, sizeof f.preview, false);
+        int64_t fw = num("w"), fh = num("h");
+        if (fw < 0 || fw > 100000 || fh < 0 || fh > 100000)
+            throw Error::badRequest("bad_file", "files: w and h");
+        f.w = (int)fw;
+        f.h = (int)fh;
+        f.duration_ms = num("duration_ms");
+        out.push_back(f);
+    }
+    if (rc < 0)
+        throw Error::badRequest("bad_file", "files must be a list");
+    return out;
+}
+
 static int send_message(const puddle_call *c, puddle_jw *w)
 {
     char me[PUDDLE_USER_ID_LEN + 1];
@@ -61,10 +105,13 @@ static int send_message(const puddle_call *c, puddle_jw *w)
     if (!strcmp(puddle_param(c, "conversation"), me))
         throw Error::badRequest("cannot_message_yourself");
     Body b(c);
-    std::string text = b.messageBody();
+    std::vector<puddle_file_ref> files;
+    if (b.has("files"))
+        files = filesOf(b.raw("files"));
+    std::string text = files.empty() || b.has("body") ? b.messageBody() : std::string(); // with files, the words may be left out
     std::string ref = b.optString("reply_to", 127).value_or("");
     Conversation conv = conversationOf(c);
-    Message m = conv.send(text, ref);
+    Message m = conv.send(text, ref, files);
     PartialUsers people(c->ctx);
     Deliveries d(c->ctx, conv.kind() == Conversation::Kind::Dm ? conv.id() : std::string());
     m.write(w, c->ctx, people, &d);
@@ -109,7 +156,7 @@ const puddle_route puddle_conversation_routes[] = {
     { "GET",  "/api/v1/conversations",                                   PUDDLE_AUTH_OWNER, 0,    list_conversations, NULL },
     { "GET",  "/api/v1/conversations/{conversation:id}",                 PUDDLE_AUTH_OWNER, 0,    get_conversation,   NULL },
     { "GET",  "/api/v1/conversations/{conversation:id}/messages",        PUDDLE_AUTH_OWNER, 0,    list_messages,      NULL },
-    { "POST", "/api/v1/conversations/{conversation:id}/messages/send",   PUDDLE_AUTH_OWNER, 8192, send_message,       NULL },
+    { "POST", "/api/v1/conversations/{conversation:id}/messages/send",   PUDDLE_AUTH_OWNER, 65536, send_message,      NULL },
     { "POST", "/api/v1/conversations/{conversation:id}/messages/{message:event}/edit", PUDDLE_AUTH_OWNER, 8192, edit_message, NULL },
     { "POST", "/api/v1/conversations/{conversation:id}/messages/{message:event}/delete", PUDDLE_AUTH_OWNER, 64, delete_message, NULL },
     { "POST", "/api/v1/conversations/{conversation:id}/read",            PUDDLE_AUTH_OWNER, 64,   mark_read,          NULL },
