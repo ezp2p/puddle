@@ -129,13 +129,14 @@ TBD
 - [x] Basic direct messages
 - [x] Basic group messages
 - [ ] Configurable profiles
-- [ ] Images, emojis
+- [x] Files, photos and videos in chats
+- [ ] Emojis
 - [ ] Voice, video
 - [ ] Improved server-client experience
 - [ ] iPhone and Android apps
 - [ ] Community servers, with voice/video lobbies
 
-See [open issues](https://github.com/othneildrew/Best-README-Template/issues)
+See [open issues](https://github.com/ezp2p/puddle/issues)
 for a full list of proposed features (and known issues).
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>

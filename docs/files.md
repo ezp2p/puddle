@@ -1,10 +1,13 @@
-# Files (draft)
+# Files
 
 Sending files between Puddles, in a DM or a group: any kind of file, several to a message with an optional caption.
-Photos open in the app, videos play in it, and anything else can be saved or opened with the system's own app. This is
-the design the code will follow (branch `feat/multimedia`). The endpoints go in `api/openapi.yaml` (the owner's app)
-and `api/federation.yaml` (Puddle to Puddle) as each step is built, and the published copy in the `doco` repository is
-updated at the same time.
+Photos open in the app, videos play in it, and anything else can be saved or opened with the system's own app. Built on
+the branch `feat/multimedia`, in the order below. The endpoints are in `api/openapi.yaml` (the owner's app) and
+`api/federation.yaml` (Puddle to Puddle); `scripts/sync-doco.sh` publishes both, and this page, to the `doco` repository.
+
+Code: `storage/files` (the bytes, by id), `core/transfers` (fetching), `events/message` (files in a message),
+`objects/file` and `api/files.cpp` (the owner's side), `federation/files` (between Puddles), and in the app
+`app/composer` (sending) and `qml/chat/MessageFiles.qml`, `MediaViewer.qml` (showing).
 
 ## What was decided
 
@@ -123,22 +126,32 @@ GStreamer). `puddled` itself needs nothing new.
 
 ## Order of work
 
-Each step leaves the build and every test passing, and updates `api/*.yaml` and the `doco` repository as it goes.
+Each step left the build and every test passing, and updated `api/*.yaml` and the `doco` repository as it went.
 
-1. **This design**, and `doco` set up: the current specs copied in (`scripts/sync-doco.sh`), an overview, and this page.
-2. **Serving and taking bytes:** the server sends a file from disk as it reads it (with `Range`), and takes a raw
-   `application/octet-stream` body; the client fetches one chunk at a time. Tests for both.
-3. **The file store** (`core/files`): chunking, ids, partial files, which messages use what; `files.*` in `puddle.yaml`.
-4. **Uploading and sending:** the upload routes, `files` in a message event (and its checks), the `File` and `Message`
-   objects, the 32 KiB event limit.
-5. **Fetching between Puddles:** the two stream routes and who may use them; `core/transfers`; the automatic limit and
-   the largest size; trying other group members. An end-to-end test of a DM and of a group whose sender is offline.
-6. **Keeping and letting go:** a file goes with the last message using it; unsent uploads go after a day.
-7. **The app, sending:** the paperclip, dropping, pasting, previews, uploads.
-8. **The app, showing:** the grid, cards, downloading, the photo viewer and the video player; `ui_test` covers them.
-9. **Wrap-up:** README requirements (Qt Multimedia), CI, and a last pass over the docs.
+1. [x] **This design**, and `doco` set up: the specs copied in (`scripts/sync-doco.sh`), an overview, and this page.
+2. [x] **Serving bytes:** the server sends a file from disk as it reads it, with `Range` (`puddle_answer_file`).
+3. [x] **The file store** (`storage/files`): chunking, ids, partial files, uploads; `files.*` in `puddle.yaml`.
+4. [x] **Uploading and sending:** the upload routes, `files` in a message event (and its checks), the `File` object,
+   the 32 KiB event limit.
+5. [x] **Fetching between Puddles:** the two stream routes and who may use them; `core/transfers`; the automatic limit
+   and the largest size; other group members as sources. Tested end to end in a DM (`e2e`) and in a group whose sender
+   is offline (`group_e2e`), and with a fake network (`transfers`).
+6. [x] **Keeping and letting go:** a file goes with the last message carrying it; unsent uploads go after a day.
+7. [x] **The app, sending:** the paperclip, dropping, pasting, previews, uploads.
+8. [x] **The app, showing:** the grid, cards, downloading, the photo viewer and the video player (`ui_test`; the video
+   part runs only on a real platform: `PUDDLE_TEST_VIDEO=<clip> ./build/ui_test`).
+9. [x] **Wrap-up:** requirements (Qt Multimedia), and a last pass over the docs.
 
 ## Not in this
 
 Playing a video while it downloads; sending a file to someone you have no chat with; voice notes; a settings screen for
 the two limits (they are in `puddle.yaml` for now); fetching through a Levee.
+
+Known gaps, for later:
+
+- A peer asking for a file through a message that was since deleted is still served if another message in the same chat
+  carries the file (it is in that chat either way; the deletion is not looked up when serving).
+- The app sees a download's progress only as often as it reads the conversation (every two seconds), until
+  `/api/v1/updates` exists.
+- A message's files never change, and an edit cannot add or take one away.
+- Disk use is shown by `GET /api/v1/files/usage`, but there is no cap on it yet beyond `files.max_size` per file.
