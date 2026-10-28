@@ -21,6 +21,8 @@
 #define TOPIC_MAX_CHARS 1024
 #define CHANNEL_NAME_MAX 32
 #define MAX_CHANNELS 500
+#define MAX_FEATURES 64
+#define FEATURE_MAX 32
 #define FILE_MAX (64u << 20)
 
 namespace {
@@ -46,6 +48,8 @@ struct Member {
 struct Pond {
     std::string id, address, tls_fp, name, description, status = "connecting";
     int64_t cursor = 0, joined = 0;
+    int64_t protocol = 1;              /* what /info says it speaks (the Pond's docs/design.md, "Versions") */
+    std::vector<std::string> features;
     std::string me;
     std::vector<Channel> channels;
     std::map<std::string, Member> members;
@@ -129,6 +133,27 @@ static bool parse_member(puddle_ponds *p, puddle_span v, std::string &id, Member
     return true;
 }
 
+/* What an Info answer says the Pond speaks. Both are optional: missing is protocol 1 with no features. A feature name that is
+ * not 1 to 32 of a-z, 0-9, '_' and '-' is left out, as is anything past the first 64. */
+static void parse_protocol(puddle_span all, Pond &pd)
+{
+    puddle_span arr, item;
+    if (!get_int(all, "protocol", &pd.protocol) || pd.protocol < 1)
+        pd.protocol = 1;
+    pd.features.clear();
+    if (!member(all, "features", &arr))
+        return;
+    size_t cur = 0;
+    while (puddle_json_array_next(arr, &cur, &item) == 1 && pd.features.size() < MAX_FEATURES) {
+        char name[FEATURE_MAX + 1];
+        if (puddle_json_string(item, name, sizeof name) != 0 || !*name)
+            continue;
+        auto ok = [](char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-'; };
+        if (std::all_of(name, name + strlen(name), ok))
+            pd.features.push_back(name);
+    }
+}
+
 /* The pond, me and channels of an Info answer into `pd` (its id must match unless `pd` is new). */
 static bool parse_info(puddle_ponds *p, const char *json, size_t len, Pond &pd, std::vector<Channel> &channels, std::string &me_id,
                        Member &me)
@@ -141,6 +166,7 @@ static bool parse_info(puddle_ponds *p, const char *json, size_t len, Pond &pd, 
         pd.cursor < 0 || !member(all, "me", &mev) || !parse_member(p, mev, me_id, me) || !member(all, "channels", &chans))
         return false;
     pd.id = id;
+    parse_protocol(all, pd);
     size_t cur = 0;
     int r;
     while ((r = puddle_json_array_next(chans, &cur, &item)) == 1) {
@@ -269,6 +295,16 @@ static bool read_file(const std::string &path, std::string &out)
     return ok;
 }
 
+static void write_protocol(puddle_jw *w, const Pond &pd)
+{
+    puddle_jw_num(w, "protocol", pd.protocol);
+    puddle_jw_key(w, "features");
+    puddle_jw_array(w);
+    for (auto &f : pd.features)
+        puddle_jw_string(w, f.c_str());
+    puddle_jw_end_array(w);
+}
+
 /* pond.json: the Info shape, with what only we know of it. */
 static void save_pond(puddle_ponds *p, const Pond &pd)
 {
@@ -289,6 +325,7 @@ static void save_pond(puddle_ponds *p, const Pond &pd)
             write_channel(w, c);
         puddle_jw_end_array(w);
         puddle_jw_num(w, "cursor", pd.cursor);
+        write_protocol(w, pd);
         puddle_jw_str(w, "address", pd.address.c_str());
         puddle_jw_str(w, "tls_fp", pd.tls_fp.c_str());
         puddle_jw_num(w, "joined", pd.joined);
@@ -503,6 +540,10 @@ int puddle_ponds_info(puddle_ponds *p, const char *id, const char *info, size_t 
             forget_channel_file(p, pd, c.id);
     pd.name = fresh.name;
     pd.description = fresh.description;
+    if (fresh.protocol != pd.protocol || fresh.features != pd.features)
+        puddle_log(PUDDLE_LOG_INFO, "ponds: %s now speaks protocol %lld", pd.id.c_str(), (long long)fresh.protocol);
+    pd.protocol = fresh.protocol;
+    pd.features = std::move(fresh.features);
     if (reset) /* otherwise the events since our cursor are still to come, and say what changed */
         pd.cursor = fresh.cursor;
     pd.channels = std::move(channels);
@@ -761,6 +802,7 @@ static void write_summary(puddle_jw *w, const Pond &pd)
     char link[PUDDLE_ADDR_MAX + 16];
     puddle_jw_str(w, "address", puddle_link_format(pd.address.c_str(), NULL, link, sizeof link) == 0 ? link : pd.address.c_str());
     puddle_jw_str(w, "status", pd.status.c_str());
+    write_protocol(w, pd);
     puddle_jw_key(w, "channels");
     puddle_jw_array(w);
     for (auto &c : pd.channels) {

@@ -54,11 +54,19 @@ What the owner changes is carried by the same thread, which is woken to say it:
 - a different profile for the Pond (`POST /pond/v1/profile`, without pictures, which a Pond has no way to fetch);
 - new keys after a roll (`POST /pond/v1/keys`).
 
+## Versions
+
+A Pond and a Puddle are upgraded apart; what ties them is the protocol, `/pond/v1` (the Pond's design, "Versions").
+Within v1 things are only added, so the Puddle ignores fields and event kinds it does not know. Every `/info`, and
+joining, says the Pond's `protocol` (which additions it has) and `features` (which optional parts). The Puddle keeps
+both in `pond.json` and shows them on the owner's Pond, and checks them before using anything added after protocol 1,
+rather than guessing from a `404`. Nothing does yet.
+
 ## What is kept
 
 `core/ponds.cpp`, in `<data_dir>/ponds/<pond id>/`:
 
-- `pond.json`: the Pond as it last told us, our cursor, its address and certificate.
+- `pond.json`: the Pond as it last told us (with its protocol and features), our cursor, its address and certificate.
 - `members.jsonl`: one member per line, with the profile they chose for the Pond.
 - `<channel id>.jsonl`: the newest messages of a channel, at most 200.
 

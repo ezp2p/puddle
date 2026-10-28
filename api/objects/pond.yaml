@@ -4,7 +4,7 @@ description: |
   A Pond the owner is in, as this Puddle keeps it (docs/ponds.md): what the Pond last told us, cleaned. GET /api/v1/ponds lists
   them without `me` and `members`; GET /api/v1/ponds/{pond} has both.
 type: object
-required: [id, name, description, address, status, channels]
+required: [id, name, description, address, status, protocol, features, channels]
 properties:
   id: { $ref: "../wire/ids.yaml#/$defs/UserId", description: "The Pond's id, made from its key like a user id" }
   name: { type: string, maxLength: 400 }
@@ -13,6 +13,8 @@ properties:
   status:
     enum: [connecting, connected, unreachable, removed, certificate_changed]
     description: "`removed`: the Pond no longer has the owner as a member; what was kept can still be read until they leave"
+  protocol: { type: integer, minimum: 1, description: "Which additions to /pond/v1 the Pond said it has, at its last /info" }
+  features: { type: array, items: { type: string, pattern: "^[a-z0-9_-]{1,32}$" }, description: Optional parts the Pond said it has }
   channels: { type: array, items: { $ref: "#/$defs/Channel" } }
   me: { $ref: "../wire/ids.yaml#/$defs/UserId", description: The owner's member id (their user id) }
   members: { type: array, items: { $ref: "#/$defs/Member" } }
