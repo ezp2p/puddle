@@ -32,14 +32,19 @@ extern "C" {
 
 typedef enum { PUDDLE_AUTH_OWNER, PUDDLE_AUTH_PEER, PUDDLE_AUTH_CHAIN, PUDDLE_AUTH_CHAIN_OPEN } puddle_auth_kind;
 
-/* An answer that is a file, not JSON: a handler fills this (data is malloc'd; the router sends and frees it). */
+/* An answer that is a file, not JSON: a handler fills this, with `data` (malloc'd; the router sends and frees it) or with an
+ * open file (puddle_answer_file), which is sent as it is read and may be asked for in part (`Range`). */
 typedef struct {
     unsigned char *data;
     size_t len;
-    char mime[40];
+    char mime[80];
+    int has_file;
+    int fd;
+    int64_t file_size;
+    int immutable; /* the same path always answers the same bytes: it may be cached for good */
 } puddle_blob;
 
-#define PUDDLE_PATH_PARAMS 3
+#define PUDDLE_PATH_PARAMS 4
 #define PUDDLE_PARAM_MAX 72 /* an event id (64 hex) is the longest value a path segment carries */
 
 typedef struct {
@@ -71,7 +76,8 @@ typedef int (*puddle_chain_key_fn)(puddle_ctx *ctx, const unsigned char *body, s
  *   id     a user id or a group id (52 characters of base32)
  *   event  an event id (64 hex)
  *   token  an invite token (letters, digits, '-' and '_', up to 64)
- *   profile  one of the owner's profile ids (a-z, 0-9, '-' and '_', up to 32) */
+ *   profile  one of the owner's profile ids (a-z, 0-9, '-' and '_', up to 32)
+ *   index  a number counting from 0 (digits, no leading zero, below a million): a chunk of a file */
 typedef struct {
     const char *method;                    /* "GET" or "POST" only */
     const char *path;
@@ -116,6 +122,10 @@ int puddle_fail(puddle_jw *w, int status, const char *code);
  * that. Then answer with the file: 1, or 0 if it is not held (the handler says 404). */
 int puddle_query_media_hash(const puddle_call *call, char out[PUDDLE_QUERY_VALUE_MAX]);
 int puddle_answer_media(const puddle_call *call, const char *hash);
+
+/* Answer with the file at `path`, read as it is sent, honouring one `Range` (206, or 416 past its end). `immutable`: its bytes
+ * never change at this path (a file named by its hash). 1, or 0 if it cannot be opened (the handler says 404). */
+int puddle_answer_file(const puddle_call *call, const char *path, const char *mime, int immutable);
 
 #ifdef __cplusplus
 }

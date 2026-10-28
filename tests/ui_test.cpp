@@ -1,6 +1,11 @@
 // The app's window, driven like a person would: real mouse and key events on the real QML, against a real Puddle (the
 // app's Backend) and a second real Puddle that plays the friend. Offscreen.
 #include <QClipboard>
+#include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QImage>
+#include <QMimeData>
 #include <QRegularExpression>
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
@@ -13,6 +18,7 @@
 #include <QQuickStyle>
 
 #include "../src/gui/app/backend.h"
+#include "../src/gui/app/composer.h"
 #include "testnode.h"
 
 static int failures;
@@ -141,7 +147,10 @@ static bool shows(const QString &text) { return shown().contains(text); }
 
 int main(int argc, char **argv)
 {
-    qputenv("QT_QPA_PLATFORM", "offscreen");
+    /* Playing a video needs the system's own event loop (on macOS, AVFoundation answers through it), so a run with
+     * PUDDLE_TEST_VIDEO=<a short clip> shows its window; the checks of the window having focus then depend on the desktop. */
+    if (qgetenv("PUDDLE_TEST_VIDEO").isEmpty())
+        qputenv("QT_QPA_PLATFORM", "offscreen");
     QTemporaryDir home;
     CHECK(home.isValid());
     qputenv("HOME", home.path().toUtf8());
@@ -153,7 +162,7 @@ int main(int argc, char **argv)
     QDir().mkpath(home.path() + "/.config/puddle");
     QFile cf(home.path() + "/.config/puddle/puddle.yaml");
     CHECK(cf.open(QIODevice::WriteOnly));
-    cf.write(QString("address: \"127.0.0.1\"\nport: %1\n").arg(port).toUtf8());
+    cf.write(QString("address: \"127.0.0.1\"\nport: %1\nfiles:\n  auto_download: 1 KiB\n").arg(port).toUtf8()); /* files over 1 KiB wait to be asked for */
     cf.close();
 
     Node bob;
@@ -172,6 +181,7 @@ int main(int argc, char **argv)
     A.setInterval(100);
     CHECK(until([&] { return A.connected(); }));
 
+    qmlRegisterType<Composer>("Puddle.Files", 1, 0, "Composer");
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty("appBackend", &backend);
     const QString qml = QString(R"(
@@ -714,6 +724,142 @@ int main(int argc, char **argv)
             CHECK(!A.hasOlder());                                                                       /* all the way back */
             CHECK(msgs->at(0).value("kind").toString() == "message" && msgs->at(0).value("deleted").toBool());   /* the first thing said (later taken back) is there */
         }
+        /* ---- files: pasted into the box (as the picker and a drop add them too), shown waiting, sent with the message ---- */
+        {
+            CHECK(click(dm_row("Bob")));
+            CHECK(until([&] { return A.current() == bob.uid && find("composer") != nullptr; }, 3000));
+            const QString photo = home.path() + "/beach.png", notes = home.path() + "/notes.txt";
+            QImage img(400, 300, QImage::Format_RGB32);
+            img.fill(QColor(30, 120, 200));
+            CHECK(img.save(photo, "PNG"));
+            {
+                QFile f(notes);
+                CHECK(f.open(QIODevice::WriteOnly) && f.write("bring towels\n") > 0);
+            }
+            auto *md = new QMimeData;
+            md->setUrls({ QUrl::fromLocalFile(photo), QUrl::fromLocalFile(notes) });
+            QGuiApplication::clipboard()->setMimeData(md);
+            CHECK(click(find("composer")));
+            key(Qt::Key_V, Qt::ControlModifier);                                                     /* paste: files, not their names as text */
+            CHECK(until([&] { return all("attachment").size() == 2; }, 3000));
+            CHECK(find("composer")->property("text").toString().isEmpty());
+            CHECK(until([&] { return find("sendButton")->property("ready").toBool(); }, 5000));        /* each looked at first */
+            typeText("for saturday");
+            key(Qt::Key_Return);
+            B.open(backend.myId());
+            auto last_files = [&]() -> QJsonArray {
+                return msgs_b->rowCount() ? msgs_b->at(msgs_b->rowCount() - 1).value("files").toArray() : QJsonArray();
+            };
+            CHECK(until([&] { return last_files().size() == 2; }, 10000));
+            {
+                const QJsonArray fs = last_files();
+                const QJsonObject p0 = fs.at(0).toObject(), p1 = fs.at(1).toObject();
+                CHECK(p0.value("name").toString() == "beach.png" && p0.value("mime").toString() == "image/png" && p0.value("w").toInt() == 400 &&
+                      p0.value("h").toInt() == 300 && !p0.value("preview").toString().isEmpty());          /* a photo: its size, and a tiny preview */
+                CHECK(p1.value("name").toString() == "notes.txt" && p1.value("mime").toString() == "text/plain" && !p1.contains("preview"));
+                CHECK(msgs_b->at(msgs_b->rowCount() - 1).value("body").toString() == "for saturday");
+                QByteArray pv = QByteArray::fromBase64(p0.value("preview").toString().toLatin1());
+                CHECK(pv.size() > 0 && pv.size() <= 1024);
+            }
+            CHECK(until([&] { return all("attachment").isEmpty(); }, 3000));                          /* the tray is empty again */
+            /* shown in the conversation: the photo itself, and the text file as a card */
+            CHECK(until([&] { return all("mediaTile").size() == 1 && all("fileCard").size() == 1 && find_text("fileName", "notes.txt"); }, 5000));
+            CHECK(until([&] { QQuickItem *i = find("mediaImage"); return i && i->property("status").toInt() == 1; }, 5000));
+
+            /* ---- Bob sends a photo: bigger than the window's Puddle fetches by itself, so it waits for a click ---- */
+            const QString sunset = home.path() + "/sunset.png";
+            QImage warm(640, 480, QImage::Format_RGB32);
+            warm.fill(QColor(230, 120, 40));
+            CHECK(warm.save(sunset, "PNG"));
+            B.sendFiles("from bob", QString(), { QVariantMap{ { "key", "b1" }, { "path", sunset }, { "name", "sunset.png" }, { "mime", "image/png" },
+                                                             { "w", 640 }, { "h", 480 } } });
+            CHECK(until([&] { return shows("from bob"); }, 10000));
+            CHECK(until([&] { return find("downloadFile") != nullptr; }, 5000));                     /* waiting, with a Download button */
+            CHECK(click(find("downloadFile")));
+            CHECK(until([&] {
+                int ready = 0;
+                for (QQuickItem *i : all("mediaImage")) ready += i->property("status").toInt() == 1;
+                return ready == 2;
+            }, 10000));                                                                                  /* fetched, then shown */
+            CHECK(find("downloadFile") == nullptr);
+
+            /* ---- clicked: over the whole window; Escape puts it away ---- */
+            QList<QQuickItem *> tiles = all("mediaTile");
+            CHECK(tiles.size() == 2 && click(tiles.last()));
+            CHECK(until([&] { QQuickItem *i = find("viewerImage"); return i && i->property("status").toInt() == 1; }, 5000));
+            CHECK(find("viewerClose") != nullptr);
+            key(Qt::Key_Escape);
+            CHECK(until([&] { return find("viewerImage") == nullptr; }, 3000));
+
+            /* ---- Bob asks for notes.txt again, after it reached him long ago: the window asks its owner, who sends it ---- */
+            {
+                auto notes_row = [&](QString *mid, QString *fid, QString *state) {
+                    for (int r = 0; r < msgs_b->rowCount(); r++)
+                        for (const QJsonValue &v : msgs_b->at(r).value("files").toArray())
+                            if (v.toObject().value("name").toString() == "notes.txt") {
+                                *mid = msgs_b->at(r).value("id").toString();
+                                *fid = v.toObject().value("id").toString();
+                                *state = v.toObject().value("state").toString();
+                                return true;
+                            }
+                    return false;
+                };
+                QString mid, fid, state;
+                CHECK(until([&] { return notes_row(&mid, &fid, &state) && state == "available"; }, 10000));
+                QFile::remove(QString(bob.cfg.data_dir) + "/files/" + fid);                         /* Bob loses it */
+                QFile::remove(QString(bob.cfg.data_dir) + "/files/" + fid + ".chunks");
+                char appData[1024];
+                CHECK(puddle_config_default_data_dir(appData, sizeof appData) == 0);
+                {
+                    QFile nf(QString(appData) + "/files/notes/" + fid);                              /* and it reached him long ago */
+                    CHECK(nf.open(QIODevice::WriteOnly) && nf.write(QString("served %1 1\n").arg(bob.uid).toUtf8()) > 0);
+                }
+                B.requestFile(mid, fid);
+                CHECK(until([&] { return find("sendAgain") != nullptr && find("fileRequest") != nullptr; }, 10000)); /* "Bob asked for notes.txt again" */
+                CHECK(click(find("sendAgain")));
+                CHECK(until([&] { return notes_row(&mid, &fid, &state) && state == "available"; }, 15000));        /* he has it again */
+                CHECK(until([&] { return find("fileRequest") == nullptr; }, 5000));
+            }
+
+            /* ---- a video (only with PUDDLE_TEST_VIDEO=<a short clip>, as making one needs a tool the build does not):
+               its first frame, size and length go with it, and it plays in the window ---- */
+            const QString clip = QString::fromLocal8Bit(qgetenv("PUDDLE_TEST_VIDEO"));
+            if (!clip.isEmpty()) {
+                md = new QMimeData;
+                md->setUrls({ QUrl::fromLocalFile(clip) });
+                QGuiApplication::clipboard()->setMimeData(md);
+                CHECK(click(find("composer")));
+                key(Qt::Key_V, Qt::ControlModifier);
+                CHECK(until([&] { return all("attachment").size() == 1 && find("sendButton")->property("ready").toBool(); }, 10000));
+                key(Qt::Key_Return);
+                CHECK(until([&] { return last_files().size() == 1 && last_files().at(0).toObject().value("mime").toString().startsWith("video/"); }, 10000));
+                const QJsonObject v = last_files().at(0).toObject();
+                fprintf(stderr, "video as sent: %s\n", QJsonDocument(v).toJson(QJsonDocument::Compact).left(300).constData());
+                CHECK(v.value("w").toInt() > 0 && v.value("h").toInt() > 0 && v.value("duration_ms").toInt() > 0 && !v.value("preview").toString().isEmpty());
+                CHECK(until([&] { return all("mediaTile").size() == 3; }, 5000));
+                CHECK(click(all("mediaTile").last()));
+                CHECK(until([&] { QQuickItem *s = find("seek"); return s && s->property("value").toDouble() > 300; }, 15000));   /* playing */
+                key(Qt::Key_Escape);
+                CHECK(until([&] { return find("seek") == nullptr; }, 3000));
+            }
+
+            /* taken out again before sending; a copied picture becomes a file of its own */
+            md = new QMimeData;
+            md->setUrls({ QUrl::fromLocalFile(notes) });
+            QGuiApplication::clipboard()->setMimeData(md);
+            CHECK(click(find("composer")));
+            key(Qt::Key_V, Qt::ControlModifier);
+            CHECK(until([&] { return all("attachment").size() == 1; }, 3000));
+            CHECK(click(find("removeAttachment")));
+            CHECK(until([&] { return all("attachment").isEmpty(); }, 3000));
+            QGuiApplication::clipboard()->setImage(img);
+            CHECK(click(find("composer")));
+            key(Qt::Key_V, Qt::ControlModifier);
+            CHECK(until([&] { return all("attachment").size() == 1; }, 3000));                            /* saved as a PNG, to go like any file */
+            CHECK(click(find("removeAttachment")));
+            CHECK(until([&] { return all("attachment").isEmpty(); }, 3000));
+        }
+
         /* ---- right-click on a conversation: the group's menu, and the friend's ---- */
         {
             QQuickItem *g = dm_row("Bob's trip");

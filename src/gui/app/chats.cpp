@@ -1,4 +1,8 @@
 #include "chats.h"
+#include <QLocale>
+#include <QDesktopServices>
+
+#include <QFileInfo>
 
 #include <QClipboard>
 #include <QCryptographicHash>
@@ -75,7 +79,7 @@ Chats::Chats(QObject *parent)
     : QObject(parent),
       people_({ "id", "name", "state", "note", "error", "certificate_changed", "avatar", "color", "updated_at", "address", "provisional" }),
       conversations_({ "id", "kind", "user", "group", "name", "avatar", "color", "stream", "last", "lastBy", "unread", "members" }, nullptr, "id"),
-      messages_({ "id", "sender", "senderName", "ts", "body", "outgoing", "edited", "deleted", "reply_to", "avatar", "tint", "grouped",
+      messages_({ "id", "sender", "senderName", "ts", "body", "files", "outgoing", "edited", "deleted", "reply_to", "avatar", "tint", "grouped",
                   "dayStart", "replyName", "replyText", "replyMissing", "deliveryState", "deliveryReason", "deliveryNext", "kind", "noticeText" }),
       blocked_({ "id", "user", "name", "created_at" }, nullptr, "user"),
       profiles_({ "id", "display_name", "avatar", "default" }),
@@ -84,6 +88,7 @@ Chats::Chats(QObject *parent)
       sidebar_({ "key", "kind", "id", "name", "avatar", "color", "preview", "lastTs", "unread", "state", "members", "note", "invitedBy", "section" }, nullptr, "key")
 {
     cacheDir_ = QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + "/avatars";
+    fileCacheDir_ = QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + "/files";
     timer_.setInterval(2000);
     connect(&timer_, &QTimer::timeout, this, &Chats::refresh);
 }
@@ -116,6 +121,7 @@ void Chats::refresh()
     refreshMessages();
     refreshBlocked();
     refreshGroups();
+    refreshFileRequests();
     if (!profilesLoaded_)
         refreshProfiles();
 }
@@ -168,6 +174,133 @@ void Chats::refreshProfiles()
         profiles_.setItems(rows);
         emit profilesChanged();
     });
+}
+
+// ---- files in messages ----
+
+static bool isFileId(const QString &id)
+{
+    static const QRegularExpression hex(QStringLiteral("^[0-9a-f]{64}$"));
+    return hex.match(id).hasMatch();
+}
+
+// <cache>/files/<id>.<ext>: named by its id, with the extension its name has, so a player can tell what it is
+QString Chats::cachedPath(const QString &id, const QString &name) const
+{
+    QString ext = QFileInfo(name).suffix().toLower();
+    static const QRegularExpression ok(QStringLiteral("^[a-z0-9]{1,8}$"));
+    return fileCacheDir_ + "/" + id + (ok.match(ext).hasMatch() ? "." + ext : QString());
+}
+
+QString Chats::fileUrl(const QString &id, const QString &name)
+{
+    if (!isFileId(id))
+        return QString();
+    const QString path = cachedPath(id, name);
+    if (QFile::exists(path))
+        return QUrl::fromLocalFile(path).toString();
+    if (downloading_.contains(id))
+        return QString();
+    downloading_.insert(id);
+    QDir().mkpath(fileCacheDir_);
+    api_.download(QStringLiteral("/api/v1/files/%1/content").arg(id), path,
+                  [this, id](qint64 got, qint64 total) { if (total > 0) emit fileProgress(id, double(got) / double(total)); },
+                  [this, id](bool ok) {
+                      downloading_.remove(id);
+                      if (ok)
+                          emit fileReady(id);
+                  });
+    return QString();
+}
+
+void Chats::fetchFile(const QString &messageId, const QString &fileId)
+{
+    if (current_.isEmpty() || !isFileId(fileId))
+        return;
+    post(path("conversations", current_, QStringLiteral("messages/%1/files/%2/download").arg(messageId, fileId)), QJsonObject{},
+         tr("The file could not be fetched."));
+}
+
+void Chats::requestFile(const QString &messageId, const QString &fileId)
+{
+    if (current_.isEmpty() || !isFileId(fileId))
+        return;
+    post(path("conversations", current_, QStringLiteral("messages/%1/files/%2/request").arg(messageId, fileId)), QJsonObject{},
+         tr("The file could not be asked for."));
+}
+
+void Chats::answerFileRequest(const QString &messageId, const QString &fileId, const QString &userId, bool yes)
+{
+    if (current_.isEmpty() || !isFileId(fileId) || userId.isEmpty())
+        return;
+    post(path("conversations", current_, QStringLiteral("messages/%1/files/%2/requests/%3/%4").arg(messageId, fileId, userId, yes ? "accept" : "decline")),
+         QJsonObject{}, yes ? tr("The file could not be sent.") : tr("The request could not be declined."));
+}
+
+// Requests for files we sent, waiting for the owner: shown on their messages, and a notification for each new one.
+void Chats::refreshFileRequests()
+{
+    if (busy_[6])
+        return;
+    busy_[6] = true;
+    api_.get(QStringLiteral("/api/v1/files/requests"), [this](int status, const QJsonDocument &doc) {
+        busy_[6] = false;
+        if (status != 200 || !doc.isObject())
+            return;
+        QSet<QString> seen;
+        for (const QJsonValue &v : doc.object().value("requests").toArray()) {
+            const QJsonObject r = v.toObject();
+            const QString key = r.value("user").toString() + ' ' + r.value("message").toString() + ' ' + r.value("file").toString();
+            seen.insert(key);
+            if (fileRequestsLoaded_ && !fileRequests_.contains(key))
+                emit newFileRequest(r.value("user").toString(), r.value("conversation").toString());
+        }
+        fileRequests_ = seen;
+        fileRequestsLoaded_ = true;
+    });
+}
+
+void Chats::cancelFile(const QString &messageId, const QString &fileId)
+{
+    if (current_.isEmpty() || !isFileId(fileId))
+        return;
+    post(path("conversations", current_, QStringLiteral("messages/%1/files/%2/cancel").arg(messageId, fileId)), QJsonObject{},
+         tr("The download could not be stopped."));
+}
+
+bool Chats::saveFile(const QString &id, const QString &name, const QUrl &to)
+{
+    const QString from = cachedPath(id, name), dest = to.toLocalFile();
+    if (!QFile::exists(from) || dest.isEmpty())
+        return false;
+    QFile::remove(dest);
+    if (!QFile::copy(from, dest)) {
+        emit failed(tr("%1 could not be saved there.").arg(name));
+        return false;
+    }
+    return true;
+}
+
+bool Chats::openFile(const QString &id, const QString &name)
+{
+    const QString from = cachedPath(id, name);
+    if (!QFile::exists(from))
+        return false;
+    // a copy under its own name, so the system's app shows that name and knows the kind of file
+    QString safe = QFileInfo(name).fileName();
+    safe.remove(QRegularExpression(QStringLiteral("[\\x00-\\x1f/\\\\:]")));
+    if (safe.isEmpty() || safe.startsWith('.'))
+        safe = "file" + safe;
+    const QString dir = fileCacheDir_ + "/open/" + id.left(16), to = dir + "/" + safe;
+    QDir().mkpath(dir);
+    if (!QFile::exists(to) && !QFile::copy(from, to))
+        return false;
+    return QDesktopServices::openUrl(QUrl::fromLocalFile(to));
+}
+
+QString Chats::sizeText(double bytes)
+{
+    return QLocale().formattedDataSize(qint64(bytes), 1, QLocale::DataSizeSIFormat);
 }
 
 QString Chats::avatarFor(const QString &hash)
@@ -609,7 +742,9 @@ void Chats::renderMessages()
                 m.insert("replyMissing", true);
             } else {
                 m.insert("replyName", r.value("outgoing").toBool() ? tr("You") : !nameIn(r.value("author")).isEmpty() ? nameIn(r.value("author")) : nameOf(r.value("sender").toString()));
-                m.insert("replyText", r.value("deleted").toBool() ? QString() : r.value("body").toString().simplified().left(100));
+                const QString said = r.value("body").toString().simplified().left(100);
+                const QJsonArray rf = r.value("files").toArray();
+                m.insert("replyText", r.value("deleted").toBool() ? QString() : !said.isEmpty() || rf.isEmpty() ? said : rf.at(0).toObject().value("name").toString());
             }
         }
         prev = m;
@@ -718,6 +853,143 @@ void Chats::send(const QString &text, const QString &replyTo)
     if (!replyTo.isEmpty())
         o.insert("reply_to", replyTo);
     post(path("conversations", current_, "messages/send"), o, tr("The message could not be sent."));
+}
+
+// ---- sending files ----
+
+struct Chats::FileSend {
+    QString conversation, text, replyTo;
+    QVariantList files;        // as sendFiles was given them
+    QStringList ids;           // each one's id, once uploaded
+};
+
+static constexpr qint64 kChunk = 1 << 20; // the Puddle's chunk size (storage/files.h)
+
+void Chats::sendFiles(const QString &text, const QString &replyTo, const QVariantList &files)
+{
+    if (files.isEmpty())
+        return send(text, replyTo);
+    if (current_.isEmpty())
+        return;
+    auto job = std::make_shared<FileSend>();
+    job->conversation = current_; // the chat it was written in, even if the owner opens another meanwhile
+    job->text = text.trimmed();
+    job->replyTo = replyTo;
+    job->files = files;
+    uploadFile(job, 0);
+}
+
+void Chats::uploadFile(std::shared_ptr<FileSend> job, int index)
+{
+    if (index == job->files.size())
+        return sendWithFiles(job);
+    const QVariantMap f = job->files.at(index).toMap();
+    if (takeFile_ && takePool_)
+        return takeFile(job, index);
+    const qint64 size = QFileInfo(f.value("path").toString()).size();
+    if (size <= 0) {
+        emit filesFailed(tr("%1 is empty or cannot be read.").arg(f.value("name").toString()));
+        return;
+    }
+    api_.post(QStringLiteral("/api/v1/files/uploads/create"), QJsonObject{ { "size", size } }, [this, job, index, f, size](int status, const QJsonDocument &doc) {
+        if (status != 201) {
+            const QString code = doc.object().value("error").toString();
+            emit filesFailed(code == QLatin1String("too_large") ? tr("%1 is larger than your Puddle takes.").arg(f.value("name").toString())
+                                                               : tr("%1 could not be sent.").arg(f.value("name").toString()));
+            return;
+        }
+        uploadChunk(job, index, doc.object().value("upload").toString(), 0, int((size + kChunk - 1) / kChunk));
+    });
+}
+
+void Chats::takeFile(std::shared_ptr<FileSend> job, int index)
+{
+    const QVariantMap f = job->files.at(index).toMap();
+    const QString path = f.value("path").toString();
+    TakeFile fn = takeFile_;
+    // the pool is waited for before this object goes (Backend's destructor), so `this` is still here when the answer comes
+    takePool_->start([this, job, index, f, path, fn] {
+        char id[65] = { 0 };
+        int r = -1;
+        QFile file(path);
+        if (file.open(QIODevice::ReadOnly))
+            r = fn(file.handle(), id);
+        const QString sid = QString::fromLatin1(id);
+        QMetaObject::invokeMethod(this, [this, job, index, f, r, sid] {
+            const QString name = f.value("name").toString();
+            if (r != 0) {
+                emit filesFailed(r == -2 ? tr("%1 is empty, or larger than your Puddle takes.").arg(name) : tr("%1 could not be read.").arg(name));
+                return;
+            }
+            emit uploadProgress(f.value("key").toString(), 1.0);
+            job->ids << sid;
+            uploadFile(job, index + 1);
+        }, Qt::QueuedConnection);
+    });
+}
+
+void Chats::uploadChunk(std::shared_ptr<FileSend> job, int index, const QString &token, int n, int count)
+{
+    const QVariantMap f = job->files.at(index).toMap();
+    const QString key = f.value("key").toString();
+    QFile file(f.value("path").toString());
+    QByteArray bytes;
+    if (file.open(QIODevice::ReadOnly) && file.seek(n * kChunk))
+        bytes = file.read(kChunk);
+    if (bytes.isEmpty()) {
+        emit filesFailed(tr("%1 could not be read.").arg(f.value("name").toString()));
+        return;
+    }
+    const QString upload = QStringLiteral("/api/v1/files/uploads/") + token;
+    api_.postBytes(upload + QStringLiteral("/chunks/%1").arg(n), bytes, [this, job, index, token, n, count, key, upload, f](int status, const QJsonDocument &) {
+        if (status != 200) {
+            emit filesFailed(tr("%1 could not be sent.").arg(f.value("name").toString()));
+            return;
+        }
+        emit uploadProgress(key, double(n + 1) / count);
+        if (n + 1 < count)
+            return uploadChunk(job, index, token, n + 1, count);
+        api_.post(upload + QStringLiteral("/finish"), QJsonObject{}, [this, job, index, f](int status, const QJsonDocument &doc) {
+            if (status != 201) {
+                emit filesFailed(tr("%1 could not be sent.").arg(f.value("name").toString()));
+                return;
+            }
+            job->ids << doc.object().value("id").toString();
+            uploadFile(job, index + 1);
+        });
+    });
+}
+
+void Chats::sendWithFiles(std::shared_ptr<FileSend> job)
+{
+    QJsonArray files;
+    for (int i = 0; i < job->files.size(); i++) {
+        const QVariantMap f = job->files.at(i).toMap();
+        QJsonObject o{ { "id", job->ids.at(i) }, { "name", f.value("name").toString() }, { "mime", f.value("mime").toString() } };
+        if (f.value("w").toInt() > 0 && f.value("h").toInt() > 0) {
+            o.insert("w", f.value("w").toInt());
+            o.insert("h", f.value("h").toInt());
+        }
+        if (f.value("duration_ms").toLongLong() > 0)
+            o.insert("duration_ms", f.value("duration_ms").toLongLong());
+        if (!f.value("preview").toString().isEmpty())
+            o.insert("preview", f.value("preview").toString());
+        files.append(o);
+    }
+    QJsonObject o{ { "files", files } };
+    if (!job->text.isEmpty())
+        o.insert("body", job->text);
+    if (!job->replyTo.isEmpty())
+        o.insert("reply_to", job->replyTo);
+    api_.post(path("conversations", job->conversation, "messages/send"), o, [this](int status, const QJsonDocument &doc) {
+        if (status != 201) {
+            const QString code = doc.object().value("error").toString();
+            emit filesFailed(code == QLatin1String("no_stream") ? tr("You are not connected to them right now.") : tr("The message could not be sent."));
+            return;
+        }
+        emit filesSent();
+        refresh();
+    });
 }
 
 void Chats::edit(const QString &messageId, const QString &text)

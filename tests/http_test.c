@@ -66,5 +66,27 @@ int main(void)
     CHECK(parse("POST /x HTTP/1.1\r\nTransfer-Encoding: identity\r\n\r\n", &req) == -1);
     CHECK(parse("POST /x HTTP/1.1\r\nExpect: 100-continue\r\nExpect: 100-continue\r\n\r\n", &req) == -1);
 
+    /* ranges: one range of bytes, or the whole body */
+    CHECK(parse("GET /f HTTP/1.1\r\nrange: bytes=10-19\r\n\r\n", &req) == 0 && !strcmp(req.range, "bytes=10-19"));
+    CHECK(parse("GET /f HTTP/1.1\r\n\r\n", &req) == 0 && req.range[0] == '\0');
+    CHECK(parse("GET /f HTTP/1.1\r\nRange: bytes=1-2\r\nRange: bytes=3-4\r\n\r\n", &req) == -1);
+    {
+        int64_t off, len;
+        CHECK(puddle_http_range("", 100, &off, &len) == 0 && off == 0 && len == 100);
+        CHECK(puddle_http_range("bytes=10-19", 100, &off, &len) == 1 && off == 10 && len == 10);
+        CHECK(puddle_http_range("bytes=90-", 100, &off, &len) == 1 && off == 90 && len == 10);
+        CHECK(puddle_http_range("bytes=90-500", 100, &off, &len) == 1 && off == 90 && len == 10);   /* cut to the end */
+        CHECK(puddle_http_range("bytes=-30", 100, &off, &len) == 1 && off == 70 && len == 30);      /* the last 30 */
+        CHECK(puddle_http_range("bytes=-300", 100, &off, &len) == 1 && off == 0 && len == 100);
+        CHECK(puddle_http_range("bytes=100-", 100, &off, &len) == -1);                              /* past the end: 416 */
+        CHECK(puddle_http_range("bytes=0-", 0, &off, &len) == -1);
+        CHECK(puddle_http_range("bytes=0-1,5-6", 100, &off, &len) == 0 && len == 100);              /* several: the whole */
+        CHECK(puddle_http_range("bytes=20-10", 100, &off, &len) == 0 && len == 100);                /* nonsense: the whole */
+        CHECK(puddle_http_range("items=0-1", 100, &off, &len) == 0 && len == 100);
+        CHECK(puddle_http_range("bytes=x-1", 100, &off, &len) == 0 && len == 100);
+        puddle_http_response(206, "", "", 0, out, sizeof out);
+        CHECK(strstr(out, "206 Partial Content"));
+    }
+
     return failures ? 1 : 0;
 }

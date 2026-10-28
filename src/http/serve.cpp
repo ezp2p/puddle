@@ -1,5 +1,7 @@
 #include "http/serve.h"
 
+#include "platform/fsutil.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,6 +12,21 @@
 #define RESPONSE_MAX 32768 /* a profile's longest fields alone can pass 10 KB once escaped */
 
 static int64_t system_now(void) { return (int64_t)time(NULL); }
+
+/* A file answer: `left` bytes from where `fd` stands, a piece at a time. Stops early if the other side goes away or the
+ * file ends sooner than it said (the client then sees a short body and knows). */
+static void send_file(puddle_io *io, int fd, int64_t left)
+{
+    static const size_t PIECE = 64 * 1024;
+    unsigned char *piece = (unsigned char *)malloc(PIECE);
+    while (piece && left > 0) {
+        int64_t n = puddle_fd_read(fd, piece, left < (int64_t)PIECE ? (size_t)left : PIECE);
+        if (n <= 0 || io->write(io->io, piece, (size_t)n) != 0)
+            break;
+        left -= n;
+    }
+    free(piece);
+}
 
 /* offset just past the blank line ending the headers, or 0 if it has not arrived (binary-safe) */
 static size_t header_end(const char *buf, size_t len)
@@ -125,7 +142,8 @@ int puddle_http_serve(const puddle_http_handler *h, puddle_io *io, puddle_serve_
     /* ---- the answer ---- */
     char out[RESPONSE_MAX];
     int status = 0;
-    puddle_big big = { NULL, 0 };
+    puddle_big big;
+    memset(&big, 0, sizeof big);
     size_t outlen = 0;
     if (h->route_big)
         outlen = h->route_big(h->user, &req, owner_ok, body, body_len, out, sizeof out, &status, &big);
@@ -135,6 +153,9 @@ int puddle_http_serve(const puddle_http_handler *h, puddle_io *io, puddle_serve_
     if (!outlen) {
         free(big.data);
         big.data = NULL;
+        if (big.has_file)
+            puddle_fd_close(big.fd);
+        big.has_file = 0;
         status = 500;
         outlen = puddle_http_error(500, out, sizeof out);
     }
@@ -142,6 +163,10 @@ int puddle_http_serve(const puddle_http_handler *h, puddle_io *io, puddle_serve_
     if (big.data) {
         io->write(io->io, big.data, big.len);
         free(big.data);
+    }
+    if (big.has_file) {
+        send_file(io, big.fd, big.file_len);
+        puddle_fd_close(big.fd);
     }
     memset(out, 0, sizeof out); /* an answer can hold a recovery phrase; don't leave it on the stack */
     info->status = status;

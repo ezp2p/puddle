@@ -115,4 +115,5 @@ private:
     puddle_config cfg_;
     puddle_server *srv_ = nullptr;
     std::thread worker_;
+    QThreadPool takePool_;    // files handed to the Puddle (Chats::setTakeFile), one at a time
 };

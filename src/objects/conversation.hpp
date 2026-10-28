@@ -36,7 +36,8 @@ public:
     Kind kind() const { return kind_; }
     const std::string &chat() const { return chat_; }
 
-    Message send(const std::string &text, const std::string &replyTo);
+    // `files`: up to ten the owner uploaded, each here whole (their size is taken from what is here). `text` may then be "".
+    Message send(const std::string &text, const std::string &replyTo, const std::vector<puddle_file_ref> &files = {});
     Conversation markRead();
     Conversation retry(); // try again to deliver what is stuck; Error `nothing_to_retry` if nothing was
 

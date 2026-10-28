@@ -46,6 +46,32 @@ int main(void)
     snprintf(expect, sizeof expect, "%s/a.yaml", dir);
     CHECK(c.nprofile_files == 2 && strcmp(c.profile_files[0], expect) == 0 && strcmp(c.profile_files[1], "/abs/b.yaml") == 0);
 
+    /* files: the defaults, sizes with units, never */
+    CHECK(puddle_files_max_size(&c) == 100LL << 20 && puddle_files_auto_download(&c) == 100LL << 20);
+    write_conf("files:\n  max_size: 1 GiB\n  auto_download: 25 MiB\n");
+    CHECK(puddle_config_load(&c, path, err, sizeof err) == 0 && puddle_files_max_size(&c) == 1LL << 30 && puddle_files_auto_download(&c) == 25LL << 20);
+    write_conf("files:\n  max_size: 10 MB\n  auto_download: never\n");
+    CHECK(puddle_config_load(&c, path, err, sizeof err) == 0 && puddle_files_max_size(&c) == 10000000 && puddle_files_auto_download(&c) == 0);
+    write_conf("files:\n  max_size: 5 MiB\n");                   /* never more by itself than may come at all */
+    CHECK(puddle_config_load(&c, path, err, sizeof err) == 0 && puddle_files_auto_download(&c) == 5LL << 20);
+    write_conf("files:\n  max_size: lots\n");
+    CHECK(puddle_config_load(&c, path, err, sizeof err) == -1 && strstr(err, "files.max_size must be a size"));
+    write_conf("files:\n  max_size: 65 GiB\n");
+    CHECK(puddle_config_load(&c, path, err, sizeof err) == -1);
+    write_conf("files:\n  max_size: 0\n");
+    CHECK(puddle_config_load(&c, path, err, sizeof err) == -1);
+    write_conf("files:\n  colour: blue\n");
+    CHECK(puddle_config_load(&c, path, err, sizeof err) == -1 && strstr(err, "files.colour"));
+    write_conf("files: 5\n");
+    CHECK(puddle_config_load(&c, path, err, sizeof err) == -1);
+    {
+        int64_t v;
+        CHECK(puddle_parse_size("1048576", &v) == 0 && v == 1048576);
+        CHECK(puddle_parse_size("512KiB", &v) == 0 && v == 512 * 1024);
+        CHECK(puddle_parse_size("2 GB", &v) == 0 && v == 2000000000);
+        CHECK(puddle_parse_size("-1", &v) == -1 && puddle_parse_size("1 TiB", &v) == -1 && puddle_parse_size("MiB", &v) == -1);
+    }
+
     write_conf("profiles: one.yaml\n"); /* a single file needs no list */
     CHECK(puddle_config_load(&c, path, err, sizeof err) == 0 && c.nprofile_files == 1);
     write_conf("profiles:\n"); /* none */

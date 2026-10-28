@@ -16,6 +16,9 @@ info:
     - Errors are objects/error.yaml: `{"error": "<code>", "message"?}`.
     - Lists come in pages (page.yaml): `items` and `next`, asked for with `limit` + `offset`. Messages come newest
       page first, each page oldest first; other lists newest first.
+    - An answer that is a file rather than JSON (a picture, a file's contents) is sent as it is read from disk, with
+      `Accept-Ranges: bytes`. One `Range` is honoured (`206 Partial Content`, or `416` past the end); several are answered
+      with the whole file.
     - This API changes as the apps need it. The stream API (../federation) is the one that has to stay put.
 
 servers:
@@ -32,6 +35,7 @@ tags:
   - { name: identity, description: This Puddle's keys }
   - { name: profiles, description: "The owner's profiles: files in the data folder, each shown only where the owner chooses (docs/profiles.md)" }
   - { name: invites, description: Links that are accepted automatically }
+  - { name: files, description: "Files sent in chats: uploaded a chunk at a time, then sent in a message (docs/files.md)" }
   - { name: updates, description: Objects as they change }
 
 paths:
@@ -184,12 +188,31 @@ paths:
           application/json:
             schema:
               type: object
-              required: [body]
+              description: "`body`, `files`, or both"
               properties:
-                body: { type: string, minLength: 1, maxLength: 4000 }
+                body: { type: string, minLength: 1, maxLength: 4000, description: "The words; may be left out when there are files" }
                 reply_to: { $ref: "wire/ids.yaml#/$defs/EventId" }
+                files:
+                  type: array
+                  minItems: 1
+                  maxItems: 10
+                  description: |
+                    Files uploaded already (/api/v1/files/uploads), described as the message will show them. Their
+                    size is what was uploaded. `no_such_file` if one was not, `bad_file` if a name or type breaks the rules.
+                  items:
+                    type: object
+                    required: [id, name, mime]
+                    properties:
+                      id: { type: string, pattern: "^[0-9a-f]{64}$" }
+                      name: { type: string, maxLength: 255 }
+                      mime: { type: string, maxLength: 127 }
+                      w: { type: integer, minimum: 1, maximum: 100000 }
+                      h: { type: integer, minimum: 1, maximum: 100000 }
+                      duration_ms: { type: integer, minimum: 1 }
+                      preview: { type: string, contentEncoding: base64, description: "At most 1 KiB of image" }
       responses:
-        "200": { $ref: "#/components/responses/Message" }
+        "201": { $ref: "#/components/responses/Message" }
+        "400": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
   /api/v1/conversations/{conversation}/messages/{message}/edit:
     parameters: [{ $ref: "#/components/parameters/Conversation" }, { $ref: "#/components/parameters/Message" }]
@@ -371,6 +394,150 @@ paths:
         "201": { description: Kept, content: { application/json: { schema: { $ref: "wire/media_ref.yaml" } } } }
         "400": { $ref: "#/components/responses/Error" }
 
+  # ---- files ----
+  /api/v1/conversations/{conversation}/messages/{message}/files/{file}/download:
+    parameters: [{ $ref: "#/components/parameters/Conversation" }, { $ref: "#/components/parameters/Message" }, { $ref: "#/components/parameters/File" }]
+    post:
+      tags: [files]
+      summary: "Fetch a file of a message: one over files.auto_download, or one that failed"
+      description: It is fetched from its sender, or from anyone else in the chat who has it. Watch its `state` and `received`.
+      responses:
+        "200": { $ref: "#/components/responses/File" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: "`too_large`: past files.max_size", content: { application/json: { schema: { $ref: "objects/error.yaml" } } } }
+  /api/v1/conversations/{conversation}/messages/{message}/files/{file}/cancel:
+    parameters: [{ $ref: "#/components/parameters/Conversation" }, { $ref: "#/components/parameters/Message" }, { $ref: "#/components/parameters/File" }]
+    post:
+      tags: [files]
+      summary: Stop fetching a file, and throw away what came (a file here whole stays)
+      responses:
+        "200": { $ref: "#/components/responses/File" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/conversations/{conversation}/messages/{message}/files/{file}/request:
+    parameters: [{ $ref: "#/components/parameters/Conversation" }, { $ref: "#/components/parameters/Message" }, { $ref: "#/components/parameters/File" }]
+    post:
+      tags: [files]
+      summary: Ask again for a file that was delivered here whole before
+      description: |
+        A Puddle delivers a file to a peer by itself once per message. After that, sending it again takes its owner's
+        yes, every time (docs/files.md, "Asking again"). This asks everyone in the chat who may have it; the File says
+        `asked` until one says yes and it arrives. Whoever would send it anyway just does.
+      responses:
+        "200": { $ref: "#/components/responses/File" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: "`too_large` (past files.max_size), `already_here`, or `nobody_to_ask`", content: { application/json: { schema: { $ref: "objects/error.yaml" } } } }
+  /api/v1/conversations/{conversation}/messages/{message}/files/{file}/requests/{user}/accept:
+    parameters:
+      - { $ref: "#/components/parameters/Conversation" }
+      - { $ref: "#/components/parameters/Message" }
+      - { $ref: "#/components/parameters/File" }
+      - { name: user, in: path, required: true, schema: { type: string }, description: Who asked }
+    post:
+      tags: [files]
+      summary: "Send a file again to someone who asked: once"
+      description: They are told, and fetch it; the yes is used up when they have it whole (or after a week).
+      responses:
+        "200": { $ref: "#/components/responses/File" }
+        "404": { description: "`not_found`: no such request (answered already, or never made)", content: { application/json: { schema: { $ref: "objects/error.yaml" } } } }
+  /api/v1/conversations/{conversation}/messages/{message}/files/{file}/requests/{user}/decline:
+    parameters:
+      - { $ref: "#/components/parameters/Conversation" }
+      - { $ref: "#/components/parameters/Message" }
+      - { $ref: "#/components/parameters/File" }
+      - { name: user, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [files]
+      summary: "Do not send it again: the request is forgotten, and they are not told"
+      responses:
+        "200": { $ref: "#/components/responses/File" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/files/requests:
+    get:
+      tags: [files]
+      summary: Everyone asking for a file again, waiting for the owner's answer, oldest first
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [requests]
+                properties:
+                  requests:
+                    type: array
+                    items:
+                      type: object
+                      required: [file, user, conversation, message, ts]
+                      properties:
+                        file: { type: string, pattern: "^[0-9a-f]{64}$" }
+                        user: { type: string, description: Who asked }
+                        conversation: { type: string }
+                        message: { type: string, description: The message carrying it }
+                        ts: { type: integer, description: When they asked (ms) }
+  /api/v1/files/uploads/create:
+    post:
+      tags: [files]
+      summary: Start sending the Puddle a file, a chunk at a time
+      description: "For a phone client. The desktop app the Puddle runs inside hands it files directly (cloned, not uploaded); no route takes a path."
+      requestBody: { content: { application/json: { schema: { type: object, required: [size], properties: { size: { type: integer, minimum: 1, description: "Bytes; `too_large` past files.max_size" } } } } } }
+      responses:
+        "201": { $ref: "#/components/responses/Upload" }
+        "400": { $ref: "#/components/responses/Error" }
+  /api/v1/files/uploads/{upload}:
+    parameters: [{ $ref: "#/components/parameters/Upload" }]
+    get: { tags: [files], summary: How far an upload has got, responses: { "200": { $ref: "#/components/responses/Upload" } } }
+  /api/v1/files/uploads/{upload}/chunks/{n}:
+    parameters: [{ $ref: "#/components/parameters/Upload" }, { name: n, in: path, required: true, schema: { type: integer, minimum: 0 } }]
+    post:
+      tags: [files]
+      summary: One chunk, as the request body (chunk_size bytes, the last one what is left)
+      requestBody: { content: { application/octet-stream: {} } }
+      responses:
+        "200": { $ref: "#/components/responses/Upload" }
+        "400": { description: "`bad_chunk`: no such chunk, or not that chunk's length", content: { application/json: { schema: { $ref: "objects/error.yaml" } } } }
+  /api/v1/files/uploads/{upload}/finish:
+    parameters: [{ $ref: "#/components/parameters/Upload" }]
+    post:
+      tags: [files]
+      summary: Every chunk is here; the file is hashed and kept
+      responses:
+        "201": { $ref: "#/components/responses/File" }
+        "409": { description: "`incomplete`: chunks are missing", content: { application/json: { schema: { $ref: "objects/error.yaml" } } } }
+  /api/v1/files/uploads/{upload}/cancel:
+    parameters: [{ $ref: "#/components/parameters/Upload" }]
+    post: { tags: [files], summary: Throw an upload away, responses: { "200": { $ref: "#/components/responses/Upload" } } }
+  /api/v1/files/usage:
+    get:
+      tags: [files]
+      summary: The files kept here, the room they take, and the limits in force
+      description: "A file is kept while a message carries it, and goes with the last one deleted; one uploaded and never sent goes after a day."
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [files, bytes, max_size, auto_download]
+                properties:
+                  files: { type: integer, minimum: 0 }
+                  bytes: { type: integer, minimum: 0, description: "Partial files count what has arrived" }
+                  max_size: { type: integer, description: files.max_size in puddle.yaml }
+                  auto_download: { type: integer, description: "files.auto_download (0: never by itself)" }
+  /api/v1/files/{file}:
+    parameters: [{ $ref: "#/components/parameters/File" }]
+    get: { tags: [files], summary: "A file that is here, whole or partly", responses: { "200": { $ref: "#/components/responses/File" }, "404": { $ref: "#/components/responses/NotFound" } } }
+  /api/v1/files/{file}/content:
+    parameters: [{ $ref: "#/components/parameters/File" }]
+    get:
+      tags: [files]
+      summary: "A whole file's bytes, read from disk as they are sent; a Range asks for part"
+      responses:
+        "200": { description: The file, content: { application/octet-stream: {} } }
+        "206": { description: The part asked for, content: { application/octet-stream: {} } }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   # ---- updates ----
   /api/v1/updates:
     get:
@@ -407,6 +574,8 @@ components:
       schema: { $ref: "wire/ids.yaml#/$defs/ChatId" }
     Group: { name: group, in: path, required: true, schema: { $ref: "wire/ids.yaml#/$defs/ChatId" } }
     Message: { name: message, in: path, required: true, schema: { $ref: "wire/ids.yaml#/$defs/EventId" } }
+    File: { name: file, in: path, required: true, schema: { type: string, pattern: "^[0-9a-f]{64}$" } }
+    Upload: { name: upload, in: path, required: true, schema: { type: string, pattern: "^[0-9a-f]{32}$" } }
     Profile: { name: profile, in: path, required: true, description: One of the owner's profile ids, schema: { type: string, pattern: "^[a-z0-9_-]{1,32}$" } }
     Limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
     Offset: { name: offset, in: query, description: "Where to start: a page's `next`", schema: { type: integer, minimum: 0, default: 0 } }
@@ -417,6 +586,8 @@ components:
     Stream: { description: OK, content: { application/json: { schema: { $ref: "objects/stream.yaml" } } } }
     Conversation: { description: OK, content: { application/json: { schema: { $ref: "objects/conversation.yaml" } } } }
     Message: { description: OK, content: { application/json: { schema: { $ref: "objects/message.yaml" } } } }
+    File: { description: OK, content: { application/json: { schema: { $ref: "objects/file.yaml" } } } }
+    Upload: { description: OK, content: { application/json: { schema: { $ref: "objects/upload.yaml" } } } }
     Group: { description: OK, content: { application/json: { schema: { $ref: "objects/group.yaml" } } } }
     Identity: { description: OK, content: { application/json: { schema: { $ref: "objects/identity.yaml" } } } }
     Error: { description: Not possible now, content: { application/json: { schema: { $ref: "objects/error.yaml" } } } }

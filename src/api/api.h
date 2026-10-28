@@ -26,6 +26,8 @@ extern const puddle_route puddle_profile_api_routes[];   /* api/profiles.cpp: pr
 extern const size_t puddle_profile_api_routes_count;
 extern const puddle_route puddle_group_api_routes[];     /* api/groups.cpp: groups */
 extern const size_t puddle_group_api_routes_count;
+extern const puddle_route puddle_file_api_routes[];      /* api/files.cpp: uploads, files */
+extern const size_t puddle_file_api_routes_count;
 
 #ifdef __cplusplus
 }

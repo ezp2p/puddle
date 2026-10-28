@@ -80,6 +80,48 @@ void ApiClient::post(const QString &path, const QJsonObject &body, Reply done)
     watch(net_.post(req, QJsonDocument(body).toJson(QJsonDocument::Compact)), std::move(done));
 }
 
+void ApiClient::postBytes(const QString &path, const QByteArray &bytes, Reply done)
+{
+    if (!ready_)
+        return done(0, QJsonDocument());
+    QNetworkRequest req = request(path);
+    req.setHeader(QNetworkRequest::ContentTypeHeader, "application/octet-stream");
+    req.setTransferTimeout(60000); // a chunk is 1 MiB: room for a slow link to a Puddle elsewhere
+    watch(net_.post(req, bytes), std::move(done));
+}
+
+void ApiClient::download(const QString &path, const QString &dest, std::function<void(qint64, qint64)> progress, std::function<void(bool)> done)
+{
+    if (!ready_)
+        return done(false);
+    auto *file = new QFile(dest + ".part");
+    if (!file->open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        delete file;
+        return done(false);
+    }
+    QNetworkRequest req = request(path);
+    req.setTransferTimeout(60000); // without a byte for a minute: given up
+    QNetworkReply *r = net_.get(req);
+    allowHostMismatch(r);
+    connect(r, &QNetworkReply::readyRead, this, [r, file] { file->write(r->readAll()); });
+    connect(r, &QNetworkReply::downloadProgress, this, [progress](qint64 got, qint64 total) { if (progress) progress(got, total); });
+    connect(r, &QNetworkReply::finished, this, [r, file, dest, done = std::move(done)] {
+        file->write(r->readAll());
+        const bool ok = r->error() == QNetworkReply::NoError && r->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() == 200 && file->flush();
+        file->close();
+        r->deleteLater();
+        if (ok) {
+            QFile::remove(dest);
+            file->rename(dest);
+        } else {
+            file->remove();
+        }
+        const bool there = ok && QFile::exists(dest);
+        delete file;
+        done(there);
+    });
+}
+
 void ApiClient::getBytes(const QString &path, std::function<void(int, const QByteArray &)> done)
 {
     if (!ready_)

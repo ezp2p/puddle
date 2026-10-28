@@ -4,6 +4,9 @@
 #include "core/identity.h"
 #include "base/log.h"
 #include "objects/user.hpp"
+#include "objects/file.hpp"
+#include "core/transfers.h"
+#include "storage/files.h"
 #include "core/streams.h"
 #include "core/group.h"
 #include "events/group_events.h"
@@ -146,8 +149,9 @@ bool findInChat(puddle_ctx *ctx, const std::string &chat, const std::string &tar
             throw Error::internal();
         for (size_t i = 0; i < m; i++)
             if (target == v[i].id) {
-                *out = v[i];
+                *out = v[i]; // it is the caller's now: body, files and all
                 v[i].body = NULL;
+                v[i].files = NULL;
                 puddle_view_free(v, m);
                 return true;
             }
@@ -207,6 +211,14 @@ Message Message::fromView(const puddle_view_msg &v, const std::string &conversat
     m.deleted_ = v.deleted != 0;
     if (!v.deleted)
         m.body_ = v.body ? v.body : "";
+    if (!v.deleted && v.files) {
+        puddle_file_ref *refs;
+        size_t n;
+        if (puddle_file_refs_parse(v.files, strlen(v.files), &refs, &n) == 0) { // checked when it arrived
+            m.files_.assign(refs, refs + n);
+            free(refs);
+        }
+    }
     if (v.edited && !v.deleted)
         m.editedTs_ = v.edited_ts;
     return m;
@@ -297,8 +309,12 @@ Message Message::remove(puddle_ctx *ctx) const
     if (!el)
         throw Error::internal();
     sendEvent(ctx, group, conversation_, chat_, event, el, id);
+    for (const auto &f : files_) // the last message carrying a file takes it with it
+        if (ctx->files && puddle_files_unref(ctx->files, f.id, chat_.c_str(), id_.c_str()) == 0)
+            puddle_transfers_forget(ctx->transfers, ctx->files, f.id);
     Message m = *this;
     m.body_.reset();
+    m.files_.clear();
     m.editedTs_.reset();
     m.deleted_ = true;
     return m;
@@ -314,8 +330,15 @@ void Message::write(puddle_jw *w, puddle_ctx *ctx, PartialUsers &people, const D
     puddle_jw_key(w, "author");
     people.write(w, sender_);
     puddle_jw_num(w, "ts", ts_);
-    if (body_)
+    if (body_ && (!body_->empty() || files_.empty()))
         puddle_jw_str(w, "body", body_->c_str());
+    if (!files_.empty()) {
+        puddle_jw_key(w, "files");
+        puddle_jw_array(w);
+        for (const auto &f : files_)
+            File::of(ctx, f, chat_, id_).write(w);
+        puddle_jw_end_array(w);
+    }
     if (!ref_.empty())
         puddle_jw_str(w, "reply_to", ref_.c_str());
     if (editedTs_)

@@ -26,6 +26,12 @@ struct puddle_people *puddle_server_people(puddle_server *s);
 struct puddle_outbox *puddle_server_outbox(puddle_server *s);
 struct puddle_groups *puddle_server_groups(puddle_server *s);
 
+/* The owner picked a file on this computer, open as `fd`: take it into the Puddle (cloned where the file system can, else
+ * copied; storage/files.h) and say its id, ready to send in a message. Only for the app the Puddle runs inside: there is
+ * no route for it, so nothing on the network can make the Puddle read a file outside its data folder. Blocks while the
+ * file is copied and hashed; call it off the window's thread. 0; -2 if it is empty or over files.max_size; -1. */
+int puddle_server_take_file(puddle_server *s, int fd, char id[65]);
+
 /* Accept loop; blocks until puddle_server_stop(), then drains in-flight
  * connections. Returns 0 on clean stop. */
 int puddle_server_run(puddle_server *s);

@@ -127,6 +127,9 @@ ApplicationWindow {
         function onUnreadTotalChanged() { root.updateBadge() }
         function onIncomingRequestsChanged() { root.updateBadge() }
         function onGroupInvitesChanged() { root.updateBadge() }
+        function onNewFileRequest(userId, conversationId) {
+            root.notify(root.backend.chats.nameOf(userId), qsTr("Asked for a file again"), conversationId)
+        }
         function onNewGroupInvite(groupId) {
             if (!root.visible || !root.active)
                 root.notify(qsTr("Group invitation"), qsTr("You were invited to %1.").arg(root.backend.chats.nameOf(groupId)), "")

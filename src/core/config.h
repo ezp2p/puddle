@@ -23,7 +23,28 @@ typedef struct {
      * once, to bring them into it (core/profile.h). */
     char profile_files[PUDDLE_MAX_PROFILE_FILES][PUDDLE_PATH_MAX];
     size_t nprofile_files;
+    /* files: the largest file this Puddle sends or fetches, and the largest it fetches without being asked (docs/files.md).
+     * 0 = the default; read them with puddle_files_max_size and puddle_files_auto_download. */
+    int64_t files_max_size;
+    int64_t files_auto_download; /* -1 = never by itself */
 } puddle_config;
+
+#define PUDDLE_FILES_DEFAULT_MAX (100LL << 20)
+#define PUDDLE_FILES_DEFAULT_AUTO (100LL << 20)
+
+static inline int64_t puddle_files_max_size(const puddle_config *c)
+{
+    return c && c->files_max_size > 0 ? c->files_max_size : PUDDLE_FILES_DEFAULT_MAX;
+}
+static inline int64_t puddle_files_auto_download(const puddle_config *c)
+{
+    int64_t a = !c || c->files_auto_download == 0 ? PUDDLE_FILES_DEFAULT_AUTO : c->files_auto_download < 0 ? 0 : c->files_auto_download;
+    int64_t m = puddle_files_max_size(c);
+    return a < m ? a : m;
+}
+
+/* "100 MiB", "1 GiB", "512 KiB", "250 MB" (1000s), or a plain number of bytes: 0 and the bytes, or -1. */
+int puddle_parse_size(const char *s, int64_t *out);
 
 /* Load `path` (NULL = default path). A missing file is created with defaults. Returns 0 on success, -1 with a message in
  * `err` otherwise. */

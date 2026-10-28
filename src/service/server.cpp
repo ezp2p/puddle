@@ -12,6 +12,9 @@
 #include "http/router.h"
 #include "http/serve.h"
 #include "storage/store.h"
+#include "storage/files.h"
+#include "core/transfers.h"
+#include "federation/files.h"
 #include "federation/groupflow.h"
 #include "core/conversations.h"
 #include "core/group.h"
@@ -63,6 +66,9 @@ struct puddle_server {
     puddle_conversations *conversations;
     puddle_groups *groups;
     puddle_outbox *outbox;
+    puddle_files *files;
+    puddle_transfers *transfers;
+    puddle_outbox_hooks fetch_hooks; /* how downloads reach other Puddles: as the outbox does */
     puddle_bucket *anon_bucket;
     puddle_keyed *access_limit;
     puddle_replay *replay;
@@ -205,6 +211,9 @@ puddle_server *puddle_server_create(const puddle_config *cfg, char *err, size_t 
     s->people = puddle_people_open(cfg->data_dir, err, errlen);
     if (!s->people)
         goto fail;
+    s->files = puddle_files_open(cfg->data_dir, err, errlen);
+    if (!s->files)
+        goto fail;
     s->conversations = puddle_conversations_open(cfg->data_dir, err, errlen);
     if (!s->conversations)
         goto fail;
@@ -232,6 +241,13 @@ puddle_server *puddle_server_create(const puddle_config *cfg, char *err, size_t 
         s->outbox = puddle_outbox_open(cfg->data_dir, &hooks, err, errlen);
         if (!s->outbox)
             goto fail;
+        s->fetch_hooks = hooks;
+        s->fetch_hooks.done = NULL;
+        puddle_transfer_hooks th = { .get = puddle_federation_fetch, .user = &s->fetch_hooks, .now_ms = NULL,
+                                     .finished = puddle_file_finished, .finished_user = &s->ctx };
+        s->transfers = puddle_transfers_open(cfg->data_dir, s->files, &th, err, errlen);
+        if (!s->transfers)
+            goto fail;
     }
     /* checking a stranger's key chain costs signatures: 50 a second on average, 100 in a burst. A requester
      * may ask five times an hour. */
@@ -247,7 +263,7 @@ puddle_server *puddle_server_create(const puddle_config *cfg, char *err, size_t 
         goto fail;
     }
     s->ctx = (puddle_ctx){ .config = &s->cfg, .identity = s->identity, .store = s->store, .profiles = s->profiles,
-                           .assignments = s->assignments, .streams = s->streams, .people = s->people, .conversations = s->conversations, .groups = s->groups, .outbox = s->outbox, .replay = s->replay,
+                           .assignments = s->assignments, .streams = s->streams, .people = s->people, .conversations = s->conversations, .groups = s->groups, .outbox = s->outbox, .files = s->files, .transfers = s->transfers, .replay = s->replay,
                            .anon_bucket = s->anon_bucket, .access_limit = s->access_limit, .roll_slot = s->roll_slot,
                            .peer_key = puddle_streams_peer_key, .peer_key_user = s->streams, .courier = &puddle_federation_courier };
     s->router = (puddle_router){ .ctx = &s->ctx };
@@ -318,6 +334,19 @@ puddle_groups *puddle_server_groups(puddle_server *s)
     return s->groups;
 }
 
+int puddle_server_take_file(puddle_server *s, int fd, char id[65])
+{
+    char token[PUDDLE_UPLOAD_TOKEN_LEN + 1];
+    int r = puddle_files_upload_adopt(s->files, fd, puddle_files_max_size(&s->cfg), token, NULL);
+    if (r != 0)
+        return r;
+    if (puddle_files_upload_finish(s->files, token, id) != 0) {
+        puddle_files_upload_cancel(s->files, token);
+        return -1;
+    }
+    return 0;
+}
+
 puddle_outbox *puddle_server_outbox(puddle_server *s)
 {
     return s->outbox;
@@ -338,9 +367,11 @@ void puddle_server_destroy(puddle_server *s)
     SSL_CTX_free(s->tls);
     puddle_replay_free(s->replay);
     puddle_roll_slot_free(s->roll_slot);
+    puddle_transfers_close(s->transfers); /* stops its worker, which uses the streams and the files */
     puddle_outbox_close(s->outbox); /* stops its worker before what the worker uses goes away */
     puddle_streams_close(s->streams);
     puddle_people_close(s->people);
+    puddle_files_close(s->files);
     puddle_groups_close(s->groups);
     puddle_bucket_free(s->anon_bucket);
     puddle_keyed_free(s->access_limit);

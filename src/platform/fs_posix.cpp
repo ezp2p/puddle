@@ -4,10 +4,18 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+#if defined(__APPLE__)
+#include <sys/clonefile.h>
+#elif defined(__linux__)
+#include <linux/fs.h>
+#include <sys/ioctl.h>
+#endif
 
 int puddle_fd_open(const char *path, int flags)
 {
@@ -55,6 +63,11 @@ int64_t puddle_fd_end(int fd)
     return lseek(fd, 0, SEEK_END);
 }
 
+int64_t puddle_fd_seek(int fd, int64_t offset)
+{
+    return lseek(fd, (off_t)offset, SEEK_SET);
+}
+
 int puddle_fd_truncate(int fd, int64_t len)
 {
     return ftruncate(fd, (off_t)len);
@@ -66,6 +79,57 @@ int64_t puddle_fd_size(int fd)
     if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode))
         return -1;
     return st.st_size;
+}
+
+int puddle_fd_clone_to(int src, const char *dst)
+{
+    struct stat st;
+    if (fstat(src, &st) != 0 || !S_ISREG(st.st_mode)) {
+        errno = EINVAL;
+        return -1;
+    }
+#if defined(__APPLE__)
+    if (fclonefileat(src, AT_FDCWD, dst, CLONE_NOFOLLOW | CLONE_NOOWNERCOPY) == 0) {
+        chmod(dst, 0600); /* a clone keeps the original's mode; only the owner reads what the Puddle keeps */
+        return 1;
+    }
+    if (errno == EEXIST)
+        return -1;
+#endif
+    int out = open(dst, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+    if (out < 0)
+        return -1;
+#if defined(__linux__)
+    if (ioctl(out, FICLONE, src) == 0) {
+        close(out);
+        return 1;
+    }
+#endif
+    static const size_t piece = 1 << 20;
+    char *buf = (char *)malloc(piece);
+    off_t at = 0;
+    int bad = buf == NULL;
+    while (!bad) {
+        ssize_t n = pread(src, buf, piece, at);
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n <= 0) {
+            bad = n < 0;
+            break;
+        }
+        bad = puddle_fd_write_all(out, buf, (size_t)n) != 0;
+        at += n;
+    }
+    free(buf);
+    if (close(out) != 0)
+        bad = 1;
+    if (bad) {
+        int e = errno;
+        unlink(dst);
+        errno = e;
+        return -1;
+    }
+    return 0;
 }
 
 int puddle_fd_lock(int fd)

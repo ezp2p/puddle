@@ -11,6 +11,7 @@
 #include "core/phrase.h"
 #include "service/server.h"
 #include "core/streams.h"
+#include "events/message.h"
 
 #include <arpa/inet.h>
 #include <ftw.h>
@@ -167,6 +168,69 @@ static int api(node *n, const char *method, const char *path, const char *body, 
 }
 
 static char resp[70000];
+
+/* The owner API with any bytes either way: `body` (blen bytes) sent as it is, the answer's body malloc'd into *out
+ * (*outlen bytes; free it). `range` is "" or a Range header's value. The status, or -1. */
+static int api_bytes(node *n, const char *method, const char *path, const char *range, const void *body, size_t blen, unsigned char **out, size_t *outlen)
+{
+    *out = NULL;
+    *outlen = 0;
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in a;
+    memset(&a, 0, sizeof a);
+    a.sin_family = AF_INET;
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    a.sin_port = htons(n->cfg.port);
+    if (connect(fd, (struct sockaddr *)&a, sizeof a) != 0) { close(fd); return -1; }
+    struct timeval tv = { 10, 0 };
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
+    SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, NULL);
+    SSL *ssl = SSL_new(ctx);
+    SSL_set_fd(ssl, fd);
+    int status = -1;
+    if (SSL_connect(ssl) == 1) {
+        char head[600];
+        int hn = snprintf(head, sizeof head, "%s %s HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer %s\r\nContent-Length: %zu\r\n%s%s%sConnection: close\r\n\r\n",
+                          method, path, n->token, blen, range[0] ? "Range: " : "", range, range[0] ? "\r\n" : "");
+        SSL_write(ssl, head, hn);
+        for (size_t sent = 0; sent < blen;) {
+            int w = SSL_write(ssl, (const char *)body + sent, (int)(blen - sent > 65536 ? 65536 : blen - sent));
+            if (w <= 0) break;
+            sent += (size_t)w;
+        }
+        size_t cap = 4 << 20, len = 0;
+        unsigned char *buf = malloc(cap + 1);
+        int r;
+        while (len < cap && (r = SSL_read(ssl, buf + len, (int)(cap - len > 65536 ? 65536 : cap - len))) > 0) len += (size_t)r;
+        buf[len] = 0;
+        if (sscanf((char *)buf, "HTTP/1.1 %d", &status) != 1) status = -1;
+        unsigned char *b = (unsigned char *)strstr((char *)buf, "\r\n\r\n");
+        if (b) {
+            b += 4;
+            *outlen = len - (size_t)(b - buf);
+            *out = malloc(*outlen + 1);
+            memcpy(*out, b, *outlen);
+            (*out)[*outlen] = 0;
+        }
+        free(buf);
+    }
+    SSL_free(ssl);
+    SSL_CTX_free(ctx);
+    close(fd);
+    return status;
+}
+
+/* the value of "key":"..." in `json`, into out */
+static const char *json_str(const char *json, const char *key, char *out, size_t cap)
+{
+    char k[64];
+    snprintf(k, sizeof k, "\"%s\":\"", key);
+    const char *p = strstr(json, k);
+    out[0] = 0;
+    if (p) { p += strlen(k); snprintf(out, cap, "%.*s", (int)strcspn(p, "\""), p); }
+    return out;
+}
 
 static int post(node *n, const char *path, const char *body) { return api(n, "POST", path, body, resp, sizeof resp); }
 static int get(node *n, const char *path) { return api(n, "GET", path, NULL, resp, sizeof resp); }
@@ -918,6 +982,278 @@ int main(void)
         }
         CHECK(seen);
         node_down(&fay); node_down(&gus);
+    }
+
+    /* ---- files: the owner uploads one a chunk at a time, sends it, and can read it back ---- */
+    {
+        node hal, ivy;
+        CHECK(node_make(&hal, "hal", "Hal") == 0 && node_make(&ivy, "ivy", "Ivy") == 0);
+        request(&ivy, &hal, "hi Hal", NULL, 201);
+        CHECK(wait_state(&hal, ivy.uid, PUDDLE_STREAM_PENDING_IN));
+        stream_body(body, sizeof body, ivy.uid);
+        CHECK(post(&hal, sp("accept"), body) == 200 && wait_state(&ivy, hal.uid, PUDDLE_STREAM_ACTIVE));
+
+        size_t size = (size_t)(2.5 * (1 << 20));
+        unsigned char *bytes = malloc(size), *got;
+        size_t gl;
+        for (size_t i = 0; i < size; i++) bytes[i] = (unsigned char)(i * 7 + (i >> 11));
+        char token[80], fid[80], url[300];
+        CHECK(post(&hal, "/api/v1/files/uploads/create", "{\"size\":104857601}") == 400 && json_has("too_large"));   /* over files.max_size */
+        CHECK(post(&hal, "/api/v1/files/uploads/create", "{\"size\":2621440}") == 201 && json_has("\"chunk_size\":1048576") && json_has("\"chunks\":3"));
+        json_str(resp, "upload", token, sizeof token);
+        CHECK(strlen(token) == 32);
+        for (int k = 2; k >= 0; k--) {
+            snprintf(url, sizeof url, "/api/v1/files/uploads/%s/chunks/%d", token, k);
+            size_t cl = k < 2 ? 1 << 20 : size - (2 << 20);
+            CHECK(api_bytes(&hal, "POST", url, "", bytes + (size_t)k * (1 << 20), cl, &got, &gl) == 200);
+            free(got);
+            if (k == 2) {
+                snprintf(url, sizeof url, "/api/v1/files/uploads/%s/finish", token);
+                CHECK(post(&hal, url, "{}") == 409 && json_has("incomplete"));                       /* not all of it yet */
+                snprintf(url, sizeof url, "/api/v1/files/uploads/%s/chunks/1", token);
+                CHECK(api_bytes(&hal, "POST", url, "", bytes, 100, &got, &gl) == 400);              /* not that chunk's length */
+                free(got);
+            }
+        }
+        snprintf(url, sizeof url, "/api/v1/files/uploads/%s/chunks/3", token);
+        CHECK(api_bytes(&hal, "POST", url, "", bytes, 10, &got, &gl) == 400);
+        free(got);
+        snprintf(url, sizeof url, "/api/v1/files/uploads/%s/finish", token);
+        CHECK(post(&hal, url, "{}") == 201 && json_has("\"state\":\"available\"") && json_has("\"size\":2621440"));
+        json_str(resp, "id", fid, sizeof fid);
+        CHECK(strlen(fid) == 64);
+        CHECK(post(&hal, url, "{}") == 404);                                                          /* it is a file now, not an upload */
+
+        /* read back: all of it, and part */
+        snprintf(url, sizeof url, "/api/v1/files/%s/content", fid);
+        CHECK(api_bytes(&hal, "GET", url, "", NULL, 0, &got, &gl) == 200 && gl == size && memcmp(got, bytes, size) == 0);
+        free(got);
+        CHECK(api_bytes(&hal, "GET", url, "bytes=1048570-1048579", NULL, 0, &got, &gl) == 206 && gl == 10 && memcmp(got, bytes + 1048570, 10) == 0);
+        free(got);
+
+        /* sent in a message: the words may be left out */
+        char msg[1200];
+        snprintf(msg, sizeof msg, "{\"files\":[{\"id\":\"%s\",\"name\":\"tide.bin\",\"mime\":\"application/octet-stream\"}]}", fid);
+        snprintf(url, sizeof url, "/api/v1/conversations/%s/messages/send", ivy.uid);
+        CHECK(post(&hal, url, msg) == 201 && json_has("\"files\":[{\"id\":\"") && json_has("\"name\":\"tide.bin\"") &&
+              json_has("\"state\":\"available\"") && !json_has("\"body\""));
+        snprintf(msg, sizeof msg, "{\"body\":\"x\",\"files\":[{\"id\":\"%064d\",\"name\":\"a\",\"mime\":\"a/b\"}]}", 7);
+        CHECK(post(&hal, url, msg) == 400 && json_has("no_such_file"));                              /* only what was uploaded */
+        snprintf(msg, sizeof msg, "{\"files\":[{\"id\":\"%s\",\"name\":\"../up.bin\",\"mime\":\"application/octet-stream\"}]}", fid);
+        CHECK(post(&hal, url, msg) == 400 && json_has("bad_file"));
+        /* it arrives with its files described, waiting to be fetched */
+        snprintf(url, sizeof url, "/api/v1/conversations/%s/messages", hal.uid);
+        int arrived = 0;
+        for (int i = 0; i < 200 && !arrived; i++) {
+            arrived = get(&ivy, url) == 200 && json_has("tide.bin");
+            if (!arrived) usleep(50000);
+        }
+        CHECK(arrived && json_has("\"size\":2621440"));
+        CHECK(get(&ivy, "/api/v1/conversations") == 200 && json_has("\"preview\":\"tide.bin\""));    /* a message of a file alone says which */
+
+        /* ---- and Ivy's Puddle fetches it by itself, a chunk at a time ---- */
+        int fetched = 0;
+        for (int i = 0; i < 300 && !fetched; i++) {
+            fetched = get(&ivy, url) == 200 && json_has("\"state\":\"available\"");
+            if (!fetched) usleep(50000);
+        }
+        CHECK(fetched);
+        char mid[80];
+        json_str(resp, "id", mid, sizeof mid);
+        snprintf(url, sizeof url, "/api/v1/files/%s/content", fid);
+        CHECK(api_bytes(&ivy, "GET", url, "", NULL, 0, &got, &gl) == 200 && gl == size && memcmp(got, bytes, size) == 0);   /* every byte */
+        free(got);
+
+        /* ---- only for who is in the chat, and only through a message that carries it ---- */
+        {
+            node jo;
+            CHECK(node_make(&jo, "jo", "Jo") == 0);
+            request(&jo, &hal, "hi Hal, Jo here", NULL, 201);
+            CHECK(wait_state(&hal, jo.uid, PUDDLE_STREAM_PENDING_IN));
+            stream_body(body, sizeof body, jo.uid);
+            CHECK(post(&hal, sp("accept"), body) == 200 && wait_state(&jo, hal.uid, PUDDLE_STREAM_ACTIVE));
+            char dm[PUDDLE_USER_ID_LEN + 1], jodm[PUDDLE_USER_ID_LEN + 1], t[400];
+            puddle_dm_chat_id(hal.uid, ivy.uid, dm);
+            puddle_dm_chat_id(hal.uid, jo.uid, jodm);
+            puddle_address at;
+            snprintf(t, sizeof t, "127.0.0.1:%u", hal.cfg.port);
+            puddle_address_parse(t, &at);
+            puddle_net_opts o;
+            memset(&o, 0, sizeof o);
+            o.max_body = 2 << 20;
+            struct { node *who; const char *chat; int want; size_t len; } asks[] = {
+                { &ivy, dm, 200, 3 * 32 },   /* in the chat: the chunk hashes */
+                { &jo, dm, 404, 0 },         /* a friend of Hal's, but not in that chat */
+                { &jo, jodm, 404, 0 },       /* in a chat of his own, where that message is not */
+            };
+            for (size_t k = 0; k < sizeof asks / sizeof *asks; k++) {
+                puddle_net_reply r;
+                snprintf(t, sizeof t, "/stream/v1/files/%s/chunks?chat=%s&message=%s", fid, asks[k].chat, mid);
+                puddle_net_request(&at, "GET", t, NULL, 0, puddle_server_identity(asks[k].who->srv), hal.uid, &o, &r);
+                CHECK(r.result == PUDDLE_NET_OK && r.status == asks[k].want && (asks[k].want != 200 || r.body_len == asks[k].len));
+                puddle_net_reply_free(&r);
+            }
+            node_down(&jo);
+        }
+
+        /* ---- a file over the size Ivy fetches by herself waits until she asks ---- */
+        node_down(&ivy);
+        ivy.cfg.files_auto_download = 1 << 20;
+        CHECK(node_up(&ivy) == 0);
+        for (size_t i = 0; i < size; i++) bytes[i] ^= 0x5A;                                          /* another file */
+        CHECK(post(&hal, "/api/v1/files/uploads/create", "{\"size\":2621440}") == 201);
+        json_str(resp, "upload", token, sizeof token);
+        for (int k = 0; k < 3; k++) {
+            snprintf(url, sizeof url, "/api/v1/files/uploads/%s/chunks/%d", token, k);
+            CHECK(api_bytes(&hal, "POST", url, "", bytes + (size_t)k * (1 << 20), k < 2 ? 1 << 20 : size - (2 << 20), &got, &gl) == 200);
+            free(got);
+        }
+        snprintf(url, sizeof url, "/api/v1/files/uploads/%s/finish", token);
+        CHECK(post(&hal, url, "{}") == 201);
+        char fid2[80], mid2[80];
+        json_str(resp, "id", fid2, sizeof fid2);
+        snprintf(msg, sizeof msg, "{\"body\":\"a big one\",\"files\":[{\"id\":\"%s\",\"name\":\"big.bin\",\"mime\":\"application/octet-stream\"}]}", fid2);
+        snprintf(url, sizeof url, "/api/v1/conversations/%s/messages/send", ivy.uid);
+        CHECK(post(&hal, url, msg) == 201);
+        json_str(resp, "id", mid2, sizeof mid2);
+        snprintf(url, sizeof url, "/api/v1/conversations/%s/messages", hal.uid);
+        arrived = 0;
+        for (int i = 0; i < 200 && !arrived; i++) {
+            arrived = get(&ivy, url) == 200 && json_has("big.bin");
+            if (!arrived) usleep(50000);
+        }
+        usleep(500000);
+        CHECK(arrived && get(&ivy, url) == 200 && strstr(strstr(resp, "big.bin"), "\"state\":\"waiting\""));   /* not fetched by itself */
+        snprintf(url, sizeof url, "/api/v1/conversations/%s/messages/%s/files/%s/download", hal.uid, mid2, fid2);
+        CHECK(post(&ivy, url, "{}") == 200);
+        snprintf(url, sizeof url, "/api/v1/files/%s", fid2);
+        fetched = 0;
+        for (int i = 0; i < 300 && !fetched; i++) {
+            fetched = get(&ivy, url) == 200 && json_has("\"state\":\"available\"");
+            if (!fetched) usleep(50000);
+        }
+        CHECK(fetched);
+        snprintf(url, sizeof url, "/api/v1/conversations/%s/messages/%064d/files/%s/download", hal.uid, 1, fid2);
+        CHECK(post(&ivy, url, "{}") == 404);                                                        /* no such message */
+        CHECK(get(&ivy, "/api/v1/files/usage") == 200 && json_has("\"files\":2") && json_has("\"bytes\":5242880"));
+
+        /* ---- asked again: once Hal has delivered it whole, sending it again takes his yes ---- */
+        {
+            char path[1200], reqs[400];
+            node_down(&ivy);                                                                         /* Ivy loses it */
+            snprintf(path, sizeof path, "%s/files/%s", ivy.cfg.data_dir, fid2);
+            remove(path);
+            strcat(path, ".chunks");
+            remove(path);
+            CHECK(node_up(&ivy) == 0);
+            snprintf(path, sizeof path, "%s/files/notes/%s", hal.cfg.data_dir, fid2);              /* and Hal sent it long ago */
+            FILE *nf = fopen(path, "w");
+            if (nf) { fprintf(nf, "served %s 1\n", ivy.uid); fclose(nf); }
+            snprintf(url, sizeof url, "/api/v1/conversations/%s/messages/%s/files/%s/download", hal.uid, mid2, fid2);
+            CHECK(post(&ivy, url, "{}") == 200);
+            snprintf(url, sizeof url, "/api/v1/conversations/%s/messages", hal.uid);
+            int refused = 0;
+            for (int i = 0; i < 200 && !refused; i++) {
+                refused = get(&ivy, url) == 200 && strstr(resp, "they do not have it");          /* Hal will not send it unasked */
+                if (!refused) usleep(50000);
+            }
+            CHECK(refused);
+            snprintf(url, sizeof url, "/api/v1/conversations/%s/messages/%s/files/%s/request", hal.uid, mid2, fid2);
+            CHECK(post(&ivy, url, "{}") == 200 && json_has("\"asked\":true"));
+            snprintf(reqs, sizeof reqs, "\"user\":\"%s\"", ivy.uid);
+            int asked = 0;
+            for (int i = 0; i < 200 && !asked; i++) {
+                asked = get(&hal, "/api/v1/files/requests") == 200 && json_has(reqs) && json_has(mid2);
+                if (!asked) usleep(50000);
+            }
+            CHECK(asked);
+            snprintf(url, sizeof url, "/api/v1/conversations/%s/messages", ivy.uid);
+            snprintf(reqs, sizeof reqs, "\"requests\":[\"%s\"]", ivy.uid);
+            CHECK(get(&hal, url) == 200 && json_has(reqs));                                           /* shown on the message */
+            snprintf(url, sizeof url, "/api/v1/conversations/%s/messages/%s/files/%s/requests/%s/accept", ivy.uid, mid2, fid2, ivy.uid);
+            CHECK(post(&hal, url, "{}") == 200);
+            CHECK(post(&hal, url, "{}") == 404);                                                     /* answered already */
+            snprintf(url, sizeof url, "/api/v1/files/%s", fid2);
+            fetched = 0;
+            for (int i = 0; i < 300 && !fetched; i++) {
+                fetched = get(&ivy, url) == 200 && json_has("\"state\":\"available\"");
+                if (!fetched) usleep(50000);
+            }
+            CHECK(fetched);
+            CHECK(get(&hal, "/api/v1/files/requests") == 200 && !json_has(ivy.uid));
+            snprintf(url, sizeof url, "/api/v1/conversations/%s/messages/%s/files/%s/request", hal.uid, mid2, fid2);
+            CHECK(post(&ivy, url, "{}") == 409 && json_has("already_here"));
+        }
+
+        /* ---- too large for Ivy: she does not fetch it, and Hal is told ---- */
+        {
+            node_down(&ivy);
+            ivy.cfg.files_max_size = 1 << 20;
+            char path[1200];
+            snprintf(path, sizeof path, "%s/files/%s", ivy.cfg.data_dir, fid2);                     /* not here, so it would be fetched */
+            remove(path);
+            strcat(path, ".chunks");
+            remove(path);
+            CHECK(node_up(&ivy) == 0);
+            snprintf(msg, sizeof msg, "{\"body\":\"too big\",\"files\":[{\"id\":\"%s\",\"name\":\"big.bin\",\"mime\":\"application/octet-stream\"}]}", fid2);
+            snprintf(url, sizeof url, "/api/v1/conversations/%s/messages/send", ivy.uid);
+            CHECK(post(&hal, url, msg) == 201);
+            char mid4[80], want[200];
+            json_str(resp, "id", mid4, sizeof mid4);
+            snprintf(url, sizeof url, "/api/v1/conversations/%s/messages", ivy.uid);
+            snprintf(want, sizeof want, "\"refused\":[{\"user\":\"%s\",\"max\":1048576}]", ivy.uid);
+            int told = 0;
+            for (int i = 0; i < 200 && !told; i++) {
+                told = get(&hal, url) == 200 && json_has(want);
+                if (!told) usleep(50000);
+            }
+            CHECK(told);
+            snprintf(url, sizeof url, "/api/v1/conversations/%s/messages", hal.uid);
+            CHECK(get(&ivy, url) == 200 && json_has("\"state\":\"too_large\",\"received\":0,\"max\":1048576"));
+            snprintf(url, sizeof url, "/api/v1/conversations/%s/messages/%s/delete", ivy.uid, mid4);
+            CHECK(post(&hal, url, "{}") == 200);
+            node_down(&ivy);
+            ivy.cfg.files_max_size = 0;
+            CHECK(node_up(&ivy) == 0);
+        }
+
+        /* ---- a file goes with the last message that carries it, on both sides ---- */
+        snprintf(msg, sizeof msg, "{\"body\":\"again\",\"files\":[{\"id\":\"%s\",\"name\":\"tide again.bin\",\"mime\":\"application/octet-stream\"}]}", fid);
+        snprintf(url, sizeof url, "/api/v1/conversations/%s/messages/send", ivy.uid);
+        CHECK(post(&hal, url, msg) == 201);                                                          /* the first file, in a second message */
+        char mid3[80];
+        json_str(resp, "id", mid3, sizeof mid3);
+        snprintf(url, sizeof url, "/api/v1/conversations/%s/messages", hal.uid);
+        arrived = 0;
+        for (int i = 0; i < 200 && !arrived; i++) {
+            arrived = get(&ivy, url) == 200 && json_has("tide again.bin");
+            if (!arrived) usleep(50000);
+        }
+        CHECK(arrived);
+        snprintf(url, sizeof url, "/api/v1/conversations/%s/messages/%s/delete", ivy.uid, mid);
+        CHECK(post(&hal, url, "{}") == 200);                                                         /* the first message goes... */
+        snprintf(url, sizeof url, "/api/v1/conversations/%s/messages/%s/delete", ivy.uid, mid2);
+        CHECK(post(&hal, url, "{}") == 200);                                                         /* ...and the big one */
+        int gone = 0;
+        snprintf(url, sizeof url, "/api/v1/files/%s", fid2);
+        for (int i = 0; i < 200 && !gone; i++) {
+            gone = get(&ivy, url) == 404;
+            if (!gone) usleep(50000);
+        }
+        CHECK(gone && get(&hal, url) == 404);                                                        /* nothing else carried it: gone on both sides */
+        snprintf(url, sizeof url, "/api/v1/files/%s", fid);
+        CHECK(get(&hal, url) == 200 && get(&ivy, url) == 200);                                       /* the second message still carries this one */
+        snprintf(url, sizeof url, "/api/v1/conversations/%s/messages/%s/delete", ivy.uid, mid3);
+        CHECK(post(&hal, url, "{}") == 200);
+        snprintf(url, sizeof url, "/api/v1/files/%s", fid);
+        gone = 0;
+        for (int i = 0; i < 200 && !gone; i++) {
+            gone = get(&ivy, url) == 404;
+            if (!gone) usleep(50000);
+        }
+        CHECK(gone && get(&hal, url) == 404);
+        free(bytes);
+        node_down(&hal); node_down(&ivy);
     }
 
     node_down(&alice); node_down(&bob); node_down(&carol); node_down(&dave); node_down(&eve);

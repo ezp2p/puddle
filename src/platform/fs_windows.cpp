@@ -97,6 +97,11 @@ int64_t puddle_fd_end(int fd)
     return _lseeki64(fd, 0, SEEK_END);
 }
 
+int64_t puddle_fd_seek(int fd, int64_t offset)
+{
+    return _lseeki64(fd, offset, SEEK_SET);
+}
+
 int puddle_fd_truncate(int fd, int64_t len)
 {
     return _chsize_s(fd, len) == 0 ? 0 : -1;
@@ -108,6 +113,36 @@ int64_t puddle_fd_size(int fd)
     if (_fstat64(fd, &st) != 0 || !(st.st_mode & _S_IFREG))
         return -1;
     return st.st_size;
+}
+
+int puddle_fd_clone_to(int src, const char *dst)
+{
+    /* always a copy: ReFS block cloning (FSCTL_DUPLICATE_EXTENTS_TO_FILE) is not tried yet */
+    if (puddle_fd_size(src) < 0 || _lseeki64(src, 0, SEEK_SET) < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    int out = puddle_fd_open(dst, PUDDLE_F_WRITE | PUDDLE_F_CREATE | PUDDLE_F_EXCL);
+    if (out < 0)
+        return -1;
+    std::string buf(1 << 16, '\0');
+    int bad = 0;
+    for (;;) {
+        int64_t n = puddle_fd_read(src, &buf[0], buf.size());
+        if (n <= 0) {
+            bad = n < 0;
+            break;
+        }
+        if ((bad = puddle_fd_write_all(out, buf.data(), (size_t)n) != 0))
+            break;
+    }
+    if (puddle_fd_close(out) != 0)
+        bad = 1;
+    if (bad) {
+        puddle_remove_file(dst);
+        return -1;
+    }
+    return 0;
 }
 
 int puddle_fd_lock(int fd)

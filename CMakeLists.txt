@@ -74,6 +74,7 @@ target_link_libraries(puddle_base PUBLIC puddle_platform OpenSSL::Crypto Threads
 # storage: the chat logs and media on disk
 add_library(puddle_storage STATIC
   src/storage/storage.cpp
+  src/storage/files.cpp
   src/storage/media.cpp
   src/storage/store.cpp)
 target_link_libraries(puddle_storage PUBLIC puddle_base)
@@ -94,6 +95,7 @@ add_library(puddle_core STATIC
   src/core/profile.cpp
   src/core/ratelimit.cpp
   src/core/streams.cpp
+  src/core/transfers.cpp
   src/core/yamltree.cpp)
 target_link_libraries(puddle_core PUBLIC puddle_storage)
 # Only yamltree.cpp sees libyaml's headers: a shared include dir like /opt/homebrew/include would
@@ -115,6 +117,7 @@ target_link_libraries(puddle_events PUBLIC puddle_core)
 # objects: the owner API's objects: User, Stream, Conversation, Message, Group
 add_library(puddle_objects STATIC
   src/objects/conversation.cpp
+  src/objects/file.cpp
   src/objects/group.cpp
   src/objects/message.cpp
   src/objects/stream.cpp
@@ -136,6 +139,7 @@ target_link_libraries(puddle_http PUBLIC OpenSSL::SSL)
 # api: the owner API: routes that use the objects
 add_library(puddle_api STATIC
   src/api/conversations.cpp
+  src/api/files.cpp
   src/api/groups.cpp
   src/api/profiles.cpp
   src/api/request.cpp
@@ -146,6 +150,7 @@ target_link_libraries(puddle_api PUBLIC puddle_objects puddle_http)
 
 # federation: the stream API: routes other Puddles call, and how our news reaches them
 add_library(puddle_federation STATIC
+  src/federation/files.cpp
   src/federation/access.cpp
   src/federation/courier.cpp
   src/federation/flow.cpp
@@ -173,7 +178,7 @@ install(TARGETS puddled RUNTIME DESTINATION bin)
 # --- Puddle: the desktop app (Qt). Embeds the server, so nothing else is needed.
 option(PUDDLE_BUILD_GUI "Build the Qt desktop app" ON)
 if(PUDDLE_BUILD_GUI)
-  find_package(Qt6 COMPONENTS Quick QuickControls2 Network Svg Test QUIET) # Svg: the icons are SVG files
+  find_package(Qt6 COMPONENTS Quick QuickControls2 Network Svg Multimedia Test QUIET) # Svg: the icons are SVG files; Multimedia: videos
   if(Qt6_FOUND)
     qt_standard_project_setup()
     qt_policy(SET QTP0001 NEW)
@@ -187,7 +192,9 @@ if(PUDDLE_BUILD_GUI)
       src/gui/app/apiclient.cpp
       src/gui/app/apiclient.h
       src/gui/app/jsonlistmodel.cpp
-      src/gui/app/jsonlistmodel.h)
+      src/gui/app/jsonlistmodel.h
+      src/gui/app/composer.cpp
+      src/gui/app/composer.h)
     file(GLOB PUDDLE_ICONS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} CONFIGURE_DEPENDS src/gui/assets/icons/tabler/*.svg)
     # Theme is a singleton: the colours and sizes everything else reads
     set_source_files_properties(src/gui/qml/theme/Theme.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
@@ -204,6 +211,8 @@ if(PUDDLE_BUILD_GUI)
         src/gui/qml/shell/ContextBar.qml
         src/gui/qml/dialogs/NewConversationDialog.qml
         src/gui/qml/chat/ChatPage.qml
+        src/gui/qml/chat/MessageFiles.qml
+        src/gui/qml/chat/MediaViewer.qml
         src/gui/qml/settings/PersonRow.qml
         src/gui/qml/settings/LogPage.qml
         src/gui/qml/components/Avatar.qml
@@ -227,7 +236,7 @@ if(PUDDLE_BUILD_GUI)
         src/gui/qml/components/WheelScroll.qml
         src/gui/qml/theme/Theme.qml
       RESOURCES src/gui/assets/puddle.png ${PUDDLE_ICONS})
-    target_link_libraries(puddle PRIVATE puddle_service Qt6::Quick Qt6::QuickControls2 Qt6::Network Qt6::Svg)
+    target_link_libraries(puddle PRIVATE puddle_service Qt6::Quick Qt6::QuickControls2 Qt6::Network Qt6::Svg Qt6::Multimedia)
     if(APPLE)
       enable_language(OBJCXX)
       target_sources(puddle PRIVATE src/gui/app/dock_mac.mm)
@@ -266,11 +275,11 @@ if(PUDDLE_BUILD_GUI)
 
     # The window, driven with real mouse and key events against two real Puddles.
     add_executable(ui_test tests/ui_test.cpp src/gui/app/backend.cpp src/gui/app/backend.h src/gui/app/chats.cpp src/gui/app/chats.h
-      src/gui/app/apiclient.cpp src/gui/app/apiclient.h src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h)
+      src/gui/app/apiclient.cpp src/gui/app/apiclient.h src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/composer.cpp src/gui/app/composer.h)
     set_target_properties(ui_test PROPERTIES AUTOMOC ON)
     target_include_directories(ui_test PRIVATE src/gui/app)
     target_compile_definitions(ui_test PRIVATE PUDDLE_GUI_DIR="${CMAKE_SOURCE_DIR}/src/gui/qml")
-    target_link_libraries(ui_test PRIVATE puddle_service Qt6::Quick Qt6::QuickControls2 Qt6::Network Qt6::Test)
+    target_link_libraries(ui_test PRIVATE puddle_service Qt6::Quick Qt6::QuickControls2 Qt6::Network Qt6::Multimedia Qt6::Test)
     if(APPLE)
       target_sources(ui_test PRIVATE src/gui/app/dock_mac.mm)
       target_link_libraries(ui_test PRIVATE "-framework AppKit" "-framework UserNotifications")
@@ -289,7 +298,7 @@ enable_testing()
 # Each layer of src/ includes only the layers it may (tests/layers.cmake).
 add_test(NAME layers COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_CURRENT_SOURCE_DIR}/src -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/layers.cmake)
 
-foreach(t http json store storage people conversations config yaml profile encoding identity auth reqsig phrase serve router routes link group groupapi groupowner streams ratelimit access owner_streams client outbox inbound open_request flow message messages keysync wireprofile profiles e2e group_e2e)
+foreach(t http json store storage files transfers people conversations config yaml profile encoding identity auth reqsig phrase serve router routes link group groupapi groupowner streams ratelimit access owner_streams client outbox inbound open_request flow message messages keysync wireprofile profiles e2e group_e2e)
   add_executable(${t}_test tests/${t}_test.c)
   target_link_libraries(${t}_test PRIVATE puddle_service)
   add_test(NAME ${t} COMMAND ${t}_test)

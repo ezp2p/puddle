@@ -1,6 +1,9 @@
+import QtCore
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Dialogs
 import QtQuick.Layouts
+import Puddle.Files
 import "../components"
 import "../theme"
 
@@ -57,11 +60,77 @@ Pane {
     function clearReply() { replyId = ""; replyName = ""; replyText = "" }
     function send() {
         const t = input.text.trim()
-        if (t === "" || !canSend) return
-        chats.send(t, replyId)
+        if (!canSend) return
+        if (composer.count > 0) {          // files, with the words as their caption
+            if (!composer.send(t, replyId)) return
+            composer.caption = t
+        } else {
+            if (t === "") return
+            chats.send(t, replyId)
+        }
         input.text = ""
         clearReply()
         list.stickToEnd = true
+    }
+
+    // the files waiting to go with the next message: chosen with the paperclip, dropped on the page, or pasted
+    Composer {
+        id: composer
+        property string caption: ""        // the words that went with them, given back if they could not be sent
+        chats: page.chats
+        onRefused: why => page.chats.failed(why)
+        onFailed: why => {
+            page.chats.failed(why)
+            if (input.text === "") input.text = caption
+        }
+        onSent: caption = ""
+    }
+    // ---- the files of messages: saved where the owner says, opened with the system's app ----
+    property var pendingFile: null      // waiting to reach the app's cache, then `pendingAction` is done with it
+    property string pendingAction: ""
+    function whenHere(f, action) {
+        if (chats.fileUrl(f.id, f.name) !== "") doFile(f, action)
+        else { pendingFile = f; pendingAction = action }
+    }
+    function doFile(f, action) {
+        if (action === "save") {
+            saver.file = f
+            saver.selectedFile = StandardPaths.writableUrl(StandardPaths.DownloadLocation) + "/" + encodeURIComponent(f.name)
+            saver.open()
+        } else if (!chats.openFile(f.id, f.name)) {
+            chats.failed(qsTr("%1 could not be opened.").arg(f.name))
+        }
+    }
+    function saveFile(f) { whenHere(f, "save") }
+    function openFile(f) { whenHere(f, "open") }
+    Connections {
+        target: page.chats
+        function onFileReady(id) {
+            if (page.pendingFile && id === page.pendingFile.id) {
+                const f = page.pendingFile
+                page.pendingFile = null
+                page.doFile(f, page.pendingAction)
+            }
+        }
+    }
+    FileDialog {
+        id: saver
+        property var file: null
+        title: qsTr("Save as")
+        fileMode: FileDialog.SaveFile
+        onAccepted: if (file) page.chats.saveFile(file.id, file.name, selectedFile)
+    }
+    MediaViewer {
+        id: mediaViewer
+        chats: page.chats
+        onSave: f => page.saveFile(f)
+    }
+
+    FileDialog {
+        id: picker
+        title: qsTr("Choose files to send")
+        fileMode: FileDialog.OpenFiles
+        onAccepted: composer.add(selectedFiles)
     }
     // Up in an empty box edits your last message, like Discord.
     function editLast() {
@@ -150,6 +219,12 @@ Pane {
                 width: list.width
                 height: page.chats.hasOlder ? 40 : 0
                 Label { anchors.centerIn: parent; visible: page.chats.hasOlder; opacity: 0.55; text: qsTr("Loading earlier messages…") }
+            }
+            // a line's room between the newest message and the box you type in
+            footer: Item {
+                width: list.width
+                height: lineHeight.height
+                FontMetrics { id: lineHeight }
             }
 
             delegate: Item {
@@ -276,7 +351,7 @@ Pane {
                             TextEdit {
                                 id: bodyText
                                 objectName: "messageText"
-                                visible: !msg.editing
+                                visible: !msg.editing && (msg.model.deleted === true || (msg.model.body || "") !== "" || !msg.model.files)
                                 Layout.fillWidth: true
                                 readOnly: true
                                 selectByMouse: true
@@ -290,6 +365,17 @@ Pane {
                                 textFormat: TextEdit.PlainText
                                 Accessible.role: Accessible.StaticText
                                 Accessible.name: msg.model.senderName + ": " + text
+                            }
+                            MessageFiles {
+                                visible: msg.model.deleted !== true && !!msg.model.files && msg.model.files.length > 0
+                                Layout.fillWidth: true
+                                Layout.topMargin: 4
+                                chats: page.chats
+                                files: msg.model.files || []
+                                messageId: msg.model.id
+                                onViewMedia: (list, i) => mediaViewer.show(list, i)
+                                onSaveFile: f => page.saveFile(f)
+                                onOpenFile: f => page.openFile(f)
                             }
                             // what became of it, when it has not been delivered yet
                             RowLayout {
@@ -433,6 +519,79 @@ Pane {
             }
         }
 
+        // the files that go with the next message: a tile each, with its upload once it is going
+        Flow {
+            id: tray
+            objectName: "attachments"
+            visible: composer.count > 0
+            Layout.fillWidth: true
+            Layout.leftMargin: 16
+            Layout.rightMargin: 16
+            Layout.topMargin: 8
+            spacing: 8
+            Repeater {
+                model: composer.items
+                delegate: Rectangle {
+                    id: tile
+                    required property var model
+                    objectName: "attachment"
+                    width: 76; height: 76
+                    radius: Theme.radius
+                    color: Theme.tint(palette.text, 0.08)
+                    border.width: model.state === "failed" ? 2 : 0
+                    border.color: Theme.danger
+                    clip: true
+                    Accessible.name: model.name
+                    Image {
+                        anchors.fill: parent
+                        visible: status === Image.Ready
+                        source: tile.model.kind === "image" ? tile.model.url : tile.model.kind === "video" ? tile.model.thumb : ""
+                        sourceSize: Qt.size(152, 152)
+                        fillMode: Image.PreserveAspectCrop
+                        asynchronous: true
+                    }
+                    Column {
+                        anchors.centerIn: parent
+                        width: parent.width - 8
+                        visible: tile.model.kind === "file" || (tile.model.kind === "video" && tile.model.thumb === "")
+                        spacing: 2
+                        Icon { anchors.horizontalCenter: parent.horizontalCenter; glyph: tile.model.kind === "video" ? "player-play" : "file"; size: 22 }
+                        Label { width: parent.width; horizontalAlignment: Text.AlignHCenter; elide: Text.ElideMiddle; font.pixelSize: 10; text: tile.model.name }
+                    }
+                    Rectangle { // a video's play mark over its first frame
+                        visible: tile.model.kind === "video" && tile.model.thumb !== ""
+                        anchors.centerIn: parent
+                        width: 26; height: 26; radius: 13
+                        color: Qt.rgba(0, 0, 0, 0.55)
+                        Icon { anchors.centerIn: parent; glyph: "player-play"; size: 14; color: "white" }
+                    }
+                    Label { visible: tile.model.state === "preparing"; anchors.centerIn: parent; text: "…"; font.pixelSize: 18 }
+                    Rectangle { // how much has gone
+                        visible: tile.model.state === "uploading"
+                        anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+                        height: 4
+                        color: Theme.tint(palette.text, 0.2)
+                        Rectangle { width: parent.width * tile.model.progress; height: parent.height; color: Theme.primary }
+                    }
+                    ToolButton {
+                        objectName: "removeAttachment"
+                        visible: !composer.sending
+                        anchors.top: parent.top; anchors.right: parent.right
+                        width: 24; height: 24
+                        icon.source: Theme.icon("x"); icon.width: 14; icon.height: 14
+                        display: AbstractButton.IconOnly
+                        Accessible.name: qsTr("Remove %1").arg(tile.model.name)
+                        background: Rectangle { radius: 12; color: Qt.rgba(0, 0, 0, 0.45) }
+                        icon.color: "white"
+                        onClicked: composer.remove(tile.model.key)
+                    }
+                    ToolTip.text: tile.model.name
+                    ToolTip.visible: tileHover.hovered
+                    HoverHandler { id: tileHover }
+                }
+            }
+        }
+
         // the box: one line is a pill; it grows with the text. The send button sits in its bottom right corner, the same distance from the top, the
         // bottom and the right edge as the text is from the top and bottom.
         Rectangle {
@@ -464,8 +623,8 @@ Pane {
                     wrapMode: TextArea.Wrap
                     selectByMouse: true
                     color: Theme.text
-                    // the same above and below a single line as beside the button; the text keeps clear of the button on the right
-                    leftPadding: 16
+                    // the same above and below a single line as beside the button; the text keeps clear of the buttons either side
+                    leftPadding: box.pad + box.buttonSize + 8
                     rightPadding: box.pad * 2 + box.buttonSize + 10
                     topPadding: Math.max(6, Math.round((box.buttonSize + 2 * box.pad - fontMetrics.height) / 2))
                     bottomPadding: topPadding
@@ -484,15 +643,34 @@ Pane {
                         } else if (event.key === Qt.Key_Escape && page.replyId !== "") {
                             page.clearReply()
                             event.accepted = true
+                        } else if (event.matches(StandardKey.Paste) && composer.canPaste()) { // a picture or files: they go with the message
+                            composer.paste()
+                            event.accepted = true
                         }
                     }
                 }
             }
 
+            ToolButton {
+                id: attachButton
+                objectName: "attachButton"
+                anchors.left: parent.left
+                anchors.bottom: parent.bottom
+                anchors.margins: box.pad
+                width: box.buttonSize
+                height: box.buttonSize
+                enabled: page.canSend && !composer.sending
+                icon.source: Theme.icon("paperclip"); icon.width: 18; icon.height: 18
+                display: AbstractButton.IconOnly
+                Accessible.name: qsTr("Add files")
+                ToolTip.text: qsTr("Add files"); ToolTip.visible: hovered
+                onClicked: picker.open()
+            }
+
             Rectangle {
                 id: sendButton
                 objectName: "sendButton"
-                readonly property bool ready: page.canSend && input.text.trim() !== ""
+                readonly property bool ready: page.canSend && !composer.sending && (input.text.trim() !== "" || composer.ready)
                 // a long message brings a scroll bar to the right edge (as in Discord): the button makes room for it
                 readonly property bool scrolls: input.implicitHeight > scroller.height
                 anchors.right: parent.right
@@ -520,6 +698,30 @@ Pane {
                     onTapped: { page.send(); input.forceActiveFocus() }
                 }
             }
+        }
+    }
+
+    // files dropped anywhere on the conversation go with the next message
+    DropArea {
+        id: dropArea
+        objectName: "dropArea"
+        anchors.fill: parent
+        enabled: page.canSend && !composer.sending
+        onEntered: drag => { if (!drag.hasUrls) drag.accepted = false }
+        onDropped: drop => {
+            composer.add(drop.urls)
+            drop.accept(Qt.CopyAction)
+            input.forceActiveFocus()
+        }
+        Rectangle {
+            anchors.fill: parent
+            anchors.margins: 8
+            visible: dropArea.containsDrag
+            radius: Theme.radiusLarge
+            color: Theme.tint(Theme.accent, 0.12)
+            border.width: 2
+            border.color: Theme.accent
+            Label { anchors.centerIn: parent; text: qsTr("Drop to add to your message"); font.pixelSize: 16; font.bold: true }
         }
     }
 

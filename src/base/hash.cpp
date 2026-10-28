@@ -16,6 +16,12 @@ void puddle_hex_encode(const unsigned char *bytes, unsigned len, char *out)
     out[2 * len] = '\0';
 }
 
+void puddle_sha256(const void *data, size_t len, unsigned char out[32])
+{
+    unsigned mdlen = 0;
+    EVP_Digest(data, len, out, &mdlen, EVP_sha256(), NULL);
+}
+
 void puddle_sha256_hex(const void *data, size_t len, char out[65])
 {
     unsigned char md[EVP_MAX_MD_SIZE];

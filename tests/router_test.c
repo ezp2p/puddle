@@ -41,6 +41,9 @@ static int h_owner(const puddle_call *c, puddle_jw *w)
     return 200;
 }
 static int h_empty(const puddle_call *c, puddle_jw *w) { (void)c; (void)w; return 202; }
+static char file_path[700];
+static int h_file(const puddle_call *c, puddle_jw *w) { (void)w; return puddle_answer_file(c, file_path, "video/mp4", 1) ? 200 : 404; }
+static int h_file_refused(const puddle_call *c, puddle_jw *w) { puddle_answer_file(c, file_path, "video/mp4", 1); return puddle_fail(w, 403, "no"); }
 static int h_params(const puddle_call *c, puddle_jw *w)
 {
     puddle_jw_object(w);
@@ -90,6 +93,8 @@ static const puddle_route routes[] = {
     { "GET",  "/u/{user:id}", PUDDLE_AUTH_OWNER, 0, h_params, NULL },
     { "POST", "/u/{user:id}/m/{message:event}/edit", PUDDLE_AUTH_OWNER, 10, h_params, NULL },
     { "POST", "/i/{token:token}/revoke", PUDDLE_AUTH_OWNER, 0, h_empty, NULL },
+    { "GET",  "/file",   PUDDLE_AUTH_OWNER, 0,   h_file, NULL },
+    { "GET",  "/file-refused", PUDDLE_AUTH_OWNER, 0, h_file_refused, NULL },
 };
 
 static puddle_ctx ctx;
@@ -97,10 +102,13 @@ static int64_t now_cb(void) { return T0; }
 
 typedef struct { int status; char out[4096]; size_t n; } reply;
 
+static const char *g_range; /* the Range header of the next call, if any */
+
 static reply call(const puddle_router *r, const char *method, const char *target, const char *sig, const char *body, int owner)
 {
     puddle_request req;
     memset(&req, 0, sizeof req);
+    if (g_range) snprintf(req.range, sizeof req.range, "%s", g_range);
     snprintf(req.method, sizeof req.method, "%s", method);
     snprintf(req.target, sizeof req.target, "%s", target);
     snprintf(req.path, sizeof req.path, "%s", target);
@@ -410,6 +418,36 @@ int main(void)
 
     puddle_replay_free(ctx.replay);
     puddle_identity_close(alice); puddle_identity_close(bob); puddle_identity_close(carol);
+    /* ---- answering with a file on disk, whole or in part ---- */
+    {
+        snprintf(file_path, sizeof file_path, "%s/clip.bin", root);
+        FILE *f = fopen(file_path, "wb");
+        for (int i = 0; i < 1000; i++) fputc('a' + i % 26, f);
+        fclose(f);
+        puddle_router fr = { routes, sizeof routes / sizeof routes[0], &ctx };
+        reply rp = call(&fr, "GET", "/file", NULL, NULL, 1);
+        CHECK(rp.status == 200 && strstr(rp.out, "Content-Length: 1000\r\n") && strstr(rp.out, "Content-Type: video/mp4\r\n") &&
+              strstr(rp.out, "Accept-Ranges: bytes\r\n") && strstr(rp.out, "immutable") && body_of(&rp)[0] == 'a' && body_of(&rp)[999] == 'l');
+        g_range = "bytes=26-51";
+        rp = call(&fr, "GET", "/file", NULL, NULL, 1);
+        CHECK(rp.status == 206 && strstr(rp.out, "206 Partial Content") && strstr(rp.out, "Content-Length: 26\r\n") &&
+              strstr(rp.out, "Content-Range: bytes 26-51/1000\r\n") && !strncmp(body_of(&rp), "abcdefghijklmnopqrstuvwxyz", 26));
+        g_range = "bytes=-4";
+        rp = call(&fr, "GET", "/file", NULL, NULL, 1);
+        CHECK(rp.status == 206 && strstr(rp.out, "Content-Range: bytes 996-999/1000\r\n") && !strcmp(body_of(&rp), "ijkl"));
+        g_range = "bytes=1000-";
+        rp = call(&fr, "GET", "/file", NULL, NULL, 1);
+        CHECK(rp.status == 416 && strstr(rp.out, "Content-Range: bytes */1000\r\n"));
+        g_range = NULL;
+        rp = call(&fr, "GET", "/file-refused", NULL, NULL, 1);                                     /* opened, then refused: not sent */
+        CHECK(rp.status == 403 && strstr(body_of(&rp), "\"error\":\"no\"") && !strstr(rp.out, "abcdef"));
+        remove(file_path);
+        rp = call(&fr, "GET", "/file", NULL, NULL, 1);
+        CHECK(rp.status == 404);
+        rp = call(&fr, "GET", "/file", NULL, NULL, 0);                                            /* and only for whoever may */
+        CHECK(rp.status == 404);
+    }
+
     nftw(root, rm_cb, 16, FTW_DEPTH | FTW_PHYS);
     return failures ? 1 : 0;
 }

@@ -2,6 +2,7 @@
 
 #include <QHash>
 #include <QObject>
+#include <QThreadPool>
 #include <functional>
 #include <QTimer>
 #include <memory>
@@ -52,6 +53,11 @@ public:
     bool currentIsGroup() const { return currentKind_ == QLatin1String("group"); }
     int incomingGroupInvites() const { return groupInviteCount_; }
     void setSelf(const QString &id) { self_ = id; } // our own user id, so "you" can be said of what we did
+    // The Puddle runs in this process: a picked file is handed to it open (puddle_server_take_file: cloned into its data
+    // folder, never read again) instead of uploaded through the API. `fn` runs on `pool`; returns 0 with the file's id,
+    // -2 if it is too large, -1. Unset (a phone client, or before the Puddle starts): files are uploaded.
+    using TakeFile = std::function<int(int fd, char id[65])>;
+    void setTakeFile(TakeFile fn, QThreadPool *pool) { takeFile_ = std::move(fn); takePool_ = pool; }
     QObject *profiles() { return &profiles_; }
     QString myName() const { return myName_; }
     QString myAvatar() const { return myAvatar_; }
@@ -89,6 +95,10 @@ public:
     Q_INVOKABLE QVariantMap messageAt(int row) const { return messages_.at(row).toVariantMap(); }
     Q_INVOKABLE void retry();                           // try again to deliver what is stuck in the open chat
     Q_INVOKABLE void send(const QString &text, const QString &replyTo = QString());
+    // A message with files, to the open chat: each of `files` ({key, path, name, mime, w?, h?, duration_ms?, preview?}) is
+    // uploaded a chunk at a time (uploadProgress), then the message goes with them (filesSent), or not (filesFailed).
+    // `text` may be empty.
+    Q_INVOKABLE void sendFiles(const QString &text, const QString &replyTo, const QVariantList &files);
     Q_INVOKABLE void edit(const QString &messageId, const QString &text);
     Q_INVOKABLE void remove(const QString &messageId);
 
@@ -119,6 +129,25 @@ public:
     Q_INVOKABLE void trust(const QString &userId);       // accept their changed certificate
     Q_INVOKABLE void request(const QString &link, const QString &note, const QString &profile = QString());
 
+    // ---- files in messages (docs/files.md) ----
+    // The file `id` (called `name`) as a file on this computer, to show or play: its URL once it is in the app's cache, else ""
+    // and it is fetched from the Puddle now if the Puddle has it whole (fileProgress on the way, then fileReady).
+    Q_INVOKABLE QString fileUrl(const QString &id, const QString &name);
+    Q_INVOKABLE bool fileFetching(const QString &id) const { return downloading_.contains(id); }
+    // Ask the Puddle to fetch a file of a message in the open chat that it did not fetch by itself, or failed to; or to stop.
+    Q_INVOKABLE void fetchFile(const QString &messageId, const QString &fileId);
+    Q_INVOKABLE void cancelFile(const QString &messageId, const QString &fileId);
+    // Ask again for a file whose holders have sent it whole before (docs/files.md, "Asking again").
+    Q_INVOKABLE void requestFile(const QString &messageId, const QString &fileId);
+    // Someone asked for a file of ours again: send it to them once (yes), or not.
+    Q_INVOKABLE void answerFileRequest(const QString &messageId, const QString &fileId, const QString &userId, bool yes);
+    // Keep a copy where the owner says (a file: URL from a save dialog). False if it is not here yet or cannot be written.
+    Q_INVOKABLE bool saveFile(const QString &id, const QString &name, const QUrl &to);
+    // Open it with the system's own app for its kind.
+    Q_INVOKABLE bool openFile(const QString &id, const QString &name);
+    Q_INVOKABLE static QString sizeText(double bytes);   // "3.2 MB"
+    void setFileCacheDir(const QString &dir) { fileCacheDir_ = dir; }
+
     // The picture with this hash as a file: its URL, or "" while it is being fetched (then avatarReady is emitted).
     Q_INVOKABLE QString avatarFor(const QString &hash);
     void setCacheDir(const QString &dir) { cacheDir_ = dir; }
@@ -141,9 +170,15 @@ signals:
     void newRequest(const QString &userId);
     void groupInvitesChanged();
     void newGroupInvite(const QString &groupId);
+    void newFileRequest(const QString &userId, const QString &conversationId); // for notifications: someone asked for a file again
     void groupCreated(const QString &groupId);
     void groupLeft();
     void avatarReady(const QString &hash);
+    void uploadProgress(const QString &key, double fraction);
+    void fileProgress(const QString &id, double fraction);
+    void fileReady(const QString &id);
+    void filesSent();
+    void filesFailed(const QString &why);
     void profilesChanged();
     void currentInfoChanged();
     void hasOlderChanged();
@@ -158,6 +193,7 @@ private:
     void refreshBlocked();
     void refreshGroups();
     void refreshProfiles();
+    void refreshFileRequests();
     void post(const QString &path, const QJsonObject &body, const QString &failure, bool andRefresh = true);
     void setConnected(bool c);
     void markRead();
@@ -177,7 +213,9 @@ private:
     bool groupsLoaded_ = false;
     QString curName_, curAvatar_, curColor_, curState_;
     bool curCert_ = false, hasOlder_ = false, attentive_ = true;
-    QString myName_, myAvatar_, cacheDir_;
+    QString myName_, myAvatar_, cacheDir_, fileCacheDir_;
+    QSet<QString> downloading_;
+    QString cachedPath(const QString &id, const QString &name) const;
     QSet<QString> fetching_;
     QString current_;
     QHash<QString, QString> names_, avatars_, colors_;
@@ -193,6 +231,13 @@ private:
     qint64 olderNext_ = -1;                 // the offset of the next page back; -1 when there is none
     bool loadedOlder_ = false, loadingOlder_ = false;
     void renderMessages();
+    struct FileSend;
+    void uploadFile(std::shared_ptr<FileSend> job, int index);
+    void uploadChunk(std::shared_ptr<FileSend> job, int index, const QString &token, int n, int count);
+    void sendWithFiles(std::shared_ptr<FileSend> job);
+    void takeFile(std::shared_ptr<FileSend> job, int index);
+    TakeFile takeFile_;
+    QThreadPool *takePool_ = nullptr;
     bool bridging_ = false; // more arrived since the last look than one page holds: reading back until what is new joins up with what is held
     void bridgeGap(const QString &user, std::shared_ptr<QSet<QString>> held, qint64 offset, int pages);
     // A message of ours that is still being delivered, further back than the newest page, is read again (its page is) until the state is fresh.
@@ -201,5 +246,7 @@ private:
     int pageSize_ = 100;
     bool connected_ = true; // until a request fails, so the banner does not flash at start-up
     bool marking_ = false, profilesLoaded_ = false;
-    bool busy_[6] = { false, false, false, false, false, false };
+    bool busy_[7] = { false, false, false, false, false, false, false };
+    QSet<QString> fileRequests_;   // "<user> <message> <file>" of each request seen, to notify of new ones
+    bool fileRequestsLoaded_ = false;
 };

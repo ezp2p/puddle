@@ -11,6 +11,7 @@
 
 #include "core/identity.h"
 #include "storage/store.h"
+#include "base/json.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -20,7 +21,7 @@ extern "C" {
 #endif
 
 #define PUDDLE_MESSAGE_MAX_CHARS 4000
-#define PUDDLE_EVENT_MAX_BYTES (16 * 1024)
+#define PUDDLE_EVENT_MAX_BYTES (32 * 1024) /* ten files' previews and a full caption fit */
 #define PUDDLE_DELIVERY_MAX_EVENTS 100
 #define PUDDLE_DELIVERY_MAX_BYTES (256 * 1024)
 #define PUDDLE_SIG_TEXT_MAX 180
@@ -56,6 +57,39 @@ int64_t puddle_event_next_ts(int64_t now_ms);
 size_t puddle_message_build(const char *chat, const char *sender, int64_t ts, const char *body, size_t body_len,
                             const char *ref, char *out, size_t cap);
 
+/* ---- files in a message (docs/files.md) ----
+ * A message may carry up to ten files, each named by its id (storage/files.h) with what a reader needs before it arrives.
+ * In the event: "files": [{"id","name","mime","size","w"?,"h"?,"duration_ms"?,"preview"?}, ...]. Members a reader does
+ * not know are left alone, so later Puddles can add some. */
+#define PUDDLE_MESSAGE_MAX_FILES 10
+#define PUDDLE_FILE_NAME_MAX 255     /* bytes */
+#define PUDDLE_FILE_MIME_MAX 127
+#define PUDDLE_FILE_PREVIEW_MAX 1024 /* bytes of image; base64 in the event */
+
+typedef struct {
+    char id[65];
+    char name[PUDDLE_FILE_NAME_MAX + 1];  /* a file name only: no folders, no control characters, not "." or ".." */
+    char mime[PUDDLE_FILE_MIME_MAX + 1];  /* what the sender says it is: "type/subtype" */
+    int64_t size;                         /* 1 byte to 64 GiB */
+    int w, h;                             /* 0 if not said; else 1 to 100000 */
+    int64_t duration_ms;                  /* 0 if not said */
+    char preview[1400];                   /* base64 of a tiny image, at most PUDDLE_FILE_PREVIEW_MAX bytes; "" if none */
+} puddle_file_ref;
+
+/* Does `f` keep the rules above? 1 or 0. */
+int puddle_file_ref_ok(const puddle_file_ref *f);
+
+/* The files of an event, from the text of its "files" array: a malloc'd array. 0, or -1 if any entry breaks a rule, there
+ * are none, or more than ten. */
+int puddle_file_refs_parse(const char *json, size_t len, puddle_file_ref **out, size_t *n);
+
+/* Write `n` files as that array, as the next value in `w`. */
+void puddle_file_refs_write(puddle_jw *w, const puddle_file_ref *files, size_t n);
+
+/* A message with files (up to ten) and a caption, which may then be empty (body_len 0). Otherwise as puddle_message_build. */
+size_t puddle_message_build_files(const char *chat, const char *sender, int64_t ts, const char *body, size_t body_len, const char *ref,
+                                  const puddle_file_ref *files, size_t nfiles, char *out, size_t cap);
+
 typedef enum {
     PUDDLE_EV_MESSAGE, /* `body`, and `ref` if it is a reply */
     PUDDLE_EV_EDIT,    /* `body` is the new text of the message `ref` */
@@ -67,8 +101,9 @@ typedef struct {
     char chat[PUDDLE_USER_ID_LEN + 1];
     char sender[PUDDLE_USER_ID_LEN + 1];
     int64_t ts;
-    char *body;      /* malloc'd, NUL-terminated; NULL for a redaction */
+    char *body;      /* malloc'd, NUL-terminated; NULL for a redaction; "" for a message of files alone */
     char ref[65];    /* "" if none */
+    char *files;     /* a message's files: the text of its "files" array (checked), malloc'd; NULL if none */
 } puddle_message;
 
 /* Read a chat event of any kind we know (message, edit, redact), as strictly as a message: an edit must name its target and
@@ -91,6 +126,7 @@ typedef struct {
     int64_t ts, rts;
     char *body;          /* the current text; NULL if deleted */
     char ref[65];        /* the message this replies to, "" if none */
+    char *files;         /* its files, as the text of the event's "files" array; NULL if none or deleted */
     int edited;
     int64_t edited_ts;
     int deleted;

@@ -17,7 +17,12 @@ Identity, signing and encryption are in [identity.md](identity.md).
       chats/<chat-id>/<YYYY-MM-DD>.jsonl   one file per chat per UTC day (= one federation chunk)
       identity/                            keys, contacts (see identity.md)
       profiles/<id>.yaml                   the owner's profiles, one file each (docs/profiles.md)
-      media/<sha256>                       images (profile pictures, banners, attachments), named by content hash
+      media/<sha256>                       profile pictures, banners and backgrounds, named by content hash
+      files/<id>, files/<id>.chunks        files sent in chats, and their chunk hashes (docs/files.md, storage/files.h)
+      files/partial/<id>...                a file being fetched: where each chunk goes, and which have arrived
+      files/uploads/<token>...             a file the owner is uploading, before it has an id
+      files/refs/<id>                      which messages carry a file; it goes with the last of them
+      state/transfers/<id>.json            a file being fetched from other Puddles: from whom, and how it is going
       state/profile-places.tsv             which profile each place sees: "dm:<user>" or "group:<group>" (docs/profiles.md)
       state/profile-sums.tsv               each profile as Puddle last wrote it (a SHA-256), to notice one edited by hand
       state/streams/<user id>.json         one file per peer: state, verified key chain, addresses, note (docs/streams.md)

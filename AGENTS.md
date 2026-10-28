@@ -12,7 +12,8 @@ Two programs, built from one CMake project:
 
 ### Requirements
 
-CMake 3.21+, a C11/C++20 compiler, OpenSSL 3.0+, libyaml, and (for the GUI) Qt 6 with Quick, Quick Controls 2 and Svg (the icons are SVG files).
+CMake 3.21+, a C11/C++20 compiler, OpenSSL 3.0+, libyaml, and (for the GUI) Qt 6 with Quick, Quick Controls 2, Svg (the icons are SVG files)
+and Multimedia (videos in chats; on Linux it also needs a media backend, Qt's FFmpeg or GStreamer one, from your distribution).
 
 macOS (Homebrew):
 
@@ -20,11 +21,11 @@ macOS (Homebrew):
 
 Debian/Ubuntu:
 
-    sudo apt install build-essential cmake libssl-dev libyaml-dev qt6-base-dev qt6-declarative-dev qt6-svg-dev qml6-module-qtquick-controls qml6-module-qtquick-layouts qml6-module-qtquick-templates qml6-module-qtquick-window qml6-module-qt-labs-platform
+    sudo apt install build-essential cmake libssl-dev libyaml-dev qt6-base-dev qt6-declarative-dev qt6-svg-dev qml6-module-qtquick-controls qml6-module-qtquick-layouts qml6-module-qtquick-templates qml6-module-qtquick-window qml6-module-qt-labs-platform qt6-multimedia-dev qml6-module-qtmultimedia qml6-module-qtquick-dialogs qml6-module-qtquick-effects
 
 Fedora:
 
-    sudo dnf install gcc gcc-c++ cmake openssl-devel libyaml-devel qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qtsvg-devel
+    sudo dnf install gcc gcc-c++ cmake openssl-devel libyaml-devel qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qtsvg-devel qt6-qtmultimedia-devel
 
 ### Build and test
 

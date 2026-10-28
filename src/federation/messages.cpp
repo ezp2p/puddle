@@ -1,4 +1,5 @@
 #include "federation/messages.h"
+#include "federation/files.h"
 
 #include "base/encoding.h"
 #include "federation/flow.h"
@@ -117,6 +118,8 @@ const char *puddle_store_delivered(puddle_ctx *ctx, const char *chat, const char
         return "storage_error";
     }
     *dup = ar == PUDDLE_APPEND_DUPLICATE;
+    if (!*dup)
+        puddle_files_arrived(ctx, chat, sender, text, tl, id_out); /* its files, if it has any, start coming */
     return NULL;
 }
 

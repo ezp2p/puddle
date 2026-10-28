@@ -1,6 +1,7 @@
 #include "core/config.h"
 
 #include "core/yamltree.h"
+#include "storage/files.h"
 #include "platform/fsutil.h"
 #include "platform/paths.h"
 
@@ -31,7 +32,13 @@ static const char DEFAULT_CONFIG[] =
     "\n"
     "# Where chats, keys, profiles and pictures are stored. Uncomment to change the platform default.\n"
     "# Your profiles are files in its profiles folder, one each (docs/profiles.md).\n"
-    "# data_dir: /path/to/puddle-data\n";
+    "# data_dir: /path/to/puddle-data\n"
+    "\n"
+    "# Files sent in chats (docs/files.md): the largest this Puddle sends or fetches, and the largest it fetches by\n"
+    "# itself (bigger ones wait until you ask; \"never\" waits for every one).\n"
+    "# files:\n"
+    "#   max_size: 100 MiB\n"
+    "#   auto_download: 100 MiB\n";
 
 static void seterr(char *err, size_t n, const char *fmt, ...)
 {
@@ -213,6 +220,37 @@ int puddle_config_load(puddle_config *cfg, const char *path, char *err, size_t e
                 }
                 cfg->nprofile_files++;
             }
+        } else if (strcmp(key, "files") == 0) {
+            if (ynode_is_null(v))
+                continue;
+            if (ynode_kind(v) != Y_MAP) {
+                bad(err, errlen, path, v, "files takes max_size and auto_download, e.g. \"max_size: 100 MiB\"");
+                goto fail;
+            }
+            for (size_t j = 0; j < ynode_count(v); j++) {
+                const char *fk = ynode_key(v, j);
+                const ynode *fv = ynode_item(v, j);
+                const char *fs = ynode_scalar(fv);
+                int64_t bytes;
+                if (strcmp(fk, "auto_download") == 0 && fs && strcmp(fs, "never") == 0) {
+                    cfg->files_auto_download = -1;
+                } else if ((strcmp(fk, "max_size") == 0 || strcmp(fk, "auto_download") == 0) && fs &&
+                           puddle_parse_size(fs, &bytes) == 0 && bytes <= PUDDLE_FILE_HARD_MAX && (bytes > 0 || fk[0] == 'a')) {
+                    if (fk[0] == 'm')
+                        cfg->files_max_size = bytes;
+                    else
+                        cfg->files_auto_download = bytes > 0 ? bytes : -1;
+                } else if (strcmp(fk, "max_size") == 0 || strcmp(fk, "auto_download") == 0) {
+                    snprintf(what, sizeof what, "files.%s must be a size such as \"100 MiB\" or \"1 GiB\" (at most 64 GiB)%s", fk,
+                             fk[0] == 'a' ? ", or never" : "");
+                    bad(err, errlen, path, fv, what);
+                    goto fail;
+                } else {
+                    snprintf(what, sizeof what, "unknown setting 'files.%.50s'", fk);
+                    bad(err, errlen, path, fv, what);
+                    goto fail;
+                }
+            }
         } else {
             snprintf(what, sizeof what, "unknown setting '%.60s'", key);
             bad(err, errlen, path, v, what);
@@ -223,5 +261,32 @@ int puddle_config_load(puddle_config *cfg, const char *path, char *err, size_t e
     return 0;
 fail:
     puddle_yaml_free(root);
+    return -1;
+}
+
+int puddle_parse_size(const char *s, int64_t *out)
+{
+    if (!s)
+        return -1;
+    const char *p = s;
+    if (*p < '0' || *p > '9')
+        return -1;
+    long long n = 0;
+    for (; *p >= '0' && *p <= '9'; p++) {
+        n = n * 10 + (*p - '0');
+        if (n > (1LL << 50))
+            return -1;
+    }
+    while (*p == ' ')
+        p++;
+    static const struct { const char *unit; long long mult; } units[] = {
+        { "", 1 }, { "B", 1 }, { "KiB", 1LL << 10 }, { "MiB", 1LL << 20 }, { "GiB", 1LL << 30 },
+        { "KB", 1000 }, { "MB", 1000000 }, { "GB", 1000000000 },
+    };
+    for (const auto &u : units)
+        if (strcmp(p, u.unit) == 0) {
+            *out = (int64_t)(n * u.mult);
+            return 0;
+        }
     return -1;
 }

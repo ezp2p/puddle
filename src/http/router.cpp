@@ -6,6 +6,7 @@
 #include "core/error.hpp"
 #include "storage/media.h"
 #include "core/link.h"
+#include "platform/fsutil.h"
 
 #include <new>
 
@@ -37,6 +38,14 @@ static int param_ok(const char *type, size_t tl, const char *v, size_t vl)
     }
     if (tl == 7 && !memcmp(type, "profile", 7))
         return puddle_profile_id_valid(tmp);
+    if (tl == 5 && !memcmp(type, "index", 5)) { /* a count from 0: digits, no leading zero, below a million */
+        if (vl > 6 || (vl > 1 && tmp[0] == '0'))
+            return 0;
+        for (size_t i = 0; i < vl; i++)
+            if (tmp[i] < '0' || tmp[i] > '9')
+                return 0;
+        return 1;
+    }
     if (tl == 5 && !memcmp(type, "token", 5)) {
         if (vl > 64)
             return 0;
@@ -180,8 +189,18 @@ size_t puddle_router_handle(const puddle_router *r, const puddle_request *req, i
                             const unsigned char *body, size_t body_len, char *out, size_t cap, int *status)
 {
     /* the plain form: a file answer has to fit in `out` with its headers, as it can for a small image in a test */
-    puddle_big big = { NULL, 0 };
+    puddle_big big;
     size_t n = puddle_router_handle_big(r, req, owner_ok, body, body_len, out, cap, status, &big);
+    if (big.has_file) { /* read into `out` too, if it fits */
+        int64_t got = n && n + (size_t)big.file_len <= cap ? puddle_fd_read(big.fd, out + n, (size_t)big.file_len) : -1;
+        puddle_fd_close(big.fd);
+        if (got == big.file_len) {
+            n += (size_t)got;
+        } else {
+            *status = 500;
+            n = puddle_http_error(500, out, cap);
+        }
+    }
     if (big.data) {
         if (n && n + big.len <= cap) {
             memcpy(out + n, big.data, big.len);
@@ -198,8 +217,7 @@ size_t puddle_router_handle(const puddle_router *r, const puddle_request *req, i
 size_t puddle_router_handle_big(const puddle_router *r, const puddle_request *req, int owner_ok,
                                 const unsigned char *body, size_t body_len, char *out, size_t cap, int *status, puddle_big *big)
 {
-    big->data = NULL;
-    big->len = 0;
+    memset(big, 0, sizeof *big);
     char json[BODY_BUF];
     puddle_jw w;
     puddle_ctx *ctx = r->ctx;
@@ -297,6 +315,43 @@ run:
         puddle_jw_init(&w, json, sizeof json);
         st = puddle_fail(&w, 500, "internal");
     }
+    if (blob.has_file && (st < 200 || st > 299)) { /* opened, then refused (or thrown): not sent */
+        puddle_fd_close(blob.fd);
+        blob.has_file = 0;
+    }
+    if (blob.has_file) { /* a file on disk: headers here, the bytes read and sent after them */
+        int64_t off, len;
+        int part = st == 200 ? puddle_http_range(req->range, blob.file_size, &off, &len) : 0;
+        char hdr[400];
+        if (part < 0) {
+            puddle_fd_close(blob.fd);
+            snprintf(hdr, sizeof hdr, "Content-Range: bytes */%lld\r\n", (long long)blob.file_size);
+            *status = 416;
+            static const char gone[] = "{\"error\":\"range_not_satisfiable\"}";
+            return puddle_http_response(416, hdr, gone, sizeof gone - 1, out, cap);
+        }
+        if (puddle_fd_seek(blob.fd, off) != off) {
+            puddle_fd_close(blob.fd);
+            *status = 500;
+            return puddle_http_error(500, out, cap);
+        }
+        int n = snprintf(hdr, sizeof hdr, "Accept-Ranges: bytes\r\nX-Content-Type-Options: nosniff\r\nCache-Control: %s\r\n",
+                         blob.immutable ? "private, max-age=31536000, immutable" : "no-store");
+        if (part)
+            snprintf(hdr + n, sizeof hdr - (size_t)n, "Content-Range: bytes %lld-%lld/%lld\r\n", (long long)off, (long long)(off + len - 1),
+                     (long long)blob.file_size);
+        *status = part ? 206 : st;
+        size_t hl = puddle_http_head(*status, blob.mime[0] ? blob.mime : "application/octet-stream", hdr, (size_t)len, out, cap);
+        if (!hl) {
+            puddle_fd_close(blob.fd);
+            *status = 500;
+            return puddle_http_error(500, out, cap);
+        }
+        big->has_file = 1;
+        big->fd = blob.fd;
+        big->file_len = len;
+        return hl;
+    }
     if (blob.data) { /* a file: headers here, the bytes sent after them */
         *status = st;
         size_t hl = puddle_http_head(st, blob.mime[0] ? blob.mime : "application/octet-stream",
@@ -348,5 +403,23 @@ int puddle_answer_media(const puddle_call *c, const char *hash)
     c->blob->data = data;
     c->blob->len = len;
     snprintf(c->blob->mime, sizeof c->blob->mime, "%s", mime);
+    return 1;
+}
+
+int puddle_answer_file(const puddle_call *c, const char *path, const char *mime, int immutable)
+{
+    int fd = puddle_fd_open(path, PUDDLE_F_READ);
+    if (fd < 0)
+        return 0;
+    int64_t size = puddle_fd_size(fd);
+    if (size < 0) {
+        puddle_fd_close(fd);
+        return 0;
+    }
+    c->blob->has_file = 1;
+    c->blob->fd = fd;
+    c->blob->file_size = size;
+    c->blob->immutable = immutable;
+    snprintf(c->blob->mime, sizeof c->blob->mime, "%s", mime && *mime ? mime : "application/octet-stream");
     return 1;
 }

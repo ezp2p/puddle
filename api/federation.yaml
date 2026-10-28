@@ -44,6 +44,8 @@ tags:
     description: Messages and profile changes over an existing stream
   - name: groups
     description: Group invites
+  - name: files
+    description: Files sent in messages, fetched a checked chunk at a time (docs/files.md)
 
 paths:
   /stream/v1/identity:
@@ -224,7 +226,8 @@ paths:
         a `rejected` entry says why: `malformed`, `too_large`, `bad_id` (the id is not the SHA-256 of the bytes),
         `bad_signature`, `unknown_key` (signed by a key that is not the sender's current one),
         `unsupported_type`, `wrong_chat`, `wrong_sender` (the event names someone other than the sender),
-        `bad_time` (not between the years 2000 and 2100), `bad_body`, `storage_error`.
+        `bad_time` (not between the years 2000 and 2100), `bad_body`, `bad_files` (a `files` entry that breaks the
+        rules of MessageEvent), `storage_error`. An event is at most 32 KiB.
       requestBody:
         required: true
         content:
@@ -273,6 +276,82 @@ paths:
         "204": { description: Recorded (or set aside) }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /stream/v1/files/{file}/chunks:
+    get:
+      tags: [files]
+      operationId: getFileChunks
+      summary: A file's chunk hashes
+      description: |
+        The SHA-256 of each of the file's chunks, 32 bytes each, in order, as bytes (application/octet-stream). The
+        asker checks they hash to the file's id, and that there are as many as its size needs (1 MiB each), before
+        fetching any chunk. Served only to a peer in `chat` (the DM between us over an open stream, or a group we are
+        both in), only when `message` there carries the file, and only if we have it (whole, or partly, from fetching it
+        ourselves); anything else is `404`, like everything refused.
+      parameters:
+        - { name: file, in: path, required: true, schema: { type: string, pattern: "^[0-9a-f]{64}$" } }
+        - { name: chat, in: query, required: true, schema: { $ref: "#/components/schemas/ChatId" } }
+        - { name: message, in: query, required: true, schema: { $ref: "#/components/schemas/EventId" } }
+      responses:
+        "200": { description: The chunk hashes, content: { application/octet-stream: {} } }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /stream/v1/files/{file}/chunks/{n}:
+    get:
+      tags: [files]
+      operationId: getFileChunk
+      summary: One chunk of a file
+      description: |
+        Chunk `n` (from 0): 1 MiB, the last one what is left. Asked for under the same rules as the chunk list, and
+        answered only if we have that chunk. The asker checks it against its hash and throws it away if it does not
+        match. Ask the sender first; in a group, anyone else who has it will do. Once we have sent a peer the file
+        whole (for any message), we send it to them again only with our owner's yes (`/request`), or within an hour,
+        so a download that stopped can finish.
+      parameters:
+        - { name: file, in: path, required: true, schema: { type: string, pattern: "^[0-9a-f]{64}$" } }
+        - { name: n, in: path, required: true, schema: { type: integer, minimum: 0 } }
+        - { name: chat, in: query, required: true, schema: { $ref: "#/components/schemas/ChatId" } }
+        - { name: message, in: query, required: true, schema: { $ref: "#/components/schemas/EventId" } }
+      responses:
+        "200": { description: The chunk, content: { application/octet-stream: {} } }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /stream/v1/files/{file}/refused:
+    post:
+      tags: [files]
+      operationId: postFileRefused
+      summary: "They will not fetch a file we sent: it is over the most they take"
+      description: Sent by the receiver when a message arrives carrying a file over its files.max_size. Only about a message we sent.
+      parameters: [{ name: file, in: path, required: true, schema: { type: string, pattern: "^[0-9a-f]{64}$" } }]
+      requestBody: { $ref: "#/components/requestBodies/FileAboutMessageMax" }
+      responses: { "200": { description: Noted }, "404": { $ref: "#/components/responses/NotFound" } }
+  /stream/v1/files/{file}/request:
+    post:
+      tags: [files]
+      operationId: postFileRequest
+      summary: They want a file again
+      description: |
+        If we would send it anyway (never sent them it whole, within the hour's grace, or a yes is waiting), we answer
+        with `/granted` at once. Otherwise it waits for our owner. The answer is `200` either way, and a no is never
+        sent, so nothing is learnt from it.
+      parameters: [{ name: file, in: path, required: true, schema: { type: string, pattern: "^[0-9a-f]{64}$" } }]
+      requestBody: { $ref: "#/components/requestBodies/FileAboutMessage" }
+      responses: { "200": { description: Received }, "404": { $ref: "#/components/responses/NotFound" } }
+  /stream/v1/files/{file}/granted:
+    post:
+      tags: [files]
+      operationId: postFileGranted
+      summary: Someone we asked will send it; fetch it now, from them first
+      parameters: [{ name: file, in: path, required: true, schema: { type: string, pattern: "^[0-9a-f]{64}$" } }]
+      requestBody: { $ref: "#/components/requestBodies/FileAboutMessage" }
+      responses: { "200": { description: Received }, "404": { $ref: "#/components/responses/NotFound" } }
+  /stream/v1/files/{file}/done:
+    post:
+      tags: [files]
+      operationId: postFileDone
+      summary: "They have it again: forget their request (in a group, whoever did not answer stops being asked)"
+      parameters: [{ name: file, in: path, required: true, schema: { type: string, pattern: "^[0-9a-f]{64}$" } }]
+      requestBody: { $ref: "#/components/requestBodies/FileAboutMessage" }
+      responses: { "200": { description: Received }, "404": { $ref: "#/components/responses/NotFound" } }
 
   /stream/v1/media:
     get:
@@ -500,7 +579,7 @@ components:
         id: { $ref: "#/components/schemas/EventId" }
         event:
           type: string
-          description: The event's exact JSON text. `id` is the SHA-256 of these bytes.
+          description: The event's exact JSON text (a MessageEvent, an edit, a redaction, or a group event), at most 32 KiB. `id` is the SHA-256 of these bytes.
         sig:
           type: string
           description: |
@@ -508,6 +587,40 @@ components:
             signature is Ed25519 over `puddle-event-v1\n` followed by the event's bytes. The key id is outside
             the signed bytes, so a Puddle that has changed keys can sign the same event again without
             changing its id.
+
+    MessageEvent:
+      type: object
+      description: |
+        A message, as signed. `body`, `files`, or both. Members a reader does not know are left alone, in `files`
+        entries too, so later Puddles can add some. An edit (`"type":"edit"`, `body`, `ref`) changes the words only and
+        never carries `files`; a redaction (`"type":"redact"`, `ref`) takes the message, and its files, back.
+      required: [type, chat, sender, ts]
+      properties:
+        type: { const: message }
+        chat: { $ref: "#/components/schemas/ChatId" }
+        sender: { $ref: "#/components/schemas/UserId" }
+        ts: { type: integer, description: "The sender's clock, ms since 1970 (years 2000 to 2100)" }
+        body: { type: string, minLength: 1, maxLength: 4000, description: "Valid UTF-8; no control characters but newline and tab" }
+        ref: { $ref: "#/components/schemas/EventId", description: The message this replies to }
+        files:
+          type: array
+          minItems: 1
+          maxItems: 10
+          description: |
+            Files the message carries (docs/files.md). Each is fetched by its id, a chunk at a time, from the sender
+            or from anyone else in the chat who has it (/stream/v1/files).
+          items:
+            type: object
+            required: [id, name, mime, size]
+            properties:
+              id: { type: string, pattern: "^[0-9a-f]{64}$", description: "SHA-256 of the file's chunk hashes (32 bytes each, in order); a chunk is 1 MiB, the last shorter" }
+              name: { type: string, maxLength: 255, description: "A file name, never a path: no / or \\, no control characters, not . or .." }
+              mime: { type: string, maxLength: 127, pattern: "^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$" }
+              size: { type: integer, minimum: 1, maximum: 68719476736 }
+              w: { type: integer, minimum: 1, maximum: 100000, description: "With h; a picture's or video's size, for laying it out early" }
+              h: { type: integer, minimum: 1, maximum: 100000 }
+              duration_ms: { type: integer, minimum: 1, maximum: 604800000 }
+              preview: { type: string, contentEncoding: base64, description: "A tiny image, at most 1 KiB" }
 
     Delivery:
       type: object
@@ -580,6 +693,29 @@ components:
             Only given to an authenticated peer: `clock_skew` (the reply says its time), `replayed`,
             `no_stream`. A request that fails authentication gets a plain `404` with no code.
 
+  requestBodies:
+    FileAboutMessage:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [chat, message]
+            description: The message carrying the file, and its chat; the sender must be in that chat
+            properties:
+              chat: { $ref: "#/components/schemas/ChatId" }
+              message: { $ref: "#/components/schemas/EventId" }
+    FileAboutMessageMax:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [chat, message, max]
+            properties:
+              chat: { $ref: "#/components/schemas/ChatId" }
+              message: { $ref: "#/components/schemas/EventId" }
+              max: { type: integer, minimum: 1, description: The most the receiver takes (its files.max_size), in bytes }
   responses:
     BadRequest:
       description: Malformed or invalid input
