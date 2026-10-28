@@ -1137,6 +1137,86 @@ int main(void)
         CHECK(post(&ivy, url, "{}") == 404);                                                        /* no such message */
         CHECK(get(&ivy, "/api/v1/files/usage") == 200 && json_has("\"files\":2") && json_has("\"bytes\":5242880"));
 
+        /* ---- asked again: once Hal has delivered it whole, sending it again takes his yes ---- */
+        {
+            char path[1200], reqs[400];
+            node_down(&ivy);                                                                         /* Ivy loses it */
+            snprintf(path, sizeof path, "%s/files/%s", ivy.cfg.data_dir, fid2);
+            remove(path);
+            strcat(path, ".chunks");
+            remove(path);
+            CHECK(node_up(&ivy) == 0);
+            snprintf(path, sizeof path, "%s/files/notes/%s", hal.cfg.data_dir, fid2);              /* and Hal sent it long ago */
+            FILE *nf = fopen(path, "w");
+            if (nf) { fprintf(nf, "served %s 1\n", ivy.uid); fclose(nf); }
+            snprintf(url, sizeof url, "/api/v1/conversations/%s/messages/%s/files/%s/download", hal.uid, mid2, fid2);
+            CHECK(post(&ivy, url, "{}") == 200);
+            snprintf(url, sizeof url, "/api/v1/conversations/%s/messages", hal.uid);
+            int refused = 0;
+            for (int i = 0; i < 200 && !refused; i++) {
+                refused = get(&ivy, url) == 200 && strstr(resp, "they do not have it");          /* Hal will not send it unasked */
+                if (!refused) usleep(50000);
+            }
+            CHECK(refused);
+            snprintf(url, sizeof url, "/api/v1/conversations/%s/messages/%s/files/%s/request", hal.uid, mid2, fid2);
+            CHECK(post(&ivy, url, "{}") == 200 && json_has("\"asked\":true"));
+            snprintf(reqs, sizeof reqs, "\"user\":\"%s\"", ivy.uid);
+            int asked = 0;
+            for (int i = 0; i < 200 && !asked; i++) {
+                asked = get(&hal, "/api/v1/files/requests") == 200 && json_has(reqs) && json_has(mid2);
+                if (!asked) usleep(50000);
+            }
+            CHECK(asked);
+            snprintf(url, sizeof url, "/api/v1/conversations/%s/messages", ivy.uid);
+            snprintf(reqs, sizeof reqs, "\"requests\":[\"%s\"]", ivy.uid);
+            CHECK(get(&hal, url) == 200 && json_has(reqs));                                           /* shown on the message */
+            snprintf(url, sizeof url, "/api/v1/conversations/%s/messages/%s/files/%s/requests/%s/accept", ivy.uid, mid2, fid2, ivy.uid);
+            CHECK(post(&hal, url, "{}") == 200);
+            CHECK(post(&hal, url, "{}") == 404);                                                     /* answered already */
+            snprintf(url, sizeof url, "/api/v1/files/%s", fid2);
+            fetched = 0;
+            for (int i = 0; i < 300 && !fetched; i++) {
+                fetched = get(&ivy, url) == 200 && json_has("\"state\":\"available\"");
+                if (!fetched) usleep(50000);
+            }
+            CHECK(fetched);
+            CHECK(get(&hal, "/api/v1/files/requests") == 200 && !json_has(ivy.uid));
+            snprintf(url, sizeof url, "/api/v1/conversations/%s/messages/%s/files/%s/request", hal.uid, mid2, fid2);
+            CHECK(post(&ivy, url, "{}") == 409 && json_has("already_here"));
+        }
+
+        /* ---- too large for Ivy: she does not fetch it, and Hal is told ---- */
+        {
+            node_down(&ivy);
+            ivy.cfg.files_max_size = 1 << 20;
+            char path[1200];
+            snprintf(path, sizeof path, "%s/files/%s", ivy.cfg.data_dir, fid2);                     /* not here, so it would be fetched */
+            remove(path);
+            strcat(path, ".chunks");
+            remove(path);
+            CHECK(node_up(&ivy) == 0);
+            snprintf(msg, sizeof msg, "{\"body\":\"too big\",\"files\":[{\"id\":\"%s\",\"name\":\"big.bin\",\"mime\":\"application/octet-stream\"}]}", fid2);
+            snprintf(url, sizeof url, "/api/v1/conversations/%s/messages/send", ivy.uid);
+            CHECK(post(&hal, url, msg) == 201);
+            char mid4[80], want[200];
+            json_str(resp, "id", mid4, sizeof mid4);
+            snprintf(url, sizeof url, "/api/v1/conversations/%s/messages", ivy.uid);
+            snprintf(want, sizeof want, "\"refused\":[{\"user\":\"%s\",\"max\":1048576}]", ivy.uid);
+            int told = 0;
+            for (int i = 0; i < 200 && !told; i++) {
+                told = get(&hal, url) == 200 && json_has(want);
+                if (!told) usleep(50000);
+            }
+            CHECK(told);
+            snprintf(url, sizeof url, "/api/v1/conversations/%s/messages", hal.uid);
+            CHECK(get(&ivy, url) == 200 && json_has("\"state\":\"too_large\",\"received\":0,\"max\":1048576"));
+            snprintf(url, sizeof url, "/api/v1/conversations/%s/messages/%s/delete", ivy.uid, mid4);
+            CHECK(post(&hal, url, "{}") == 200);
+            node_down(&ivy);
+            ivy.cfg.files_max_size = 0;
+            CHECK(node_up(&ivy) == 0);
+        }
+
         /* ---- a file goes with the last message that carries it, on both sides ---- */
         snprintf(msg, sizeof msg, "{\"body\":\"again\",\"files\":[{\"id\":\"%s\",\"name\":\"tide again.bin\",\"mime\":\"application/octet-stream\"}]}", fid);
         snprintf(url, sizeof url, "/api/v1/conversations/%s/messages/send", ivy.uid);

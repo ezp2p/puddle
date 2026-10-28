@@ -21,4 +21,6 @@ const puddle_courier puddle_federation_courier = {
     puddle_group_rename,
     puddle_group_send_event,
     puddle_file_fetch,
+    puddle_file_request,
+    puddle_file_answer,
 };

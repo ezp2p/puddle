@@ -16,7 +16,7 @@
 #include <vector>
 
 struct puddle_files {
-    std::string dir, partial, uploads, refs; /* <data_dir>/files, and its folders */
+    std::string dir, partial, uploads, refs, notes; /* <data_dir>/files, and its folders */
     std::mutex mu;
     std::unordered_map<std::string, int64_t> touched; /* upload token -> when a chunk last came (0: not since we started) */
 };
@@ -135,7 +135,9 @@ puddle_files *puddle_files_open(const char *data_dir, char *err, size_t errlen)
     f->partial = f->dir + "/partial";
     f->uploads = f->dir + "/uploads";
     f->refs = f->dir + "/refs";
-    if (puddle_mkdir_p(f->partial.c_str()) != 0 || puddle_mkdir_p(f->uploads.c_str()) != 0 || puddle_mkdir_p(f->refs.c_str()) != 0) {
+    f->notes = f->dir + "/notes";
+    if (puddle_mkdir_p(f->partial.c_str()) != 0 || puddle_mkdir_p(f->uploads.c_str()) != 0 || puddle_mkdir_p(f->refs.c_str()) != 0 ||
+        puddle_mkdir_p(f->notes.c_str()) != 0) {
         snprintf(err, errlen, "cannot make %s: %s", f->dir.c_str(), strerror(errno));
         delete f;
         return NULL;
@@ -247,7 +249,7 @@ int puddle_files_remove(puddle_files *f, const char *id)
     std::lock_guard<std::mutex> hold(f->mu);
     std::string w = f->dir + "/" + id, p = f->partial + "/" + id;
     int rc = 0;
-    for (const std::string &x : { w, w + ".chunks", p, p + ".chunks", p + ".have", p + ".size" })
+    for (const std::string &x : { w, w + ".chunks", p, p + ".chunks", p + ".have", p + ".size", f->notes + "/" + id })
         if (puddle_remove_file(x.c_str()) != 0)
             rc = -1;
     return rc;
@@ -525,6 +527,82 @@ int puddle_files_upload_expire(puddle_files *f, int64_t now_ms, int64_t max_age_
     for (const auto &t : old)
         drop_upload_locked(f, t);
     return (int)old.size();
+}
+
+/* ---------------------------------------------------------------- notes */
+
+static std::vector<std::string> read_notes(puddle_files *f, const char *id)
+{
+    std::vector<std::string> out;
+    std::string text = slurp(f->notes + "/" + id, 1 << 20), line;
+    for (char ch : text) {
+        if (ch == '\n') {
+            if (!line.empty())
+                out.push_back(line);
+            line.clear();
+        } else {
+            line += ch;
+        }
+    }
+    if (!line.empty())
+        out.push_back(line);
+    return out;
+}
+
+static int write_notes(puddle_files *f, const char *id, const std::vector<std::string> &lines)
+{
+    std::string p = f->notes + "/" + id;
+    if (lines.empty())
+        return puddle_remove_file(p.c_str());
+    std::string text;
+    for (const auto &l : lines)
+        text += l + "\n";
+    return put_small(f->notes, p, text.data(), text.size());
+}
+
+int puddle_files_note_add(puddle_files *f, const char *id, const char *line)
+{
+    if (!puddle_file_id_valid(id) || !line || !*line || strlen(line) > 400 || strchr(line, '\n'))
+        return -1;
+    std::lock_guard<std::mutex> hold(f->mu);
+    std::vector<std::string> lines = read_notes(f, id);
+    for (const auto &l : lines)
+        if (l == line)
+            return 0;
+    if (lines.size() >= 2000) /* a note per peer and message; this many is someone flooding us */
+        return -1;
+    lines.push_back(line);
+    return write_notes(f, id, lines);
+}
+
+void puddle_files_note_each(puddle_files *f, const char *id, const char *prefix, int (*fn)(void *user, const char *line), void *user)
+{
+    if (!puddle_file_id_valid(id))
+        return;
+    std::vector<std::string> lines;
+    {
+        std::lock_guard<std::mutex> hold(f->mu);
+        lines = read_notes(f, id);
+    }
+    size_t n = strlen(prefix);
+    for (const auto &l : lines)
+        if (!l.compare(0, n, prefix) && fn(user, l.c_str()))
+            return;
+}
+
+int puddle_files_note_remove(puddle_files *f, const char *id, const char *prefix)
+{
+    if (!puddle_file_id_valid(id))
+        return -1;
+    std::lock_guard<std::mutex> hold(f->mu);
+    std::vector<std::string> lines = read_notes(f, id), kept;
+    size_t n = strlen(prefix);
+    for (const auto &l : lines)
+        if (l.compare(0, n, prefix))
+            kept.push_back(l);
+    if (kept.size() == lines.size())
+        return 0;
+    return write_notes(f, id, kept) == 0 ? (int)(lines.size() - kept.size()) : -1;
 }
 
 /* ---------------------------------------------------------------- which messages carry it */

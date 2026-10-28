@@ -97,9 +97,6 @@ Pane {
             saver.file = f
             saver.selectedFile = StandardPaths.writableUrl(StandardPaths.DownloadLocation) + "/" + encodeURIComponent(f.name)
             saver.open()
-        } else if (chats.isRisky(f.name, f.mime)) {
-            riskyConfirm.ask(qsTr("Open %1?").arg(f.name), qsTr("This is a program or a script. Opening it could run it on your computer. Open it only if you trust who sent it."),
-                             qsTr("Open"), () => page.chats.openFile(f.id, f.name))
         } else if (!chats.openFile(f.id, f.name)) {
             chats.failed(qsTr("%1 could not be opened.").arg(f.name))
         }
@@ -123,7 +120,6 @@ Pane {
         fileMode: FileDialog.SaveFile
         onAccepted: if (file) page.chats.saveFile(file.id, file.name, selectedFile)
     }
-    ConfirmDialog { id: riskyConfirm }
     MediaViewer {
         id: mediaViewer
         chats: page.chats

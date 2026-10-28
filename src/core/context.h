@@ -56,6 +56,8 @@ typedef struct {
     int (*group_rename)(puddle_ctx *ctx, const char *gid, const char *name, const char **code);
     int (*group_send_event)(puddle_ctx *ctx, const char *gid, const char *event, size_t len, char id[65], int *sent, const char **code);
     int (*file_fetch)(puddle_ctx *ctx, const char *chat, const char *message, const char *file, const char **code);
+    int (*file_request)(puddle_ctx *ctx, const char *chat, const char *message, const char *file, const char **code);
+    int (*file_answer)(puddle_ctx *ctx, const char *chat, const char *message, const char *file, const char *peer, int yes, const char **code);
 } puddle_courier;
 
 /* What handlers can reach. */

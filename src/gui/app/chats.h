@@ -137,12 +137,14 @@ public:
     // Ask the Puddle to fetch a file of a message in the open chat that it did not fetch by itself, or failed to; or to stop.
     Q_INVOKABLE void fetchFile(const QString &messageId, const QString &fileId);
     Q_INVOKABLE void cancelFile(const QString &messageId, const QString &fileId);
+    // Ask again for a file whose holders have sent it whole before (docs/files.md, "Asking again").
+    Q_INVOKABLE void requestFile(const QString &messageId, const QString &fileId);
+    // Someone asked for a file of ours again: send it to them once (yes), or not.
+    Q_INVOKABLE void answerFileRequest(const QString &messageId, const QString &fileId, const QString &userId, bool yes);
     // Keep a copy where the owner says (a file: URL from a save dialog). False if it is not here yet or cannot be written.
     Q_INVOKABLE bool saveFile(const QString &id, const QString &name, const QUrl &to);
     // Open it with the system's own app for its kind.
     Q_INVOKABLE bool openFile(const QString &id, const QString &name);
-    // A program or a script: opening it could run something, so the window asks first.
-    Q_INVOKABLE static bool isRisky(const QString &name, const QString &mime);
     Q_INVOKABLE static QString sizeText(double bytes);   // "3.2 MB"
     void setFileCacheDir(const QString &dir) { fileCacheDir_ = dir; }
 
@@ -168,6 +170,7 @@ signals:
     void newRequest(const QString &userId);
     void groupInvitesChanged();
     void newGroupInvite(const QString &groupId);
+    void newFileRequest(const QString &userId, const QString &conversationId); // for notifications: someone asked for a file again
     void groupCreated(const QString &groupId);
     void groupLeft();
     void avatarReady(const QString &hash);
@@ -190,6 +193,7 @@ private:
     void refreshBlocked();
     void refreshGroups();
     void refreshProfiles();
+    void refreshFileRequests();
     void post(const QString &path, const QJsonObject &body, const QString &failure, bool andRefresh = true);
     void setConnected(bool c);
     void markRead();
@@ -242,5 +246,7 @@ private:
     int pageSize_ = 100;
     bool connected_ = true; // until a request fails, so the banner does not flash at start-up
     bool marking_ = false, profilesLoaded_ = false;
-    bool busy_[6] = { false, false, false, false, false, false };
+    bool busy_[7] = { false, false, false, false, false, false, false };
+    QSet<QString> fileRequests_;   // "<user> <message> <file>" of each request seen, to notify of new ones
+    bool fileRequestsLoaded_ = false;
 };

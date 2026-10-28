@@ -4,7 +4,8 @@ description: |
   A file sent in a chat (docs/files.md), as a message describes it, with how much of it is here. Its id names its bytes
   wherever they are: the SHA-256 of its chunks' SHA-256s (each chunk 1 MiB, the last shorter). Read its bytes from
   `/api/v1/files/{id}/content` once it is `available`. Got on its own (`GET /api/v1/files/{id}`), only `id`, `size`,
-  `state` and `received` are known; `name`, `mime` and the rest come with the message that carries it.
+  `state` and `received` are known; `name`, `mime` and the rest come with the message that carries it, as do `refused`,
+  `requests` and `asked` (what passed between Puddles over it for that message).
 type: object
 required: [id, size, state, received]
 properties:
@@ -24,8 +25,26 @@ properties:
       files.auto_download (fetch it with .../download), or its sender cannot be reached; `too_large` larger than this
       Puddle takes (files.max_size), never fetched; `failed` gave up (.../download tries again).
   received: { type: integer, minimum: 0, description: Bytes here so far }
-  reason: { type: string, description: "Why a download is waiting or failed, in words (\"nobody there\", \"they do not have it\")" }
+  reason: { type: string, description: "Why a download is waiting or failed, in words (\"nobody there\", \"they do not have it\"). \"they do not have it\" from everyone also means they sent it here whole before and will not again unasked: ask with .../request" }
+  max: { type: integer, minimum: 1, description: "`too_large`: the most this Puddle takes (files.max_size)" }
+  refused:
+    type: array
+    description: "A file of a message we sent: who will not fetch it because it is over the most they take (said openly, docs/files.md)"
+    items:
+      type: object
+      required: [user, max]
+      properties:
+        user: { type: string, description: A user id }
+        max: { type: integer, minimum: 1, description: Bytes they take at most }
+  requests:
+    type: array
+    description: "User ids asking for it again through this message, waiting for the owner's answer (.../requests/{user}/accept or /decline)"
+    items: { type: string }
+  asked: { type: boolean, description: "We asked for it again (.../request) and wait for someone to say yes" }
 x-methods:
   content: GET /api/v1/files/{file}/content
   download: POST /api/v1/conversations/{conversation}/messages/{message}/files/{file}/download
   cancel: POST /api/v1/conversations/{conversation}/messages/{message}/files/{file}/cancel
+  request: POST /api/v1/conversations/{conversation}/messages/{message}/files/{file}/request
+  accept: POST /api/v1/conversations/{conversation}/messages/{message}/files/{file}/requests/{user}/accept
+  decline: POST /api/v1/conversations/{conversation}/messages/{message}/files/{file}/requests/{user}/decline

@@ -120,7 +120,7 @@ static int download_file(const puddle_call *c, puddle_jw *w)
     int st = c->ctx->courier && c->ctx->courier->file_fetch ? c->ctx->courier->file_fetch(c->ctx, chat.c_str(), puddle_param(c, "message"), ref.id, &code) : 500;
     if (st)
         throw Error(st, code);
-    File::of(c->ctx, ref).write(w);
+    File::of(c->ctx, ref, chat, puddle_param(c, "message")).write(w);
     return 200;
 }
 
@@ -135,11 +135,71 @@ static int cancel_download(const puddle_call *c, puddle_jw *w)
     return 200;
 }
 
+/* Ask again for a file whose holders have sent it to us whole before, and would not send it again unasked. */
+static int request_file(const puddle_call *c, puddle_jw *w)
+{
+    std::string chat;
+    puddle_file_ref ref = refOf(c, chat);
+    const char *code = "internal";
+    int st = c->ctx->courier && c->ctx->courier->file_request
+                 ? c->ctx->courier->file_request(c->ctx, chat.c_str(), puddle_param(c, "message"), ref.id, &code)
+                 : 500;
+    if (st)
+        throw Error(st, code);
+    File::of(c->ctx, ref, chat, puddle_param(c, "message")).write(w);
+    return 200;
+}
+
+/* Someone asked for a file again (docs/files.md, "Asking again"): send it to them once, or not. */
+static int answer_request(const puddle_call *c, puddle_jw *w, int yes)
+{
+    std::string chat;
+    puddle_file_ref ref = refOf(c, chat);
+    const char *code = "internal";
+    int st = c->ctx->courier && c->ctx->courier->file_answer
+                 ? c->ctx->courier->file_answer(c->ctx, chat.c_str(), puddle_param(c, "message"), ref.id, puddle_param(c, "user"), yes, &code)
+                 : 500;
+    if (st)
+        throw Error(st, code);
+    File::of(c->ctx, ref, chat, puddle_param(c, "message")).write(w);
+    return 200;
+}
+static int accept_request(const puddle_call *c, puddle_jw *w) { return answer_request(c, w, 1); }
+static int decline_request(const puddle_call *c, puddle_jw *w) { return answer_request(c, w, 0); }
+
+/* Every request waiting for the owner, oldest first: {requests: [{file, user, conversation, message, ts}]}. */
+static int list_requests(const puddle_call *c, puddle_jw *w)
+{
+    puddle_jw_object(w);
+    puddle_jw_key(w, "requests");
+    puddle_jw_array(w);
+    for (const auto &r : FileRequest::all(c->ctx)) {
+        // a group's conversation is its chat; a DM's is the person, who is the one asking
+        auto conv = Conversation::get(c->ctx, Group::get(c->ctx, r.chat) ? r.chat : r.user);
+        if (!conv || conv->chat() != r.chat)
+            continue;
+        puddle_jw_object(w);
+        puddle_jw_str(w, "file", r.file.c_str());
+        puddle_jw_str(w, "user", r.user.c_str());
+        puddle_jw_str(w, "conversation", conv->id().c_str());
+        puddle_jw_str(w, "message", r.message.c_str());
+        puddle_jw_num(w, "ts", r.ts);
+        puddle_jw_end_object(w);
+    }
+    puddle_jw_end_array(w);
+    puddle_jw_end_object(w);
+    return 200;
+}
+
 #define MESSAGE_FILE "/api/v1/conversations/{conversation:id}/messages/{message:event}/files/{file:event}"
 
 const puddle_route puddle_file_api_routes[] = {
     { "POST", MESSAGE_FILE "/download",                                 PUDDLE_AUTH_OWNER, 64,                download_file, NULL },
     { "POST", MESSAGE_FILE "/cancel",                                   PUDDLE_AUTH_OWNER, 64,                cancel_download, NULL },
+    { "POST", MESSAGE_FILE "/request",                                  PUDDLE_AUTH_OWNER, 64,                request_file, NULL },
+    { "POST", MESSAGE_FILE "/requests/{user:id}/accept",                PUDDLE_AUTH_OWNER, 64,                accept_request, NULL },
+    { "POST", MESSAGE_FILE "/requests/{user:id}/decline",               PUDDLE_AUTH_OWNER, 64,                decline_request, NULL },
+    { "GET",  "/api/v1/files/requests",                                 PUDDLE_AUTH_OWNER, 0,                 list_requests, NULL },
     { "POST", "/api/v1/files/uploads/create",                           PUDDLE_AUTH_OWNER, 256,               create_upload, NULL },
     { "GET",  "/api/v1/files/uploads/{upload:token}",                   PUDDLE_AUTH_OWNER, 0,                 get_upload,    NULL },
     { "POST", "/api/v1/files/uploads/{upload:token}/chunks/{n:index}",  PUDDLE_AUTH_OWNER, PUDDLE_FILE_CHUNK, put_chunk,     NULL },

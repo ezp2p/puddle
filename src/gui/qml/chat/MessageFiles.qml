@@ -8,6 +8,7 @@ import "../theme"
 // The files of one message (docs/files.md): photos and videos as a grid, everything else as a card each. Until a file is
 // here, its sender's tiny preview stands in for it, blurred, with what is happening to it; one over the size the Puddle
 // fetches by itself has a Download button. Clicking a photo or a video opens it (viewMedia); a file is saved or opened.
+// Under them, lines for what passed between Puddles: who would not take a file as too large, and who asks for one again.
 ColumnLayout {
     id: root
 
@@ -18,6 +19,19 @@ ColumnLayout {
     signal saveFile(var file)
     signal openFile(var file)
 
+    // Whoever has it would not send it again unasked: they sent it whole once already (docs/files.md, "Asking again").
+    function refusedToUs(f) { return (f.state === "downloading" || f.state === "failed") && f.reason === "they do not have it" && !f.asked }
+    // What passed between Puddles over these files, said as lines under the message: who would not take one, who asks again.
+    readonly property var notes: {
+        const out = []
+        for (const f of (files || [])) {
+            for (const r of (f.refused || []))
+                out.push({ kind: "refused", f: f, user: r.user, max: r.max })
+            for (const u of (f.requests || []))
+                out.push({ kind: "request", f: f, user: u })
+        }
+        return out
+    }
     function isMedia(f) { return f.mime.startsWith("image/") || f.mime.startsWith("video/") }
     readonly property var media: (files || []).filter(f => isMedia(f))
     readonly property var others: (files || []).filter(f => !isMedia(f))
@@ -27,9 +41,12 @@ ColumnLayout {
     }
     function stateText(f, progress) {
         switch (f.state) {
-        case "downloading": return f.size > 0 ? qsTr("Arriving… %1%").arg(Math.floor(100 * (f.received || 0) / f.size)) : qsTr("Arriving…")
+        case "downloading":
+            if (f.asked) return qsTr("Asked again, waiting for an answer")
+            if (refusedToUs(f)) return qsTr("Already sent to you once; ask to have it again")
+            return f.size > 0 ? qsTr("Arriving… %1%").arg(Math.floor(100 * (f.received || 0) / f.size)) : qsTr("Arriving…")
         case "waiting": return f.reason ? qsTr("Waiting: %1").arg(f.reason) : qsTr("Not fetched yet")
-        case "too_large": return qsTr("Too large for your Puddle")
+        case "too_large": return f.max > 0 ? qsTr("Larger than your Puddle accepts (%1)").arg(root.chats.sizeText(f.max)) : qsTr("Too large for your Puddle")
         case "failed": return qsTr("Could not be fetched") + (f.reason ? ": " + f.reason : "")
         }
         return progress >= 0 ? qsTr("Opening… %1%").arg(Math.floor(100 * progress)) : ""
@@ -129,10 +146,17 @@ ColumnLayout {
                     }
                     Button {
                         objectName: "downloadFile"
-                        visible: tile.f.state === "waiting" || tile.f.state === "failed"
+                        visible: (tile.f.state === "waiting" || tile.f.state === "failed") && !root.refusedToUs(tile.f)
                         anchors.horizontalCenter: parent.horizontalCenter
                         text: tile.f.state === "failed" ? qsTr("Try again") : qsTr("Download %1").arg(root.chats.sizeText(tile.f.size))
                         onClicked: root.chats.fetchFile(root.messageId, tile.f.id)
+                    }
+                    Button {
+                        objectName: "askAgain"
+                        visible: root.refusedToUs(tile.f)
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        text: qsTr("Ask again")
+                        onClicked: root.chats.requestFile(root.messageId, tile.f.id)
                     }
                 }
                 TapHandler {
@@ -183,9 +207,15 @@ ColumnLayout {
                         text: root.chats.sizeText(card.f.size) + (root.stateText(card.f, card.progress) ? "  ·  " + root.stateText(card.f, card.progress) : "")
                     }
                 }
+                Button {
+                    objectName: "askAgain"
+                    visible: root.refusedToUs(card.f)
+                    text: qsTr("Ask again")
+                    onClicked: root.chats.requestFile(root.messageId, card.f.id)
+                }
                 ToolButton {
                     objectName: "downloadFile"
-                    visible: card.f.state === "waiting" || card.f.state === "failed"
+                    visible: (card.f.state === "waiting" || card.f.state === "failed") && !root.refusedToUs(card.f)
                     icon.source: Theme.icon(card.f.state === "failed" ? "refresh" : "download"); icon.width: 18; icon.height: 18
                     display: AbstractButton.IconOnly
                     Accessible.name: card.f.state === "failed" ? qsTr("Try again") : qsTr("Download")
@@ -207,6 +237,42 @@ ColumnLayout {
                     text: qsTr("Open")
                     onClicked: root.openFile(card.f)
                 }
+            }
+        }
+    }
+
+    // ---- what passed between Puddles, as lines of their own ----
+    Repeater {
+        model: root.notes
+        delegate: RowLayout {
+            id: note
+            required property var modelData
+            readonly property var n: modelData
+            objectName: n.kind === "refused" ? "fileRefused" : "fileRequest"
+            Layout.fillWidth: true
+            spacing: 8
+            Icon { glyph: n.kind === "refused" ? "alert-circle" : "download"; size: 14; opacity: 0.6 }
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                font.pixelSize: 12
+                opacity: 0.7
+                text: note.n.kind === "refused"
+                      ? qsTr("%1 accepts files up to %2, so %3 was not sent to them.").arg(root.chats.nameOf(note.n.user)).arg(root.chats.sizeText(note.n.max)).arg(note.n.f.name)
+                      : qsTr("%1 asked for %2 again.").arg(root.chats.nameOf(note.n.user)).arg(note.n.f.name)
+            }
+            Button {
+                objectName: "sendAgain"
+                visible: note.n.kind === "request"
+                text: qsTr("Send %1").arg(root.chats.sizeText(note.n.f.size))
+                onClicked: root.chats.answerFileRequest(root.messageId, note.n.f.id, note.n.user, true)
+            }
+            Button {
+                objectName: "declineAgain"
+                visible: note.n.kind === "request"
+                flat: true
+                text: qsTr("Decline")
+                onClicked: root.chats.answerFileRequest(root.messageId, note.n.f.id, note.n.user, false)
             }
         }
     }

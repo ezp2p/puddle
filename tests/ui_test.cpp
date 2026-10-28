@@ -791,6 +791,36 @@ int main(int argc, char **argv)
             key(Qt::Key_Escape);
             CHECK(until([&] { return find("viewerImage") == nullptr; }, 3000));
 
+            /* ---- Bob asks for notes.txt again, after it reached him long ago: the window asks its owner, who sends it ---- */
+            {
+                auto notes_row = [&](QString *mid, QString *fid, QString *state) {
+                    for (int r = 0; r < msgs_b->rowCount(); r++)
+                        for (const QJsonValue &v : msgs_b->at(r).value("files").toArray())
+                            if (v.toObject().value("name").toString() == "notes.txt") {
+                                *mid = msgs_b->at(r).value("id").toString();
+                                *fid = v.toObject().value("id").toString();
+                                *state = v.toObject().value("state").toString();
+                                return true;
+                            }
+                    return false;
+                };
+                QString mid, fid, state;
+                CHECK(until([&] { return notes_row(&mid, &fid, &state) && state == "available"; }, 10000));
+                QFile::remove(QString(bob.cfg.data_dir) + "/files/" + fid);                         /* Bob loses it */
+                QFile::remove(QString(bob.cfg.data_dir) + "/files/" + fid + ".chunks");
+                char appData[1024];
+                CHECK(puddle_config_default_data_dir(appData, sizeof appData) == 0);
+                {
+                    QFile nf(QString(appData) + "/files/notes/" + fid);                              /* and it reached him long ago */
+                    CHECK(nf.open(QIODevice::WriteOnly) && nf.write(QString("served %1 1\n").arg(bob.uid).toUtf8()) > 0);
+                }
+                B.requestFile(mid, fid);
+                CHECK(until([&] { return find("sendAgain") != nullptr && find("fileRequest") != nullptr; }, 10000)); /* "Bob asked for notes.txt again" */
+                CHECK(click(find("sendAgain")));
+                CHECK(until([&] { return notes_row(&mid, &fid, &state) && state == "available"; }, 15000));        /* he has it again */
+                CHECK(until([&] { return find("fileRequest") == nullptr; }, 5000));
+            }
+
             /* ---- a video (only with PUDDLE_TEST_VIDEO=<a short clip>, as making one needs a tool the build does not):
                its first frame, size and length go with it, and it plays in the window ---- */
             const QString clip = QString::fromLocal8Bit(qgetenv("PUDDLE_TEST_VIDEO"));

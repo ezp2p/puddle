@@ -336,7 +336,7 @@ void Message::write(puddle_jw *w, puddle_ctx *ctx, PartialUsers &people, const D
         puddle_jw_key(w, "files");
         puddle_jw_array(w);
         for (const auto &f : files_)
-            File::of(ctx, f).write(w);
+            File::of(ctx, f, chat_, id_).write(w);
         puddle_jw_end_array(w);
     }
     if (!ref_.empty())

@@ -35,6 +35,9 @@ typedef struct {
     void (*get)(void *user, const char *peer, const char *path, size_t max, puddle_net_reply *reply);
     void *user;
     int64_t (*now_ms)(void); /* NULL = the clock */
+    /* A download is here whole (may be NULL). Called on the worker thread, without the queue's lock. */
+    void (*finished)(void *user, const char *id, const char *chat, const char *message);
+    void *finished_user;
 } puddle_transfer_hooks;
 
 typedef struct puddle_transfers puddle_transfers;

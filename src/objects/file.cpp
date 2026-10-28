@@ -4,6 +4,8 @@
 #include "storage/files.h"
 #include "core/transfers.h"
 
+#include <algorithm>
+#include <cstdio>
 #include <cstring>
 
 namespace puddle {
@@ -20,7 +22,7 @@ static const char *stateName(File::State s)
     return "waiting";
 }
 
-File File::of(puddle_ctx *ctx, const puddle_file_ref &ref)
+File File::of(puddle_ctx *ctx, const puddle_file_ref &ref, const std::string &chat, const std::string &message)
 {
     File f;
     f.id_ = ref.id;
@@ -40,7 +42,56 @@ File File::of(puddle_ctx *ctx, const puddle_file_ref &ref)
         f.state_ = State::Downloading;
     else if (ref.size > puddle_files_max_size(ctx->config))
         f.state_ = State::TooLarge; // more than this Puddle takes: never fetched
+    if (f.state_ == State::TooLarge)
+        f.max_ = puddle_files_max_size(ctx->config);
+    if (ctx->files && !chat.empty() && !message.empty()) {
+        // notes are "<kind> ..." lines (federation/files.cpp); only this message's matter here
+        auto each = [](void *u, const char *line) {
+            auto *pr = static_cast<std::pair<File *, std::string> *>(u);
+            const std::string &cm = pr->second; // "<chat> <message>"
+            char kind[16], a[80], b[80], c[80];
+            long long n = 0;
+            int got = sscanf(line, "%15s %79s %79s %79s %lld", kind, a, b, c, &n);
+            if (!strcmp(kind, "refused") && got == 5 && cm == std::string(b) + " " + c)
+                pr->first->refused_.push_back({ a, (int64_t)n });
+            else if (!strcmp(kind, "request") && got == 5 && cm == std::string(b) + " " + c)
+                pr->first->askers_.push_back(a);
+            else if (!strcmp(kind, "asked") && got >= 3 && cm == std::string(a) + " " + b)
+                pr->first->asked_ = true;
+            return 0;
+        };
+        std::pair<File *, std::string> u{ &f, chat + " " + message };
+        puddle_files_note_each(ctx->files, ref.id, "", each, &u);
+    }
     return f;
+}
+
+std::vector<FileRequest> FileRequest::all(puddle_ctx *ctx)
+{
+    struct Acc {
+        puddle_ctx *ctx;
+        std::vector<FileRequest> out;
+        std::string id;
+    } acc{ ctx, {}, {} };
+    if (!ctx->files)
+        return {};
+    puddle_files_each(ctx->files, [](void *u, const char *id, puddle_file_state st) {
+        auto *a = static_cast<Acc *>(u);
+        if (st != PUDDLE_FILE_WHOLE)
+            return 0;
+        a->id = id;
+        puddle_files_note_each(a->ctx->files, id, "request ", [](void *u2, const char *line) {
+            auto *a2 = static_cast<Acc *>(u2);
+            char user[80], chat[80], message[80];
+            long long ts = 0;
+            if (sscanf(line, "request %79s %79s %79s %lld", user, chat, message, &ts) == 4)
+                a2->out.push_back({ a2->id, user, chat, message, (int64_t)ts });
+            return 0;
+        }, a);
+        return 0;
+    }, &acc);
+    std::sort(acc.out.begin(), acc.out.end(), [](const FileRequest &x, const FileRequest &y) { return x.ts < y.ts; });
+    return acc.out;
 }
 
 std::optional<File> File::here(puddle_ctx *ctx, const std::string &id)
@@ -79,6 +130,31 @@ void File::write(puddle_jw *w) const
     if (!reason_.empty() && state_ != State::Available)
         puddle_jw_str(w, "reason", reason_.c_str());
     puddle_jw_num(w, "received", have_);
+    if (max_)
+        puddle_jw_num(w, "max", max_);
+    if (!refused_.empty()) {
+        puddle_jw_key(w, "refused");
+        puddle_jw_array(w);
+        for (const auto &r : refused_) {
+            puddle_jw_object(w);
+            puddle_jw_str(w, "user", r.user.c_str());
+            puddle_jw_num(w, "max", r.max);
+            puddle_jw_end_object(w);
+        }
+        puddle_jw_end_array(w);
+    }
+    if (!askers_.empty()) {
+        puddle_jw_key(w, "requests");
+        puddle_jw_array(w);
+        for (const auto &a : askers_)
+            puddle_jw_string(w, a.c_str());
+        puddle_jw_end_array(w);
+    }
+    if (asked_)
+    {
+        puddle_jw_key(w, "asked");
+        puddle_jw_bool(w, 1);
+    }
     puddle_jw_end_object(w);
 }
 

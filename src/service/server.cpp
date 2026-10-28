@@ -243,7 +243,8 @@ puddle_server *puddle_server_create(const puddle_config *cfg, char *err, size_t 
             goto fail;
         s->fetch_hooks = hooks;
         s->fetch_hooks.done = NULL;
-        puddle_transfer_hooks th = { .get = puddle_federation_fetch, .user = &s->fetch_hooks, .now_ms = NULL };
+        puddle_transfer_hooks th = { .get = puddle_federation_fetch, .user = &s->fetch_hooks, .now_ms = NULL,
+                                     .finished = puddle_file_finished, .finished_user = &s->ctx };
         s->transfers = puddle_transfers_open(cfg->data_dir, s->files, &th, err, errlen);
         if (!s->transfers)
             goto fail;

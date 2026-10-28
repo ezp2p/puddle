@@ -31,6 +31,8 @@ static int count_whole(void *u, const char *id, puddle_file_state st)
     return 0;
 }
 
+static int count_note(void *u, const char *line) { (void)line; (*(int *)u)++; return 0; }
+
 /* upload `b` whole, chunk by chunk, out of order: its id */
 static int upload(puddle_files *f, const unsigned char *b, char id[65])
 {
@@ -85,6 +87,23 @@ int main(void)
     CHECK(puddle_files_state(s, id, &size, &have) == PUDDLE_FILE_WHOLE && size == (int64_t)SIZE && have == size);
     CHECK(puddle_files_path(s, id, path, sizeof path) == 0 && strstr(path, id));
     CHECK(upload(s, b, again) == 0 && !strcmp(again, id));                                          /* the same bytes: the same file, kept once */
+
+    /* ---- notes: lines kept with a file, and thrown away with it ---- */
+    {
+
+        int n;
+        CHECK(puddle_files_note_add(s, id, "served bob 5") == 0 && puddle_files_note_add(s, id, "served bob 5") == 0);   /* once */
+        CHECK(puddle_files_note_add(s, id, "request bob c m 7") == 0 && puddle_files_note_add(s, id, "two\nlines") == -1);
+        CHECK(puddle_files_note_add(s, "nope", "x") == -1);
+        n = 0;
+        puddle_files_note_each(s, id, "served ", count_note, &n);
+        CHECK(n == 1);
+        n = 0;
+        puddle_files_note_each(s, id, "", count_note, &n);
+        CHECK(n == 2);
+        CHECK(puddle_files_note_remove(s, id, "served ") == 1 && puddle_files_note_remove(s, id, "served ") == 0);
+        CHECK(puddle_files_note_remove(s, id, "request ") == 1);
+    }
 
     /* ---- a file the owner picked on this computer: taken in whole, and the original never read again ---- */
     {

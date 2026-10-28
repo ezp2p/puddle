@@ -14,6 +14,7 @@
 
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace puddle {
 
@@ -21,8 +22,10 @@ class File {
 public:
     enum class State { Available, Downloading, Waiting, TooLarge, Failed };
 
-    // As a message describes it, with what is here of it.
-    static File of(puddle_ctx *ctx, const puddle_file_ref &ref);
+    // As a message describes it, with what is here of it. Given the message's chat and id, also what passed between Puddles
+    // over it for that message (docs/files.md, "Asking again"): who refused it as too large, who is asking for it again,
+    // and whether we asked.
+    static File of(puddle_ctx *ctx, const puddle_file_ref &ref, const std::string &chat = "", const std::string &message = "");
     // Only what is here: the id, its size and how much has arrived; nullopt if nothing of it is here.
     static std::optional<File> here(puddle_ctx *ctx, const std::string &id);
 
@@ -40,6 +43,22 @@ private:
     State state_ = State::Waiting;
     int64_t have_ = 0;
     std::string reason_; // why a download is waiting or failed
+    int64_t max_ = 0;    // TooLarge: the most this Puddle takes
+    struct Refusal {
+        std::string user;
+        int64_t max;
+    };
+    std::vector<Refusal> refused_;   // a file we sent: who will not fetch it, and the most they take
+    std::vector<std::string> askers_; // who asked for it again, waiting for the owner's answer
+    bool asked_ = false;             // we asked for it again
+};
+
+// Someone asking for a file again (docs/files.md, "Asking again"), waiting for the owner's answer.
+struct FileRequest {
+    std::string file, user, chat, message;
+    int64_t ts = 0;
+    // Every one waiting, oldest first.
+    static std::vector<FileRequest> all(puddle_ctx *ctx);
 };
 
 // A file the owner is sending us, a chunk at a time, before it has an id.

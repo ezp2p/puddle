@@ -97,7 +97,7 @@ int main(void)
     upload(theirs, 7, id3);
     snprintf(dir, sizeof dir, "%s/mine", root);
     puddle_files *mine = puddle_files_open(dir, err, sizeof err);
-    puddle_transfer_hooks hooks = { get_cb, NULL, now_cb };
+    puddle_transfer_hooks hooks = { get_cb, NULL, now_cb, NULL, NULL };
     puddle_transfers *t = puddle_transfers_open(dir, mine, &hooks, err, sizeof err);
     CHECK(theirs && mine && t);
     const char *both[2] = { BOB, CAROL }, *carol_first[2] = { CAROL, BOB };

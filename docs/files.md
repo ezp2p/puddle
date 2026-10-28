@@ -77,10 +77,27 @@ Two new routes, for a peer with an open stream, signed like every other stream r
 |---|---|
 | `GET /stream/v1/files/{file}/chunks?chat=&message=` | the chunk hashes, 32 bytes each, as bytes (the size is in the message) |
 | `GET /stream/v1/files/{file}/chunks/{n}?chat=&message=` | chunk `n`, as bytes (`application/octet-stream`) |
+| `POST /stream/v1/files/{file}/refused` `{chat, message, max}` | the receiver will not fetch it: over the most it takes |
+| `POST /stream/v1/files/{file}/request` `{chat, message}` | they want it again (below) |
+| `POST /stream/v1/files/{file}/granted` `{chat, message}` | the holder will send it: fetch it now, from them first |
+| `POST /stream/v1/files/{file}/done` `{chat, message}` | they have it again: stop asking the owner |
 
 The request names the message that carries the file and its chat, so no index is needed: a Puddle serves a file only to
 a peer in that chat (the DM with them over an open stream, or a group both are in), only if that message carries it,
 and only the chunks it has. Anything else is a `404`, like everything else that is refused.
+
+**Asking again.** A Puddle sends a peer a file by itself until it has delivered it whole once (it notes when it
+sent the last chunk), and for an hour after, so a download that stopped can finish. After that it answers `404` to that
+peer's chunk requests, unless its owner has said yes to a `request`. The receiver's owner sees "Already sent to you
+once" and an **Ask again** button; the request goes to everyone who may have it. Each holder that would send it anyway
+answers `granted` at once; the others keep the request for their owner, who sees "Bob asked for notes.txt again" with
+**Send** and **Decline**. A yes is one delivery (used up when the last chunk goes, or after a week); a no is never sent,
+so it looks like nobody answering. When the file is here, the asker tells everyone it asked (`done`), so nobody is left
+with a stale prompt.
+
+**Too large.** When a message arrives carrying a file over the receiver's `files.max_size`, the receiver does not fetch
+it and tells the sender (`refused`). Both see it under the message: the receiver "Larger than your Puddle accepts
+(50 MB)", the sender "Bob accepts files up to 50 MB, so swim.mov was not sent to them."
 
 **Fetching** is a queue of its own (`core/transfers`), not the outbox: one download at a time per peer, chunks in order,
 progress saved as it goes, retried with the outbox's back-off when the other side is away. Where the chunks come from is
@@ -101,8 +118,12 @@ Uploading in chunks, so the app and a phone client never send more than 1 MiB at
 | `GET /api/v1/files/{file}` | the `File`: size, state (`available`, `downloading`, `waiting`, `too_large`, `failed`), bytes so far |
 | `GET /api/v1/files/{file}/content` | the bytes, read from disk as they are sent, with `Range` |
 | `POST /api/v1/conversations/{id}/messages/{message}/files/{file}/download` and `/cancel` | fetch one that waits (over the automatic limit) or failed, or stop and throw away what came |
+| `POST /api/v1/conversations/{id}/messages/{message}/files/{file}/request` | ask again for one delivered here whole before |
+| `POST /api/v1/conversations/{id}/messages/{message}/files/{file}/requests/{user}/accept` and `/decline` | answer someone asking again |
+| `GET /api/v1/files/requests` | everyone asking again, waiting for an answer |
 
-A `Message` gains `files: [File]`. Uploaded files no message uses are thrown away after a day.
+A `Message` gains `files: [File]`; on a message, a `File` also says who refused it (`refused`), who is asking for it
+again (`requests`) and whether we asked (`asked`). Uploaded files no message uses are thrown away after a day.
 
 ## Kept where
 
@@ -111,6 +132,7 @@ A `Message` gains `files: [File]`. Uploaded files no message uses are thrown awa
 <data_dir>/files/<id>.chunks       its chunk hashes
 <data_dir>/files/partial/<id>      a download or upload in progress, and which chunks it has
 <data_dir>/files/refs/<id>            which messages carry it, and when it was first seen
+<data_dir>/files/notes/<id>           what passed between Puddles over it: delivered, refused, asked, granted (a line each)
 <data_dir>/state/transfers/<id>.json  a download: its chat and message, who to ask, how it is going
 ```
 
@@ -132,8 +154,10 @@ and uploads left unfinished for a day. `GET /api/v1/files/usage` says how many f
   button and the length, anything else as a card with its name, size and a progress bar. Over the automatic limit:
   a Download button.
 - **Opening:** a photo fills the window (zoom, and the other photos of the same message); a video plays there with
-  play, pause, seeking and volume. Anything else: Save as… and Open (the system's app), with a warning for programs and
-  scripts. Escape closes.
+  play, pause, seeking and volume. Anything else: Save as… and Open (the system's app), with no warning: what to embed
+  is the client's call, and only photos and videos are. Escape closes.
+- **Under a message:** a line for each refusal ("Bob accepts files up to 50 MB…") and each request to send a file
+  again, with Send and Decline; a desktop notification for each new request.
 - The app downloads each file to its own cache from `/api/v1/files/{file}/content` once the Puddle has it.
 
 Qt Multimedia joins the app's requirements (on Linux it needs a media backend, such as `qt6-multimedia` with FFmpeg or
@@ -161,10 +185,10 @@ Second round:
 
 10. [x] **Clone, don't upload:** `puddle_fd_clone_to` (platform), `puddle_files_upload_adopt` (store),
     `puddle_server_take_file` (service), and the app hands picked files over instead of uploading them (`files` test).
-11. [ ] **Too large, said openly:** the refusal goes back to the sender; both chats show it.
-12. [ ] **Asking again:** delivered-once records, requests, approvals, grants; the stream and owner routes; the app's
-    prompt.
-13. [ ] **Plain file cards:** no warning before opening a file that is not a photo or video.
+11. [x] **Too large, said openly:** the refusal goes back to the sender; both chats show it.
+12. [x] **Asking again:** delivered-once records, requests, approvals, grants; the stream and owner routes; the app's
+    prompt (`e2e`, `ui_test`).
+13. [x] **Plain file cards:** no warning before opening a file that is not a photo or video.
 
 ## Not in this
 
@@ -178,4 +202,12 @@ Known gaps, for later:
 - The app sees a download's progress only as often as it reads the conversation (every two seconds), until
   `/api/v1/updates` exists.
 - A message's files never change, and an edit cannot add or take one away.
-- Disk use is shown by `GET /api/v1/files/usage`, but there is no cap on it yet beyond `files.max_size` per file.
+- Disk use is shown by `GET /api/v1/files/usage`, but there is no cap on it yet beyond `files.max_size` per file
+  (on purpose: disk is the owner's to spend).
+- In a group, a member who never delivered a file whole to the asker sends it without asking its owner (its own first
+  delivery), so a request there may be met with no yes from anyone. Asking again in a group is not tested end to end
+  yet (the DM case is).
+- A refusal as too large goes to the sender only; the rest of a group is not told.
+- Cloning is tried on APFS, Btrfs and XFS; Windows always copies (ReFS block cloning is not tried yet).
+- Taking a picked file hashes it on the store's lock, as finishing an upload does, so a very large one holds up other
+  file work for the seconds it takes.

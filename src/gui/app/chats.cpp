@@ -121,6 +121,7 @@ void Chats::refresh()
     refreshMessages();
     refreshBlocked();
     refreshGroups();
+    refreshFileRequests();
     if (!profilesLoaded_)
         refreshProfiles();
 }
@@ -220,6 +221,45 @@ void Chats::fetchFile(const QString &messageId, const QString &fileId)
          tr("The file could not be fetched."));
 }
 
+void Chats::requestFile(const QString &messageId, const QString &fileId)
+{
+    if (current_.isEmpty() || !isFileId(fileId))
+        return;
+    post(path("conversations", current_, QStringLiteral("messages/%1/files/%2/request").arg(messageId, fileId)), QJsonObject{},
+         tr("The file could not be asked for."));
+}
+
+void Chats::answerFileRequest(const QString &messageId, const QString &fileId, const QString &userId, bool yes)
+{
+    if (current_.isEmpty() || !isFileId(fileId) || userId.isEmpty())
+        return;
+    post(path("conversations", current_, QStringLiteral("messages/%1/files/%2/requests/%3/%4").arg(messageId, fileId, userId, yes ? "accept" : "decline")),
+         QJsonObject{}, yes ? tr("The file could not be sent.") : tr("The request could not be declined."));
+}
+
+// Requests for files we sent, waiting for the owner: shown on their messages, and a notification for each new one.
+void Chats::refreshFileRequests()
+{
+    if (busy_[6])
+        return;
+    busy_[6] = true;
+    api_.get(QStringLiteral("/api/v1/files/requests"), [this](int status, const QJsonDocument &doc) {
+        busy_[6] = false;
+        if (status != 200 || !doc.isObject())
+            return;
+        QSet<QString> seen;
+        for (const QJsonValue &v : doc.object().value("requests").toArray()) {
+            const QJsonObject r = v.toObject();
+            const QString key = r.value("user").toString() + ' ' + r.value("message").toString() + ' ' + r.value("file").toString();
+            seen.insert(key);
+            if (fileRequestsLoaded_ && !fileRequests_.contains(key))
+                emit newFileRequest(r.value("user").toString(), r.value("conversation").toString());
+        }
+        fileRequests_ = seen;
+        fileRequestsLoaded_ = true;
+    });
+}
+
 void Chats::cancelFile(const QString &messageId, const QString &fileId)
 {
     if (current_.isEmpty() || !isFileId(fileId))
@@ -256,14 +296,6 @@ bool Chats::openFile(const QString &id, const QString &name)
     if (!QFile::exists(to) && !QFile::copy(from, to))
         return false;
     return QDesktopServices::openUrl(QUrl::fromLocalFile(to));
-}
-
-bool Chats::isRisky(const QString &name, const QString &mime)
-{
-    static const QStringList exts = { "app", "command", "sh", "bash", "zsh", "csh", "py", "pl", "rb", "js", "jar", "exe", "msi", "bat", "cmd", "com",
-                                      "ps1", "vbs", "scr", "pkg", "dmg", "deb", "rpm", "run", "bin", "appimage", "apk", "workflow", "scpt", "terminal" };
-    return exts.contains(QFileInfo(name).suffix().toLower()) || mime.contains(QLatin1String("executable")) || mime.contains(QLatin1String("script")) ||
-           mime == QLatin1String("application/x-msdownload");
 }
 
 QString Chats::sizeText(double bytes)

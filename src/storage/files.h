@@ -14,6 +14,7 @@
  *   <data_dir>/files/partial/<id>.size     its size, in decimal
  *   <data_dir>/files/uploads/<token>...    the same three for a file the owner is sending us, before it has an id
  *   <data_dir>/files/refs/<id>             which messages carry it: "made <ms>", then "<chat> <message>" a line each
+ *   <data_dir>/files/notes/<id>            what passed between Puddles over it, a line each (federation/files.cpp)
  *
  * Safe to use from several threads at once. */
 
@@ -83,6 +84,17 @@ int puddle_files_sweep(puddle_files *f, int64_t now_ms, int64_t grace_ms, void (
 
 /* How many files are here, and the bytes they take (partial ones by what has arrived). */
 void puddle_files_usage(puddle_files *f, int64_t *count, int64_t *bytes);
+
+/* ---- notes: what passed between Puddles over a file (who it was delivered to, who refused it, who asked for it again) ----
+ * Lines of text without newlines, kept with the file and thrown away with it (puddle_files_remove). What they say is the
+ * caller's; federation/files.cpp writes and reads them. */
+
+/* Add `line` (at most 400 bytes, no newline) unless it is there already. 0 or -1. */
+int puddle_files_note_add(puddle_files *f, const char *id, const char *line);
+/* Every line beginning with `prefix` (all for ""): `fn` per line, until it returns nonzero. */
+void puddle_files_note_each(puddle_files *f, const char *id, const char *prefix, int (*fn)(void *user, const char *line), void *user);
+/* Take away every line beginning with `prefix`. How many went, or -1. */
+int puddle_files_note_remove(puddle_files *f, const char *id, const char *prefix);
 
 /* ---- fetching one from another Puddle ---- */
 

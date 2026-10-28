@@ -44,7 +44,7 @@ typedef struct {
     int immutable; /* the same path always answers the same bytes: it may be cached for good */
 } puddle_blob;
 
-#define PUDDLE_PATH_PARAMS 3
+#define PUDDLE_PATH_PARAMS 4
 #define PUDDLE_PARAM_MAX 72 /* an event id (64 hex) is the longest value a path segment carries */
 
 typedef struct {

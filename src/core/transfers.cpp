@@ -282,8 +282,14 @@ static void work(puddle_transfers *t)
             continue;
         }
         if (r == RUN_DONE) {
+            std::string id = x->id, chat = x->chat, message = x->message;
             puddle_record_remove(t->storage, COLLECTION, x->id.c_str());
             t->items.erase(t->items.begin() + (x - t->items.data()));
+            if (t->hooks.finished) {
+                lock.unlock();
+                t->hooks.finished(t->hooks.finished_user, id.c_str(), chat.c_str(), message.c_str());
+                lock.lock();
+            }
             continue;
         }
         x->state = PUDDLE_TR_QUEUED;

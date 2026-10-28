@@ -303,7 +303,9 @@ paths:
       description: |
         Chunk `n` (from 0): 1 MiB, the last one what is left. Asked for under the same rules as the chunk list, and
         answered only if we have that chunk. The asker checks it against its hash and throws it away if it does not
-        match. Ask the sender first; in a group, anyone else who has it will do.
+        match. Ask the sender first; in a group, anyone else who has it will do. Once we have sent a peer the file
+        whole (for any message), we send it to them again only with our owner's yes (`/request`), or within an hour,
+        so a download that stopped can finish.
       parameters:
         - { name: file, in: path, required: true, schema: { type: string, pattern: "^[0-9a-f]{64}$" } }
         - { name: n, in: path, required: true, schema: { type: integer, minimum: 0 } }
@@ -312,6 +314,44 @@ paths:
       responses:
         "200": { description: The chunk, content: { application/octet-stream: {} } }
         "404": { $ref: "#/components/responses/NotFound" }
+
+  /stream/v1/files/{file}/refused:
+    post:
+      tags: [files]
+      operationId: postFileRefused
+      summary: "They will not fetch a file we sent: it is over the most they take"
+      description: Sent by the receiver when a message arrives carrying a file over its files.max_size. Only about a message we sent.
+      parameters: [{ name: file, in: path, required: true, schema: { type: string, pattern: "^[0-9a-f]{64}$" } }]
+      requestBody: { $ref: "#/components/requestBodies/FileAboutMessageMax" }
+      responses: { "200": { description: Noted }, "404": { $ref: "#/components/responses/NotFound" } }
+  /stream/v1/files/{file}/request:
+    post:
+      tags: [files]
+      operationId: postFileRequest
+      summary: They want a file again
+      description: |
+        If we would send it anyway (never sent them it whole, within the hour's grace, or a yes is waiting), we answer
+        with `/granted` at once. Otherwise it waits for our owner. The answer is `200` either way, and a no is never
+        sent, so nothing is learnt from it.
+      parameters: [{ name: file, in: path, required: true, schema: { type: string, pattern: "^[0-9a-f]{64}$" } }]
+      requestBody: { $ref: "#/components/requestBodies/FileAboutMessage" }
+      responses: { "200": { description: Received }, "404": { $ref: "#/components/responses/NotFound" } }
+  /stream/v1/files/{file}/granted:
+    post:
+      tags: [files]
+      operationId: postFileGranted
+      summary: Someone we asked will send it; fetch it now, from them first
+      parameters: [{ name: file, in: path, required: true, schema: { type: string, pattern: "^[0-9a-f]{64}$" } }]
+      requestBody: { $ref: "#/components/requestBodies/FileAboutMessage" }
+      responses: { "200": { description: Received }, "404": { $ref: "#/components/responses/NotFound" } }
+  /stream/v1/files/{file}/done:
+    post:
+      tags: [files]
+      operationId: postFileDone
+      summary: "They have it again: forget their request (in a group, whoever did not answer stops being asked)"
+      parameters: [{ name: file, in: path, required: true, schema: { type: string, pattern: "^[0-9a-f]{64}$" } }]
+      requestBody: { $ref: "#/components/requestBodies/FileAboutMessage" }
+      responses: { "200": { description: Received }, "404": { $ref: "#/components/responses/NotFound" } }
 
   /stream/v1/media:
     get:
@@ -653,6 +693,29 @@ components:
             Only given to an authenticated peer: `clock_skew` (the reply says its time), `replayed`,
             `no_stream`. A request that fails authentication gets a plain `404` with no code.
 
+  requestBodies:
+    FileAboutMessage:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [chat, message]
+            description: The message carrying the file, and its chat; the sender must be in that chat
+            properties:
+              chat: { $ref: "#/components/schemas/ChatId" }
+              message: { $ref: "#/components/schemas/EventId" }
+    FileAboutMessageMax:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [chat, message, max]
+            properties:
+              chat: { $ref: "#/components/schemas/ChatId" }
+              message: { $ref: "#/components/schemas/EventId" }
+              max: { type: integer, minimum: 1, description: The most the receiver takes (its files.max_size), in bytes }
   responses:
     BadRequest:
       description: Malformed or invalid input
