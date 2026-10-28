@@ -852,6 +852,8 @@ void Chats::uploadFile(std::shared_ptr<FileSend> job, int index)
     if (index == job->files.size())
         return sendWithFiles(job);
     const QVariantMap f = job->files.at(index).toMap();
+    if (takeFile_ && takePool_)
+        return takeFile(job, index);
     const qint64 size = QFileInfo(f.value("path").toString()).size();
     if (size <= 0) {
         emit filesFailed(tr("%1 is empty or cannot be read.").arg(f.value("name").toString()));
@@ -865,6 +867,32 @@ void Chats::uploadFile(std::shared_ptr<FileSend> job, int index)
             return;
         }
         uploadChunk(job, index, doc.object().value("upload").toString(), 0, int((size + kChunk - 1) / kChunk));
+    });
+}
+
+void Chats::takeFile(std::shared_ptr<FileSend> job, int index)
+{
+    const QVariantMap f = job->files.at(index).toMap();
+    const QString path = f.value("path").toString();
+    TakeFile fn = takeFile_;
+    // the pool is waited for before this object goes (Backend's destructor), so `this` is still here when the answer comes
+    takePool_->start([this, job, index, f, path, fn] {
+        char id[65] = { 0 };
+        int r = -1;
+        QFile file(path);
+        if (file.open(QIODevice::ReadOnly))
+            r = fn(file.handle(), id);
+        const QString sid = QString::fromLatin1(id);
+        QMetaObject::invokeMethod(this, [this, job, index, f, r, sid] {
+            const QString name = f.value("name").toString();
+            if (r != 0) {
+                emit filesFailed(r == -2 ? tr("%1 is empty, or larger than your Puddle takes.").arg(name) : tr("%1 could not be read.").arg(name));
+                return;
+            }
+            emit uploadProgress(f.value("key").toString(), 1.0);
+            job->ids << sid;
+            uploadFile(job, index + 1);
+        }, Qt::QueuedConnection);
     });
 }
 

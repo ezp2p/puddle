@@ -1,6 +1,7 @@
 #include "storage/files.h"
 #include "base/hash.h"
 
+#include <fcntl.h>
 #include <ftw.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -84,6 +85,51 @@ int main(void)
     CHECK(puddle_files_state(s, id, &size, &have) == PUDDLE_FILE_WHOLE && size == (int64_t)SIZE && have == size);
     CHECK(puddle_files_path(s, id, path, sizeof path) == 0 && strstr(path, id));
     CHECK(upload(s, b, again) == 0 && !strcmp(again, id));                                          /* the same bytes: the same file, kept once */
+
+    /* ---- a file the owner picked on this computer: taken in whole, and the original never read again ---- */
+    {
+        char orig[600], tok[PUDDLE_UPLOAD_TOKEN_LEN + 1], picked[65], kept[1024];
+        snprintf(orig, sizeof orig, "%s/picked.bin", root);
+        FILE *o = fopen(orig, "wb");
+        fwrite(b, 1, SIZE, o);
+        fclose(o);
+        int fd = open(orig, O_RDONLY), cloned = -1;
+        CHECK(puddle_files_upload_adopt(s, fd, SIZE - 1, tok, NULL) == -2);                        /* over the owner's limit */
+        CHECK(puddle_files_upload_adopt(s, fd, 0, tok, &cloned) == 0 && (cloned == 0 || cloned == 1));
+#ifdef __APPLE__
+        CHECK(cloned == 1); /* APFS: a clone, taking no space */
+#endif
+        close(fd);
+        CHECK(puddle_files_upload_finish(s, tok, picked) == 0 && !strcmp(picked, id));            /* the same bytes, the same id */
+        o = fopen(orig, "r+b");                                                                     /* edited afterwards */
+        fputs("changed", o);
+        fclose(o);
+        remove(orig);                                                                               /* then thrown away */
+        CHECK(puddle_files_path(s, id, kept, sizeof kept) == 0);
+        unsigned char *c0 = NULL;
+        size_t l0 = 0;
+        CHECK(puddle_files_read_chunk(s, id, 0, &c0, &l0) == 0 && l0 == PUDDLE_FILE_CHUNK && !memcmp(c0, b, l0)); /* unchanged */
+        free(c0);
+        /* a fresh file of its own (no copy of it here yet), from a clone */
+        unsigned char *b2 = bytes(77);
+        snprintf(orig, sizeof orig, "%s/picked2.bin", root);
+        o = fopen(orig, "wb");
+        fwrite(b2, 1, SIZE, o);
+        fclose(o);
+        fd = open(orig, O_RDONLY);
+        char id2[65];
+        CHECK(puddle_files_upload_adopt(s, fd, 0, tok, NULL) == 0 && puddle_files_upload_finish(s, tok, id2) == 0 && strcmp(id2, id) != 0);
+        close(fd);
+        CHECK(puddle_files_state(s, id2, NULL, NULL) == PUDDLE_FILE_WHOLE);
+        struct stat st;
+        CHECK(puddle_files_path(s, id2, kept, sizeof kept) == 0 && stat(kept, &st) == 0 && (st.st_mode & 077) == 0); /* the owner's only */
+        CHECK(puddle_files_remove(s, id2) == 0);
+        remove(orig);
+        free(b2);
+        fd = open(root, O_RDONLY);                                                                  /* not a regular file */
+        CHECK(puddle_files_upload_adopt(s, fd, 0, tok, NULL) == -1);
+        close(fd);
+    }
 
     /* ---- another Puddle fetches it a chunk at a time ---- */
     unsigned char *list;

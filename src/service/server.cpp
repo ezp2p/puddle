@@ -333,6 +333,19 @@ puddle_groups *puddle_server_groups(puddle_server *s)
     return s->groups;
 }
 
+int puddle_server_take_file(puddle_server *s, int fd, char id[65])
+{
+    char token[PUDDLE_UPLOAD_TOKEN_LEN + 1];
+    int r = puddle_files_upload_adopt(s->files, fd, puddle_files_max_size(&s->cfg), token, NULL);
+    if (r != 0)
+        return r;
+    if (puddle_files_upload_finish(s->files, token, id) != 0) {
+        puddle_files_upload_cancel(s->files, token);
+        return -1;
+    }
+    return 0;
+}
+
 puddle_outbox *puddle_server_outbox(puddle_server *s)
 {
     return s->outbox;

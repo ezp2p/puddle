@@ -20,8 +20,22 @@ Code: `storage/files` (the bytes, by id), `core/transfers` (fetching), `events/m
 | Kept for | As long as a message refers to it. When the last message using a file is deleted, the file goes. |
 | A message | Up to **10 files** and an optional caption. Photos are shown as a grid. |
 | Choosing files | A paperclip button (the system's file picker), dropping files on the chat, and pasting. |
-| Kinds of file | Anything. Photos and videos open in the app; programs and scripts are saved, never opened, without a warning first. |
+| Kinds of file | Anything. Photos and videos open in the app; anything else is a card, opened or saved by the owner. |
 | Before download | A tiny preview the sending app makes (at most 1 KiB, inside the signed message), plus the name, type and size. |
+
+### Second round: security and bandwidth
+
+Decided after the first round, from a security review (the notes are not kept in the repository):
+
+| Question | Decision |
+|---|---|
+| A file the owner sends from this computer | **Cloned** into the data folder (APFS `clonefile`, Btrfs/XFS reflink), which takes no space until one side changes; **copied** where the file system cannot clone. Never a symlink or a reference to the original: the Puddle acts only inside its data folder, and moving, editing or deleting the original changes nothing that was sent. |
+| How the app hands it over | The app the Puddle runs inside passes the open file (`puddle_server_take_file`). No route takes a path, so nothing on the network can make the Puddle read a file outside its data folder. A phone client uploads, as before. |
+| Disk and bandwidth | Disk is the owner's to spend; bandwidth is the owner's to control. Photos and videos under the receiver's automatic limit still arrive by themselves. |
+| Asking again | The first time a Puddle delivers a file whole to a peer, for a message, it does so by itself. After that, every new request for it needs the holder's approval, one approval per delivery. A download picking up after an interruption is not a new request (an hour's grace after delivery). |
+| Groups | A request goes to every member who can be reached; any who has the file can accept, and their Puddle sends it. Each member's first delivery to a peer is by itself, as above. |
+| Too large | A receiver that finds a file over its `files.max_size` does not fetch it, tells the sender, and both chats say so: "Bob accepts files up to 50 MB". |
+| Showing | The client's call, not the protocol's. The desktop app embeds photos and videos only; every other file is a card (name, type, size) the owner opens, with no warning. |
 
 ## The shape of a file
 
@@ -110,7 +124,8 @@ and uploads left unfinished for a day. `GET /api/v1/files/usage` says how many f
 ## In the desktop app
 
 - **Sending:** a paperclip beside the message box, dropping files on the chat, and pasting. Chosen files wait in a row
-  above the message box, with a preview and a remove button, and go when the message is sent; each shows its upload.
+  above the message box, with a preview and a remove button, and go when the message is sent. The desktop app hands
+  each to its Puddle to clone (above); a phone client uploads it in chunks.
   The app makes the previews: photos with Qt's image reading, videos from their first frame (Qt Multimedia), along with
   the width, height and length.
 - **In the chat:** photos as a grid (the preview, blurred, until the photo is here), videos as a tile with a play
@@ -141,6 +156,15 @@ Each step left the build and every test passing, and updated `api/*.yaml` and th
 8. [x] **The app, showing:** the grid, cards, downloading, the photo viewer and the video player (`ui_test`; the video
    part runs only on a real platform: `PUDDLE_TEST_VIDEO=<clip> ./build/ui_test`).
 9. [x] **Wrap-up:** requirements (Qt Multimedia), and a last pass over the docs.
+
+Second round:
+
+10. [x] **Clone, don't upload:** `puddle_fd_clone_to` (platform), `puddle_files_upload_adopt` (store),
+    `puddle_server_take_file` (service), and the app hands picked files over instead of uploading them (`files` test).
+11. [ ] **Too large, said openly:** the refusal goes back to the sender; both chats show it.
+12. [ ] **Asking again:** delivered-once records, requests, approvals, grants; the stream and owner routes; the app's
+    prompt.
+13. [ ] **Plain file cards:** no warning before opening a file that is not a photo or video.
 
 ## Not in this
 

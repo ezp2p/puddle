@@ -107,6 +107,8 @@ void Backend::loadTheme()
 Backend::~Backend()
 {
     if (srv_) {
+        chats_.setTakeFile({}, nullptr);
+        takePool_.waitForDone();
         puddle_server_stop(srv_);
         worker_.join(); // run() drains in-flight connections before returning
         puddle_log_set_sink(nullptr, nullptr);
@@ -141,6 +143,8 @@ void Backend::startServer()
     listenUrl_ = (addr.contains(':') ? QStringLiteral("https://[%1]:%2") : QStringLiteral("https://%1:%2"))
                      .arg(addr).arg(cfg_.port);
     worker_ = std::thread([s = srv_] { puddle_server_run(s); });
+    takePool_.setMaxThreadCount(1);
+    chats_.setTakeFile([s = srv_](int fd, char id[65]) { return puddle_server_take_file(s, fd, id); }, &takePool_);
 
     // The window reads everything through the owner API, as a phone client does. "All interfaces" is reached by loopback.
     QString host = addr;

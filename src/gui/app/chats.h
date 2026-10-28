@@ -2,6 +2,7 @@
 
 #include <QHash>
 #include <QObject>
+#include <QThreadPool>
 #include <functional>
 #include <QTimer>
 #include <memory>
@@ -52,6 +53,11 @@ public:
     bool currentIsGroup() const { return currentKind_ == QLatin1String("group"); }
     int incomingGroupInvites() const { return groupInviteCount_; }
     void setSelf(const QString &id) { self_ = id; } // our own user id, so "you" can be said of what we did
+    // The Puddle runs in this process: a picked file is handed to it open (puddle_server_take_file: cloned into its data
+    // folder, never read again) instead of uploaded through the API. `fn` runs on `pool`; returns 0 with the file's id,
+    // -2 if it is too large, -1. Unset (a phone client, or before the Puddle starts): files are uploaded.
+    using TakeFile = std::function<int(int fd, char id[65])>;
+    void setTakeFile(TakeFile fn, QThreadPool *pool) { takeFile_ = std::move(fn); takePool_ = pool; }
     QObject *profiles() { return &profiles_; }
     QString myName() const { return myName_; }
     QString myAvatar() const { return myAvatar_; }
@@ -225,6 +231,9 @@ private:
     void uploadFile(std::shared_ptr<FileSend> job, int index);
     void uploadChunk(std::shared_ptr<FileSend> job, int index, const QString &token, int n, int count);
     void sendWithFiles(std::shared_ptr<FileSend> job);
+    void takeFile(std::shared_ptr<FileSend> job, int index);
+    TakeFile takeFile_;
+    QThreadPool *takePool_ = nullptr;
     bool bridging_ = false; // more arrived since the last look than one page holds: reading back until what is new joins up with what is held
     void bridgeGap(const QString &user, std::shared_ptr<QSet<QString>> held, qint64 offset, int pages);
     // A message of ours that is still being delivered, further back than the newest page, is read again (its page is) until the state is fresh.

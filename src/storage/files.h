@@ -102,6 +102,13 @@ int puddle_files_fetch_finish(puddle_files *f, const char *id);
 
 /* ---- taking one from the owner ---- */
 
+/* Take a file the owner picked on this computer, open as `src` (handed over by the app in the same process, never named by
+ * a path from the network): it becomes an upload with every chunk here, as a copy-on-write clone where the file system
+ * can, else a copy (platform/fsutil.h). The Puddle never reads the original again; moving, editing or deleting it changes
+ * nothing that was sent. Finish it with puddle_files_upload_finish. `cloned` (may be NULL) says which it was. 0, -1 on
+ * error, -2 if it is empty or over `max_size` (0 = PUDDLE_FILE_HARD_MAX). */
+int puddle_files_upload_adopt(puddle_files *f, int src, int64_t max_size, char token[PUDDLE_UPLOAD_TOKEN_LEN + 1], int *cloned);
+
 /* Start taking a file of `size` bytes (1 to PUDDLE_FILE_HARD_MAX): a new upload token. 0, or -1. */
 int puddle_files_upload_create(puddle_files *f, int64_t size, char token[PUDDLE_UPLOAD_TOKEN_LEN + 1]);
 

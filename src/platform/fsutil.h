@@ -43,6 +43,10 @@ int64_t puddle_fd_size(int fd);
 /* Take an exclusive lock on the whole file, without waiting: 0, or -1 with errno EWOULDBLOCK if another process holds
  * it. Released when the descriptor is closed. */
 int puddle_fd_lock(int fd);
+/* Make `dst` (which must not exist; readable by the owner only) a copy of the open regular file `src`, from its start. A
+ * copy-on-write clone where the file system can (APFS clonefile, Btrfs/XFS reflink), taking no space until one side
+ * changes; otherwise its bytes are copied. 1 cloned, 0 copied, -1 on error (nothing is left at `dst`). */
+int puddle_fd_clone_to(int src, const char *dst);
 /* Flush a file to stable storage (F_FULLFSYNC on macOS, which plain fsync() does not guarantee). */
 int puddle_fsync_fd(int fd);
 

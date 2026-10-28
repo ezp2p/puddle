@@ -361,6 +361,8 @@ int puddle_files_fetch_finish(puddle_files *f, const char *id)
 
 /* ---------------------------------------------------------------- uploads */
 
+static void drop_upload_locked(puddle_files *f, const std::string &token);
+
 int puddle_files_upload_create(puddle_files *f, int64_t size, char token[PUDDLE_UPLOAD_TOKEN_LEN + 1])
 {
     if (size <= 0 || size > PUDDLE_FILE_HARD_MAX)
@@ -379,6 +381,39 @@ int puddle_files_upload_create(puddle_files *f, int64_t size, char token[PUDDLE_
     if (put_small(f->uploads, p + ".have", none.data(), none.size()) != 0 || write_size(f->uploads, p + ".size", size) != 0)
         return -1;
     f->touched[token] = 0;
+    return 0;
+}
+
+int puddle_files_upload_adopt(puddle_files *f, int src, int64_t max_size, char token[PUDDLE_UPLOAD_TOKEN_LEN + 1], int *cloned)
+{
+    int64_t size = puddle_fd_size(src);
+    if (size < 0)
+        return -1;
+    if (max_size <= 0 || max_size > PUDDLE_FILE_HARD_MAX)
+        max_size = PUDDLE_FILE_HARD_MAX;
+    if (size == 0 || size > max_size)
+        return -2;
+    unsigned char raw[PUDDLE_UPLOAD_TOKEN_LEN / 2];
+    if (RAND_bytes(raw, sizeof raw) != 1)
+        return -1;
+    puddle_hex_encode(raw, sizeof raw, token);
+    std::string p = f->uploads + "/" + token;
+    int how = puddle_fd_clone_to(src, p.c_str()); /* outside the lock: a copy of a big file takes a while */
+    if (how < 0)
+        return -1;
+    if (puddle_path_size(p.c_str()) != size) { /* it changed while being copied: send nothing rather than half of each */
+        puddle_remove_file(p.c_str());
+        return -1;
+    }
+    std::lock_guard<std::mutex> hold(f->mu);
+    std::string all((size_t)puddle_file_chunk_count(size), '\1');
+    if (put_small(f->uploads, p + ".have", all.data(), all.size()) != 0 || write_size(f->uploads, p + ".size", size) != 0) {
+        drop_upload_locked(f, token);
+        return -1;
+    }
+    f->touched[token] = 0;
+    if (cloned)
+        *cloned = how;
     return 0;
 }
 
