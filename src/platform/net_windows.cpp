@@ -244,6 +244,11 @@ int puddle_sock_poll(const puddle_sock *socks, int n, int timeout_ms, int *ready
     return rc == SOCKET_ERROR ? -1 : rc;
 }
 
+void puddle_sock_cut(puddle_sock sock)
+{
+    shutdown((SOCKET)sock, SD_BOTH);
+}
+
 void puddle_sock_finish(puddle_sock sock)
 {
     SOCKET s = (SOCKET)sock;

@@ -81,7 +81,8 @@ A new Puddle with nothing to bring in starts with one profile, `default`, named 
   (`/api/v1/streams/request`) or accepting one (`/api/v1/streams/{user}/accept`).
 - `group:<group id>`: what the members of that group see. Chosen with `POST /api/v1/groups/{group}/profile`, or with
   `"profile"` when creating the group (`/api/v1/groups/create`) or joining it (`/api/v1/groups/{group}/accept`).
-- `pond:<id>`: later.
+- `pond:<pond id>`: what the members of that Pond see. Chosen with `"profile"` when joining (`/api/v1/ponds/join`), or
+  with `POST /api/v1/ponds/{pond}/profile`. Pictures are left out: a Pond has no way to fetch them (docs/ponds.md).
 
 `{"profile": null}` takes a choice back: the place sees nothing of the owner there any more, and is told so. Deleting a
 profile does the same for every place that showed it. If a chosen profile's file goes missing, its places see nothing.
@@ -145,4 +146,4 @@ In code: `puddle::Profile` (`src/objects/profile.hpp`). `Profile::get(ctx, "work
 
 The app's screens for making and editing profiles (sending a request, accepting one and joining a group already ask
 "Appear as"); reloading hand-edited files while running and resizing pictures
-(docs/discuss-later.md, 1 and 2); and Ponds.
+(docs/discuss-later.md, 1 and 2); and pictures in a Pond.

@@ -218,6 +218,11 @@ int puddle_sock_poll(const puddle_sock *socks, int n, int timeout_ms, int *ready
     return rc;
 }
 
+void puddle_sock_cut(puddle_sock s)
+{
+    shutdown((int)s, SHUT_RDWR);
+}
+
 void puddle_sock_finish(puddle_sock s)
 {
     int fd = (int)s;

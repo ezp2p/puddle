@@ -79,6 +79,16 @@ int main(void)
     CHECK(puddle_link_parse(NULL, &l, e, sizeof e) == -1);
     CHECK(puddle_link_parse("1.2.3.4:1", &l, NULL, 0) == 0);
 
+    /* a Pond invite: pond:// and an invite, both needed; and never taken for a Puddle address */
+    CHECK(puddle_pond_link_parse("pond://pond.example.org?invite=abcdefghijklmnopqrstuvwxyz", &l, e, sizeof e) == 0 &&
+          !strcmp(l.address.address, "pond.example.org:443") && !strcmp(l.invite, "abcdefghijklmnopqrstuvwxyz"));
+    CHECK(puddle_pond_link_parse("pond://[::1]:8900?invite=abcdefghijklmnopqrstuvwxyz", &l, e, sizeof e) == 0 && l.address.port == 8900);
+    CHECK(puddle_pond_link_parse("pond://pond.example.org", &l, e, sizeof e) == -1 && strstr(e, "no invite"));
+    CHECK(puddle_pond_link_parse("pond.example.org?invite=abcdefghijklmnopqrstuvwxyz", &l, e, sizeof e) == -1);
+    CHECK(puddle_pond_link_parse("puddle://pond.example.org?invite=abcdefghijklmnopqrstuvwxyz", &l, e, sizeof e) == -1);
+    CHECK(puddle_pond_link_parse("pond://pond.example.org/x?invite=abcdefghijklmnopqrstuvwxyz", &l, e, sizeof e) == -1);
+    CHECK(puddle_link_parse("pond://pond.example.org?invite=abcdefghijklmnopqrstuvwxyz", &l, e, sizeof e) == -1 && strstr(e, "Pond"));
+
     /* an over-long hostname label or name */
     char host[400], text[600];
     memset(host, 'a', 64); host[64] = 0;

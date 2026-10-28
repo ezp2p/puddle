@@ -46,6 +46,14 @@ static int param_ok(const char *type, size_t tl, const char *v, size_t vl)
                 return 0;
         return 1;
     }
+    if (tl == 3 && !memcmp(type, "num", 3)) { /* a number from 1: digits, no leading zero, up to 18 of them */
+        if (vl > 18 || tmp[0] == '0')
+            return 0;
+        for (size_t i = 0; i < vl; i++)
+            if (tmp[i] < '0' || tmp[i] > '9')
+                return 0;
+        return 1;
+    }
     if (tl == 5 && !memcmp(type, "token", 5)) {
         if (vl > 64)
             return 0;
@@ -354,8 +362,12 @@ run:
     }
     if (blob.data) { /* a file: headers here, the bytes sent after them */
         *status = st;
+        /* JSON built for this answer (too big for `out`) changes from one asking to the next; anything else is named by its hash */
+        int fixed = strcmp(blob.mime, "application/json") != 0;
         size_t hl = puddle_http_head(st, blob.mime[0] ? blob.mime : "application/octet-stream",
-                                     "Cache-Control: private, max-age=31536000, immutable\r\nX-Content-Type-Options: nosniff\r\n", blob.len, out, cap);
+                                     fixed ? "Cache-Control: private, max-age=31536000, immutable\r\nX-Content-Type-Options: nosniff\r\n"
+                                           : "Cache-Control: no-store\r\n",
+                                     blob.len, out, cap);
         if (!hl) {
             free(blob.data);
             *status = 500;

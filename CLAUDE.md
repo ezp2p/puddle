@@ -15,7 +15,8 @@ Use these terms the way the owner does, in code, docs and conversation.
   owner has several (work, friends, family) and chooses which one each place sees: a DM, a group, later a
   Pond. Nothing is shown where none was chosen. One YAML file each in the data folder (`docs/profiles.md`).
 - **Pond**: a Discord-style community server (channels, many members). Runs as its own daemon on
-  a different code base; it is not a Puddle. Puddles connect to Ponds. Not designed yet.
+  a different code base (`../pond`, MariaDB); it is not a Puddle. A Puddle joins one with a `pond://` invite and follows it
+  (`docs/ponds.md`); the app talks only to its own Puddle. Text channels only so far.
 - **Levee**: a relay a Puddle can sit behind (`docs/levee.md`, a design draft). It runs on a server with a public
   address; the Puddle connects out to it, needs no open ports, and sends and receives everything through it. It holds
   what arrives while the Puddle is offline, and decrypts and signs nothing. Not a normal user service: a headless daemon
@@ -23,8 +24,7 @@ Use these terms the way the owner does, in code, docs and conversation.
 - **Stream**: a connection between two Puddles. (Older docs call this federation or
   server-to-server traffic.)
 
-Puddles talk privately to one another (a peer-to-peer chat client); Ponds are public gathering places. In the window, the rail of servers is for Ponds, which
-are not built yet.
+Puddles talk privately to one another (a peer-to-peer chat client); Ponds are public gathering places. In the window, the rail of servers is for Ponds.
 
 When `api/*.yaml` or `docs/*.md` use these words, they mean the above. If a term is ambiguous
 or looks like it conflicts with this list, ask rather than guess.
@@ -53,6 +53,7 @@ or looks like it conflicts with this list, ask rather than guess.
 - `src/gui/`: `Puddle`, the desktop app (Qt Quick): `app/` is the C++ behind the window, `qml/` the screens by topic, `qml/theme/Theme.qml` every colour and size; see `src/gui/README.md`
 - `api/openapi.yaml`: API for phone clients and the desktop app. `api/federation.yaml`: streams.
 - `docs/storage.md`, `docs/identity.md`, `docs/profiles.md`, `docs/streams.md`: design drafts the code follows
+- `docs/ponds.md`: being a member of Ponds (joining, following one's events, what is kept, the owner routes)
 - `docs/levee.md`: the design draft for Levee (not built; open questions at its end)
 - `docs/roadmap.md`: the step-by-step plan for keys and streams; work through it in order, one step at a time
 - `docs/discuss-later.md`: open questions parked on purpose; don't raise them unprompted

@@ -27,6 +27,9 @@
 #include "federation/courier.h"
 #include "api/api.h"
 #include "federation/sender.h"
+#include "core/ponds.h"
+#include "federation/ponds.h"
+#include "wire/wireprofile.h"
 
 #include <errno.h>
 #include <chrono>
@@ -68,6 +71,7 @@ struct puddle_server {
     puddle_outbox *outbox;
     puddle_files *files;
     puddle_transfers *transfers;
+    puddle_ponds *ponds;
     puddle_outbox_hooks fetch_hooks; /* how downloads reach other Puddles: as the outbox does */
     puddle_bucket *anon_bucket;
     puddle_keyed *access_limit;
@@ -249,6 +253,9 @@ puddle_server *puddle_server_create(const puddle_config *cfg, char *err, size_t 
         if (!s->transfers)
             goto fail;
     }
+    s->ponds = puddle_ponds_open(cfg->data_dir, puddle_profile_wire_clean, err, errlen);
+    if (!s->ponds)
+        goto fail;
     /* checking a stranger's key chain costs signatures: 50 a second on average, 100 in a burst. A requester
      * may ask five times an hour. */
     s->anon_bucket = puddle_bucket_new(50, 100);
@@ -263,7 +270,7 @@ puddle_server *puddle_server_create(const puddle_config *cfg, char *err, size_t 
         goto fail;
     }
     s->ctx = (puddle_ctx){ .config = &s->cfg, .identity = s->identity, .store = s->store, .profiles = s->profiles,
-                           .assignments = s->assignments, .streams = s->streams, .people = s->people, .conversations = s->conversations, .groups = s->groups, .outbox = s->outbox, .files = s->files, .transfers = s->transfers, .replay = s->replay,
+                           .assignments = s->assignments, .streams = s->streams, .people = s->people, .conversations = s->conversations, .groups = s->groups, .outbox = s->outbox, .files = s->files, .transfers = s->transfers, .ponds = s->ponds, .replay = s->replay,
                            .anon_bucket = s->anon_bucket, .access_limit = s->access_limit, .roll_slot = s->roll_slot,
                            .peer_key = puddle_streams_peer_key, .peer_key_user = s->streams, .courier = &puddle_federation_courier };
     s->router = (puddle_router){ .ctx = &s->ctx };
@@ -367,6 +374,8 @@ void puddle_server_destroy(puddle_server *s)
     SSL_CTX_free(s->tls);
     puddle_replay_free(s->replay);
     puddle_roll_slot_free(s->roll_slot);
+    puddle_pond_followers_stop(s->ctx.pond_followers); /* if it ran and was not stopped */
+    puddle_ponds_close(s->ponds);
     puddle_transfers_close(s->transfers); /* stops its worker, which uses the streams and the files */
     puddle_outbox_close(s->outbox); /* stops its worker before what the worker uses goes away */
     puddle_streams_close(s->streams);
@@ -485,6 +494,7 @@ int puddle_server_run(puddle_server *s)
     puddle_group_reconcile(&s->ctx); /* connect to group members we are not yet connected to */
     if (puddle_outbox_start(s->outbox) != 0)
         puddle_log(PUDDLE_LOG_WARN, "cannot start the outbox; nothing will be sent to other Puddles");
+    s->ctx.pond_followers = puddle_pond_followers_start(&s->ctx);
 
     for (;;) {
         puddle_sock socks[2] = { s->listener, s->stop.read_end };
@@ -564,6 +574,8 @@ int puddle_server_run(puddle_server *s)
     while (s->active > 0)
         wait_on(s->drained, s->mu);
     s->mu.unlock();
+    puddle_pond_followers_stop(s->ctx.pond_followers); /* ends their requests that are waiting on the Ponds */
+    s->ctx.pond_followers = NULL;
 
     puddle_log(PUDDLE_LOG_INFO, "stopped");
     return rc;

@@ -1,7 +1,7 @@
 $schema: https://json-schema.org/draft/2020-12/schema
 title: Profile
 description: |
-  How a person appears in one place: directly to someone, or in a group (Ponds later). The owner keeps several, each a
+  How a person appears in one place: directly to someone, in a group, or in a Pond. The owner keeps several, each a
   file in the data folder (docs/profiles.md), and chooses one per place; it is sent only there (federation
   POST /stream/v1/profile, and with a request for a stream and its answer). A receiver rebuilds it from the fields it
   understands, leaves out what is wrong with a note, and shows it to its owner as is (objects/received_profile.yaml).

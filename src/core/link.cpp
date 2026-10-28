@@ -174,9 +174,11 @@ int puddle_address_parse(const char *text, puddle_address *out)
     return 0;
 }
 
-int puddle_link_parse(const char *text, puddle_link *out, char *err, size_t errlen)
+/* A Puddle address (`pond` 0: "puddle://" may be left off) or a Pond invite (`pond` 1: "pond://" and an invite, both needed). */
+static int parse_link(const char *text, int pond, puddle_link *out, char *err, size_t errlen)
 {
-    static const char SCHEME[] = "puddle://";
+    const char *SCHEME = pond ? "pond://" : "puddle://";
+    size_t scheme_len = strlen(SCHEME);
     if (!text || strlen(text) > 400) {
         seterr(err, errlen, "that is not an address");
         return -1;
@@ -187,9 +189,15 @@ int puddle_link_parse(const char *text, puddle_link *out, char *err, size_t errl
             return -1;
         }
     const char *a = text;
-    if (strncmp(a, SCHEME, sizeof SCHEME - 1) == 0)
-        a += sizeof SCHEME - 1;
-    else if (strstr(a, "://")) {
+    if (strncmp(a, SCHEME, scheme_len) == 0) {
+        a += scheme_len;
+    } else if (pond) {
+        seterr(err, errlen, "that is not a Pond invite; it starts pond://");
+        return -1;
+    } else if (strncmp(a, "pond://", 7) == 0) {
+        seterr(err, errlen, "that is a Pond invite: join it with the + under the Ponds");
+        return -1;
+    } else if (strstr(a, "://")) {
         seterr(err, errlen, "that is not a Puddle address");
         return -1;
     }
@@ -233,8 +241,22 @@ int puddle_link_parse(const char *text, puddle_link *out, char *err, size_t errl
             return -1;
         }
     }
+    if (pond && !l.invite[0]) {
+        seterr(err, errlen, "that Pond link has no invite in it");
+        return -1;
+    }
     *out = l;
     return 0;
+}
+
+int puddle_link_parse(const char *text, puddle_link *out, char *err, size_t errlen)
+{
+    return parse_link(text, 0, out, err, errlen);
+}
+
+int puddle_pond_link_parse(const char *text, puddle_link *out, char *err, size_t errlen)
+{
+    return parse_link(text, 1, out, err, errlen);
 }
 
 int puddle_link_format(const char *address, const char *invite, char *out, size_t cap)

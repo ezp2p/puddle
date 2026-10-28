@@ -92,6 +92,7 @@ add_library(puddle_core STATIC
   src/core/outbox.cpp
   src/core/people.cpp
   src/core/phrase.cpp
+  src/core/ponds.cpp
   src/core/profile.cpp
   src/core/ratelimit.cpp
   src/core/streams.cpp
@@ -141,6 +142,7 @@ add_library(puddle_api STATIC
   src/api/conversations.cpp
   src/api/files.cpp
   src/api/groups.cpp
+  src/api/ponds.cpp
   src/api/profiles.cpp
   src/api/request.cpp
   src/api/routes.cpp
@@ -159,6 +161,7 @@ add_library(puddle_federation STATIC
   src/federation/inbound.cpp
   src/federation/keysync.cpp
   src/federation/messages.cpp
+  src/federation/ponds.cpp
   src/federation/profiles_api.cpp
   src/federation/sender.cpp)
 target_link_libraries(puddle_federation PUBLIC puddle_wire puddle_events puddle_http)
@@ -193,6 +196,8 @@ if(PUDDLE_BUILD_GUI)
       src/gui/app/apiclient.h
       src/gui/app/jsonlistmodel.cpp
       src/gui/app/jsonlistmodel.h
+      src/gui/app/ponds.cpp
+      src/gui/app/ponds.h
       src/gui/app/composer.cpp
       src/gui/app/composer.h)
     file(GLOB PUDDLE_ICONS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} CONFIGURE_DEPENDS src/gui/assets/icons/tabler/*.svg)
@@ -209,8 +214,12 @@ if(PUDDLE_BUILD_GUI)
         src/gui/qml/shell/SidebarRow.qml
         src/gui/qml/shell/HomePage.qml
         src/gui/qml/shell/ContextBar.qml
+        src/gui/qml/shell/PondSidebar.qml
+        src/gui/qml/shell/PondMembers.qml
         src/gui/qml/dialogs/NewConversationDialog.qml
+        src/gui/qml/dialogs/JoinPondDialog.qml
         src/gui/qml/chat/ChatPage.qml
+        src/gui/qml/chat/PondPage.qml
         src/gui/qml/chat/MessageFiles.qml
         src/gui/qml/chat/MediaViewer.qml
         src/gui/qml/settings/PersonRow.qml
@@ -257,7 +266,7 @@ if(PUDDLE_BUILD_GUI)
 
     # The first-run state machine, against the real core, with no window (needs the offscreen platform).
     add_executable(backend_test tests/backend_test.cpp src/gui/app/backend.cpp src/gui/app/backend.h src/gui/app/chats.cpp src/gui/app/chats.h
-      src/gui/app/apiclient.cpp src/gui/app/apiclient.h src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h)
+      src/gui/app/apiclient.cpp src/gui/app/apiclient.h src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h)
     target_include_directories(backend_test PRIVATE src/gui/app)
     target_link_libraries(backend_test PRIVATE puddle_service Qt6::Gui Qt6::Network)
     if(APPLE)
@@ -268,14 +277,14 @@ if(PUDDLE_BUILD_GUI)
 
     # The app's view of a Puddle (owner API over pinned TLS), against two real Puddles talking to each other.
     add_executable(chats_test tests/chats_test.cpp src/gui/app/chats.cpp src/gui/app/chats.h src/gui/app/apiclient.cpp src/gui/app/apiclient.h
-      src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h)
+      src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h)
     set_target_properties(chats_test PROPERTIES AUTOMOC ON)
     target_link_libraries(chats_test PRIVATE puddle_service Qt6::Core Qt6::Gui Qt6::Network Qt6::Test)
     add_test(NAME chats COMMAND chats_test)
 
     # The window, driven with real mouse and key events against two real Puddles.
     add_executable(ui_test tests/ui_test.cpp src/gui/app/backend.cpp src/gui/app/backend.h src/gui/app/chats.cpp src/gui/app/chats.h
-      src/gui/app/apiclient.cpp src/gui/app/apiclient.h src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/composer.cpp src/gui/app/composer.h)
+      src/gui/app/apiclient.cpp src/gui/app/apiclient.h src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h src/gui/app/composer.cpp src/gui/app/composer.h)
     set_target_properties(ui_test PROPERTIES AUTOMOC ON)
     target_include_directories(ui_test PRIVATE src/gui/app)
     target_compile_definitions(ui_test PRIVATE PUDDLE_GUI_DIR="${CMAKE_SOURCE_DIR}/src/gui/qml")
@@ -294,6 +303,9 @@ if(PUDDLE_BUILD_GUI)
 endif()
 
 # --- tests --------------------------------------------------------------------
+# A project that builds on these layers (a Pond, from ../pond) turns them off.
+option(PUDDLE_BUILD_TESTS "Build the tests" ${PROJECT_IS_TOP_LEVEL})
+if(PUDDLE_BUILD_TESTS)
 enable_testing()
 # Each layer of src/ includes only the layers it may (tests/layers.cmake).
 add_test(NAME layers COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_CURRENT_SOURCE_DIR}/src -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/layers.cmake)
@@ -305,5 +317,6 @@ foreach(t http json store storage files transfers people conversations config ya
   # fill new and freed heap memory with garbage, so reading memory nobody wrote shows up as a failure
   set_tests_properties(${t} PROPERTIES ENVIRONMENT "MallocScribble=1;MALLOC_PERTURB_=165")
 endforeach()
+endif()
 
 install(FILES dist/puddled.service DESTINATION share/puddle)
