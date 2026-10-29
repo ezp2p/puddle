@@ -209,7 +209,7 @@ Pane {
                             RowLayout {
                                 visible: !msg.grouped
                                 spacing: 8
-                                Label { text: msg.model.name || ""; font.bold: true; color: msg.model.tint !== "" && !msg.model.mine ? msg.model.tint : palette.text }
+                                Label { text: msg.model.name || ""; font.bold: true; color: msg.model.tint && !msg.model.mine ? msg.model.tint : palette.text }
                                 Label { text: page.dayLabel(msg.model.ts); font.pixelSize: 11; opacity: 0.55 }
                             }
                             TextEdit {
