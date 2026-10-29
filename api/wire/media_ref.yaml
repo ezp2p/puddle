@@ -1,0 +1,10 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: MediaRef
+description: An image, fetched by hash (owner API /api/v1/media, stream API /stream/v1/media)
+type: object
+required: [hash, mime, size]
+additionalProperties: false
+properties:
+  hash: { type: string, pattern: "^[0-9a-f]{64}$" }
+  mime: { type: string, enum: [image/png, image/jpeg, image/gif, image/webp] }
+  size: { type: integer, format: int64 }

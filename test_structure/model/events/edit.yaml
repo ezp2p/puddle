@@ -1,0 +1,17 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: EditEvent
+description: New text for an earlier message.
+allOf:
+  - $ref: "header.yaml"
+  - type: object
+    required: [type, ref, body]
+    properties:
+      type: { const: "edit" }
+      ref: { $ref: "../wire/ids.yaml#/$defs/EventId", description: The message being edited }
+      body: { type: string, minLength: 1, maxLength: 4000 }
+unevaluatedProperties: false
+x-sent-by: the author of the message it edits
+x-rules:
+  - Counts only if by the message's author and later than the message
+  - The latest counting edit is the text
+  - A redaction of the same message wins over any edit

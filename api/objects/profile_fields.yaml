@@ -1,0 +1,32 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: ProfileFields
+description: |
+  The fields of one of the owner's profiles, as the owner gives them (POST /api/v1/profiles/create and .../edit). Text
+  is cleaned (no control characters, no direction overrides) and must keep to its limit; anything else is a 400 that
+  says what is wrong. In an edit, a field given as null is cleared and a field left out is kept.
+type: object
+properties:
+  display_name: { type: string, minLength: 1, maxLength: 64 }
+  blurb: { type: [string, "null"], maxLength: 160, description: The short bio }
+  about: { type: [string, "null"], maxLength: 2000, description: The long bio; may span lines }
+  pronouns: { type: [string, "null"], maxLength: 32 }
+  color:
+    description: "The colour of their name: \"#rrggbb\", or a gradient"
+    oneOf:
+      - { type: string, pattern: "^#[0-9a-fA-F]{6}$" }
+      - $ref: "../wire/color.yaml"
+      - { type: "null" }
+  avatar: { $ref: "#/$defs/Picture" }
+  banner: { $ref: "#/$defs/Picture" }
+  background: { $ref: "#/$defs/Picture" }
+  links:
+    type: [array, "null"]
+    maxItems: 10
+    items: { $ref: "../wire/profile.yaml#/$defs/Link" }
+$defs:
+  Picture:
+    description: The hash of a picture uploaded with POST /api/v1/media/upload
+    oneOf:
+      - { type: string, pattern: "^[0-9a-f]{64}$" }
+      - { type: object, required: [hash], properties: { hash: { type: string, pattern: "^[0-9a-f]{64}$" } } }
+      - { type: "null" }

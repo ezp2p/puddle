@@ -1,0 +1,17 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: SelfUser
+description: The owner. GET /api/v1/users/me.
+type: object
+required: [id, profile, link]
+properties:
+  id: { $ref: "../wire/ids.yaml#/$defs/UserId" }
+  profile:
+    $ref: "own_profile.yaml"
+    description: The default profile
+  link:
+    type: [string, "null"]
+    description: The address to give people so they can ask for a stream; null when it isn't known (no `advertise:` in the config)
+x-source:
+  writer: "src/core/routes.c get_me (GET /api/v1/me)"
+  built-from: "puddle_identity_id; puddle_profiles items[0]; puddle_make_link"
+  today: "The same fields, at /api/v1/me."

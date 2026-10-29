@@ -1,0 +1,16 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: Page
+description: |
+  How every list comes back: one page of items and where the next starts. A route says what `items` holds.
+  Messages come newest page first, each page oldest first, so `next` goes back in time. Other lists go newest first.
+type: object
+required: [items, next]
+properties:
+  items: { type: array }
+  next:
+    type: [integer, "null"]
+    minimum: 0
+    description: "The offset to ask for next (`?offset=`), or null at the end. A page can be cut short when items are large."
+x-source:
+  writer: "Every list handler: list_streams, list_conversations, list_groups, list_blocks, the messages list, each with `limit` and `offset`"
+  today: "The items' key is named after the list (`streams`, `conversations`, `groups`, `blocks`, `messages`, `notices`), not `items`. The old spec said messages page with `before`; the code has always used `offset`."

@@ -1,0 +1,10 @@
+[Unit]
+Description=Puddle service
+After=network.target
+
+[Service]
+ExecStart=%h/.local/bin/puddled
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

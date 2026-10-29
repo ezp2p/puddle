@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="Puddle">
+  <defs>
+    <linearGradient id="puddle-gradient" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1ee88c"/>
+      <stop offset="1" stop-color="#05a3ff"/>
+    </linearGradient>
+  </defs>
+  <path d="M64 10 C64 10 23 55 23 82 A41 41 0 0 0 105 82 C105 55 64 10 64 10 Z"
+        fill="none" stroke="url(#puddle-gradient)" stroke-width="9" stroke-linejoin="round" stroke-linecap="round"/>
+</svg>

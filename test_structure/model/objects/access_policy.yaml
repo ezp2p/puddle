@@ -1,0 +1,12 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: AccessPolicy
+description: "Who may ask for a stream: `manual` (default) waits for the owner, `open` accepts at once, `closed` ignores strangers silently"
+type: object
+required: [access]
+properties:
+  access: { type: string, enum: [open, manual, closed] }
+x-source:
+  struct: "src/core/streams.h puddle_access"
+  writer: "src/core/owner_streams.c get_policy"
+  stored: "state/access-policy"
+  today: "The same."
