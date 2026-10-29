@@ -27,6 +27,8 @@ extern "C" {
 
 #define PUDDLE_POND_CACHE 200  /* messages kept per channel */
 #define PUDDLE_POND_TEXT_MAX 4000
+#define PUDDLE_POND_FILES_MAX 10   /* files a message carries */
+#define PUDDLE_POND_FILE_ID_LEN 64 /* hex, the same id a file has in a Puddle (storage/files.h) */
 
 typedef struct puddle_ponds puddle_ponds;
 
@@ -87,6 +89,28 @@ int puddle_ponds_remove(puddle_ponds *p, const char *id);
 /* A number that changes whenever anything kept here does: the app polls it to know when to look again. */
 uint64_t puddle_ponds_version(puddle_ponds *p);
 
+/* ---- files (docs/ponds.md, "Files") ---- */
+
+/* The largest file the Pond takes, as its /info says: 0 if it has turned files off, -1 if it says nothing (it takes none). */
+int64_t puddle_ponds_files_max(puddle_ponds *p, const char *id);
+
+/* Every file the kept messages carry, newest message first: `fn` per file until it returns nonzero. 0, or -1 no such Pond. */
+typedef int (*puddle_pond_file_fn)(void *user, int64_t channel, int64_t message, const char *file, int64_t size);
+int puddle_ponds_files(puddle_ponds *p, const char *id, puddle_pond_file_fn fn, void *user);
+
+/* Does kept message `message` of `channel` carry `file`? 0 with its size, 1 not kept or not carried, -1 no such channel. */
+int puddle_ponds_message_file(puddle_ponds *p, const char *id, int64_t channel, int64_t message, const char *file, int64_t *size);
+
+/* Something the owner sees of the Pond changed outside what is kept here (a file arrived): the version moves on. */
+void puddle_ponds_touch(puddle_ponds *p, const char *id);
+
+/* How a message's files are written for the owner: one file (`json`, as kept) to `w`. The owner's routes say what is here of
+ * each (objects/file.hpp); NULL writes them as kept. */
+typedef struct {
+    void (*write)(void *user, puddle_jw *w, int64_t channel, int64_t message, const char *json, size_t len);
+    void *user;
+} puddle_pond_file_writer;
+
 /* ---- for the owner's routes (openapi.yaml, "ponds") ---- */
 
 /* [{id, name, description, address, status, channels: [...]}] */
@@ -97,9 +121,10 @@ int puddle_ponds_write_one(puddle_ponds *p, const char *id, puddle_jw *w);
 int puddle_ponds_has_channel(puddle_ponds *p, const char *id, int64_t channel);
 /* Up to `limit` messages of `channel` before `before` (0 = the newest), oldest first, as {"items": [...], "more": bool}, if what
  * is kept can answer: 0. 1 if the Pond must be asked (older than what is kept); -1 no such Pond or channel. */
-int puddle_ponds_write_messages(puddle_ponds *p, const char *id, int64_t channel, int64_t before, int limit, puddle_jw *w);
+int puddle_ponds_write_messages(puddle_ponds *p, const char *id, int64_t channel, int64_t before, int limit, puddle_jw *w,
+                                const puddle_pond_file_writer *files);
 /* Write a page of history as the Pond gave it (newest first) in the same shape, oldest first. 0 or -1 if malformed. */
-int puddle_ponds_write_page(const char *json, size_t len, int asked, puddle_jw *w);
+int puddle_ponds_write_page(const char *json, size_t len, int asked, puddle_jw *w, const puddle_pond_file_writer *files);
 
 #ifdef __cplusplus
 }

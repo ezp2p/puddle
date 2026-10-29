@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include <algorithm>
+#include <cctype>
 #include <deque>
 #include <map>
 #include <mutex>
@@ -30,6 +31,7 @@ namespace {
 struct Msg {
     int64_t id = 0, ts = 0;
     std::string author, text;
+    std::string files; /* the cleaned "files" array, or "" for none */
 };
 
 struct Channel {
@@ -49,6 +51,7 @@ struct Pond {
     std::string id, address, tls_fp, name, description, status = "connecting";
     int64_t cursor = 0, joined = 0;
     int64_t protocol = 1;              /* what /info says it speaks (the Pond's docs/design.md, "Versions") */
+    int64_t files_max = -1;            /* the largest file it takes; 0 turned off, -1 it does not say (a Pond without files) */
     std::vector<std::string> features;
     std::string me;
     std::vector<Channel> channels;
@@ -110,12 +113,79 @@ static bool parse_channel(puddle_span v, Channel &c)
            get_text(v, "topic", TOPIC_MAX_CHARS, 0, c.topic) && get_int(v, "position", &c.position);
 }
 
+/* One file of a message, as the Pond says it (the Pond's docs/design.md, "Files"), written cleaned to `w`: false if it breaks a
+ * rule (then the message's files are left out, and its words kept). */
+static bool clean_file(puddle_span v, puddle_jw *w)
+{
+    std::string id, name, mime, preview;
+    int64_t size, n;
+    if (!get_text(v, "id", PUDDLE_POND_FILE_ID_LEN, 0, id) || id.size() != PUDDLE_POND_FILE_ID_LEN ||
+        !std::all_of(id.begin(), id.end(), [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); }) ||
+        !get_text(v, "name", 255, 0, name) || name.empty() || name.size() > 255 || name.find_first_of("/\\") != std::string::npos ||
+        name == "." || name == ".." || !get_int(v, "size", &size) || size < 1 || !get_text(v, "mime", 127, 0, mime))
+        return false;
+    if (mime.empty() || mime.find('/') == std::string::npos ||
+        !std::all_of(mime.begin(), mime.end(), [](char c) { return isalnum((unsigned char)c) || strchr("/!#$&^_.+-", c); }))
+        mime = "application/octet-stream";
+    puddle_jw_object(w);
+    puddle_jw_str(w, "id", id.c_str());
+    puddle_jw_str(w, "name", name.c_str());
+    puddle_jw_str(w, "mime", mime.c_str());
+    puddle_jw_num(w, "size", size);
+    int64_t fw, fh;
+    if (get_int(v, "w", &fw) && get_int(v, "h", &fh) && fw > 0 && fh > 0 && fw <= 100000 && fh <= 100000) {
+        puddle_jw_num(w, "w", fw);
+        puddle_jw_num(w, "h", fh);
+    }
+    if (get_int(v, "duration_ms", &n) && n > 0)
+        puddle_jw_num(w, "duration_ms", n);
+    if (get_text(v, "preview", 1400, 0, preview) && !preview.empty() &&
+        std::all_of(preview.begin(), preview.end(), [](char c) { return isalnum((unsigned char)c) || c == '+' || c == '/' || c == '='; }))
+        puddle_jw_str(w, "preview", preview.c_str());
+    puddle_jw_end_object(w);
+    return true;
+}
+
+/* A message's "files" cleaned into `out` ("" if it has none, or they break the rules). */
+static void clean_files(puddle_span v, std::string &out)
+{
+    puddle_span arr, item;
+    out.clear();
+    if (!member(v, "files", &arr) || arr.len > 64 * 1024)
+        return;
+    char buf[32 * 1024];
+    puddle_jw w;
+    puddle_jw_init(&w, buf, sizeof buf);
+    puddle_jw_array(&w);
+    size_t cur = 0, n = 0;
+    int r;
+    while ((r = puddle_json_array_next(arr, &cur, &item)) == 1) {
+        if (++n > PUDDLE_POND_FILES_MAX || !clean_file(item, &w))
+            return;
+    }
+    puddle_jw_end_array(&w);
+    size_t len = puddle_jw_finish(&w);
+    if (r == 0 && n > 0 && len)
+        out.assign(buf, len);
+}
+
 static bool parse_message(puddle_span v, Msg &m, int64_t *channel)
 {
     std::string author;
-    return get_int(v, "id", &m.id) && m.id > 0 && get_int(v, "channel", channel) && get_text(v, "author", PUDDLE_USER_ID_LEN, 0, author) &&
-           puddle_id_valid(author.c_str()) && get_text(v, "text", PUDDLE_POND_TEXT_MAX, 1, m.text) && get_int(v, "ts", &m.ts) &&
-           (m.author = author, true);
+    if (!(get_int(v, "id", &m.id) && m.id > 0 && get_int(v, "channel", channel) && get_text(v, "author", PUDDLE_USER_ID_LEN, 0, author) &&
+          puddle_id_valid(author.c_str()) && get_text(v, "text", PUDDLE_POND_TEXT_MAX, 1, m.text) && get_int(v, "ts", &m.ts)))
+        return false;
+    m.author = author;
+    clean_files(v, m.files);
+    return true;
+}
+
+/* The pond's "files": {max_size} (a Pond that says nothing of files takes none). */
+static void parse_files_max(puddle_span pond, Pond &pd)
+{
+    puddle_span f;
+    if (!member(pond, "files", &f) || !get_int(f, "max_size", &pd.files_max) || pd.files_max < 0)
+        pd.files_max = -1;
 }
 
 /* {"id", "profile", "joined"}: the profile is cleaned, or dropped if it can't be. */
@@ -167,6 +237,7 @@ static bool parse_info(puddle_ponds *p, const char *json, size_t len, Pond &pd, 
         return false;
     pd.id = id;
     parse_protocol(all, pd);
+    parse_files_max(pond, pd);
     size_t cur = 0;
     int r;
     while ((r = puddle_json_array_next(chans, &cur, &item)) == 1) {
@@ -237,7 +308,8 @@ static void write_channel(puddle_jw *w, const Channel &c)
     puddle_jw_end_object(w);
 }
 
-static void write_message(puddle_jw *w, int64_t channel, const Msg &m)
+/* With `files`, each of the message's files is written by it (the owner's routes add what is here of each); without, as kept. */
+static void write_message(puddle_jw *w, int64_t channel, const Msg &m, const puddle_pond_file_writer *files = nullptr)
 {
     puddle_jw_object(w);
     puddle_jw_num(w, "id", m.id);
@@ -245,6 +317,19 @@ static void write_message(puddle_jw *w, int64_t channel, const Msg &m)
     puddle_jw_str(w, "author", m.author.c_str());
     puddle_jw_str(w, "text", m.text.c_str());
     puddle_jw_num(w, "ts", m.ts);
+    if (!m.files.empty()) {
+        puddle_jw_key(w, "files");
+        if (!files) {
+            puddle_jw_raw(w, m.files.c_str(), m.files.size());
+        } else {
+            puddle_span arr = {m.files.data(), m.files.size()}, item;
+            size_t cur = 0;
+            puddle_jw_array(w);
+            while (puddle_json_array_next(arr, &cur, &item) == 1)
+                files->write(files->user, w, channel, m.id, item.p, item.len);
+            puddle_jw_end_array(w);
+        }
+    }
     puddle_jw_end_object(w);
 }
 
@@ -305,6 +390,16 @@ static void write_protocol(puddle_jw *w, const Pond &pd)
     puddle_jw_end_array(w);
 }
 
+static void write_files_max(puddle_jw *w, const Pond &pd)
+{
+    if (pd.files_max < 0)
+        return;
+    puddle_jw_key(w, "files");
+    puddle_jw_object(w);
+    puddle_jw_num(w, "max_size", pd.files_max);
+    puddle_jw_end_object(w);
+}
+
 /* pond.json: the Info shape, with what only we know of it. */
 static void save_pond(puddle_ponds *p, const Pond &pd)
 {
@@ -315,6 +410,7 @@ static void save_pond(puddle_ponds *p, const Pond &pd)
         puddle_jw_str(w, "id", pd.id.c_str());
         puddle_jw_str(w, "name", pd.name.c_str());
         puddle_jw_str(w, "description", pd.description.c_str());
+        write_files_max(w, pd);
         puddle_jw_end_object(w);
         puddle_jw_key(w, "me");
         auto me = pd.members.find(pd.me);
@@ -359,7 +455,7 @@ static void save_channel(puddle_ponds *p, const Pond &pd, const Channel &c)
 {
     std::string data;
     for (auto &m : c.recent)
-        data += build(m.text.size() * 2 + 256, [&](puddle_jw *w) { write_message(w, c.id, m); }) + "\n";
+        data += build(m.text.size() * 2 + m.files.size() + 256, [&](puddle_jw *w) { write_message(w, c.id, m); }) + "\n";
     save_file(p, pd.id, std::to_string(c.id) + ".jsonl", data);
 }
 
@@ -544,6 +640,7 @@ int puddle_ponds_info(puddle_ponds *p, const char *id, const char *info, size_t 
         puddle_log(PUDDLE_LOG_INFO, "ponds: %s now speaks protocol %lld", pd.id.c_str(), (long long)fresh.protocol);
     pd.protocol = fresh.protocol;
     pd.features = std::move(fresh.features);
+    pd.files_max = fresh.files_max;
     if (reset) /* otherwise the events since our cursor are still to come, and say what changed */
         pd.cursor = fresh.cursor;
     pd.channels = std::move(channels);
@@ -718,6 +815,7 @@ int puddle_ponds_events(puddle_ponds *p, const char *id, const char *json, size_
         } else if (kind == "pond") {
             get_text(data, "name", NAME_MAX_CHARS, 0, pd.name);
             get_text(data, "description", DESCRIPTION_MAX_CHARS, 1, pd.description);
+            parse_files_max(data, pd);
             pond_changed = true;
         }
     }
@@ -803,6 +901,7 @@ static void write_summary(puddle_jw *w, const Pond &pd)
     puddle_jw_str(w, "address", puddle_link_format(pd.address.c_str(), NULL, link, sizeof link) == 0 ? link : pd.address.c_str());
     puddle_jw_str(w, "status", pd.status.c_str());
     write_protocol(w, pd);
+    write_files_max(w, pd);
     puddle_jw_key(w, "channels");
     puddle_jw_array(w);
     for (auto &c : pd.channels) {
@@ -862,7 +961,8 @@ int puddle_ponds_has_channel(puddle_ponds *p, const char *id, int64_t channel)
     return it != p->ponds.end() && find_channel(it->second, channel) != nullptr;
 }
 
-int puddle_ponds_write_messages(puddle_ponds *p, const char *id, int64_t channel, int64_t before, int limit, puddle_jw *w)
+int puddle_ponds_write_messages(puddle_ponds *p, const char *id, int64_t channel, int64_t before, int limit, puddle_jw *w,
+                                const puddle_pond_file_writer *files)
 {
     std::lock_guard<std::mutex> g(p->mu);
     auto it = p->ponds.find(id);
@@ -884,14 +984,14 @@ int puddle_ponds_write_messages(puddle_ponds *p, const char *id, int64_t channel
     puddle_jw_key(w, "items");
     puddle_jw_array(w);
     for (size_t i = start; i < end; i++)
-        write_message(w, c->id, c->recent[i]);
+        write_message(w, c->id, c->recent[i], files);
     puddle_jw_end_array(w);
     puddle_jw_flag(w, "more", start > 0 || !reaches_start);
     puddle_jw_end_object(w);
     return 0;
 }
 
-int puddle_ponds_write_page(const char *json, size_t len, int asked, puddle_jw *w)
+int puddle_ponds_write_page(const char *json, size_t len, int asked, puddle_jw *w, const puddle_pond_file_writer *files)
 {
     puddle_span all = {json, len}, arr, item;
     if (!puddle_json_valid_object(json, len) || !member(all, "messages", &arr))
@@ -912,9 +1012,73 @@ int puddle_ponds_write_page(const char *json, size_t len, int asked, puddle_jw *
     puddle_jw_key(w, "items");
     puddle_jw_array(w);
     for (auto m = page.rbegin(); m != page.rend(); ++m)
-        write_message(w, m->first, m->second);
+        write_message(w, m->first, m->second, files);
     puddle_jw_end_array(w);
     puddle_jw_flag(w, "more", (int)page.size() >= asked);
     puddle_jw_end_object(w);
     return 0;
+}
+
+int64_t puddle_ponds_files_max(puddle_ponds *p, const char *id)
+{
+    std::lock_guard<std::mutex> g(p->mu);
+    auto it = p->ponds.find(id);
+    return it == p->ponds.end() ? -1 : it->second.files_max;
+}
+
+int puddle_ponds_files(puddle_ponds *p, const char *id, puddle_pond_file_fn fn, void *user)
+{
+    struct One {
+        int64_t channel, message, size;
+        std::string file;
+    };
+    std::vector<One> all;
+    {
+        std::lock_guard<std::mutex> g(p->mu);
+        auto it = p->ponds.find(id);
+        if (it == p->ponds.end())
+            return -1;
+        for (auto &c : it->second.channels)
+            for (auto &m : c.recent) {
+                puddle_span arr = {m.files.data(), m.files.size()}, item;
+                size_t cur = 0;
+                while (!m.files.empty() && puddle_json_array_next(arr, &cur, &item) == 1) {
+                    One o{c.id, m.id, 0, ""};
+                    get_int(item, "size", &o.size);
+                    get_text(item, "id", PUDDLE_POND_FILE_ID_LEN, 0, o.file);
+                    all.push_back(std::move(o));
+                }
+            }
+    }
+    std::stable_sort(all.begin(), all.end(), [](const One &a, const One &b) { return a.message > b.message; });
+    for (auto &o : all)
+        if (fn(user, o.channel, o.message, o.file.c_str(), o.size) != 0)
+            break;
+    return 0;
+}
+
+int puddle_ponds_message_file(puddle_ponds *p, const char *id, int64_t channel, int64_t message, const char *file, int64_t *size)
+{
+    std::lock_guard<std::mutex> g(p->mu);
+    auto it = p->ponds.find(id);
+    Channel *c = it == p->ponds.end() ? nullptr : find_channel(it->second, channel);
+    if (!c)
+        return -1;
+    for (auto &m : c->recent)
+        if (m.id == message) {
+            puddle_span arr = {m.files.data(), m.files.size()}, item;
+            size_t cur = 0;
+            std::string fid;
+            while (!m.files.empty() && puddle_json_array_next(arr, &cur, &item) == 1)
+                if (get_text(item, "id", PUDDLE_POND_FILE_ID_LEN, 0, fid) && fid == file)
+                    return get_int(item, "size", size) ? 0 : -1;
+        }
+    return 1;
+}
+
+void puddle_ponds_touch(puddle_ponds *p, const char *id)
+{
+    std::lock_guard<std::mutex> g(p->mu);
+    if (p->ponds.count(id))
+        p->version++;
 }

@@ -1,4 +1,3 @@
-import QtCore
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Dialogs
@@ -85,46 +84,14 @@ Pane {
         }
         onSent: caption = ""
     }
-    // ---- the files of messages: saved where the owner says, opened with the system's app ----
-    property var pendingFile: null      // waiting to reach the app's cache, then `pendingAction` is done with it
-    property string pendingAction: ""
-    function whenHere(f, action) {
-        if (chats.fileUrl(f.id, f.name) !== "") doFile(f, action)
-        else { pendingFile = f; pendingAction = action }
-    }
-    function doFile(f, action) {
-        if (action === "save") {
-            saver.file = f
-            saver.selectedFile = StandardPaths.writableUrl(StandardPaths.DownloadLocation) + "/" + encodeURIComponent(f.name)
-            saver.open()
-        } else if (!chats.openFile(f.id, f.name)) {
-            chats.failed(qsTr("%1 could not be opened.").arg(f.name))
-        }
-    }
-    function saveFile(f) { whenHere(f, "save") }
-    function openFile(f) { whenHere(f, "open") }
-    Connections {
-        target: page.chats
-        function onFileReady(id) {
-            if (page.pendingFile && id === page.pendingFile.id) {
-                const f = page.pendingFile
-                page.pendingFile = null
-                page.doFile(f, page.pendingAction)
-            }
-        }
-    }
-    FileDialog {
-        id: saver
-        property var file: null
-        title: qsTr("Save as")
-        fileMode: FileDialog.SaveFile
-        onAccepted: if (file) page.chats.saveFile(file.id, file.name, selectedFile)
-    }
-    MediaViewer {
-        id: mediaViewer
+    // ---- the files of messages: saved where the owner says, opened with the system's app, photos and videos shown here ----
+    FileActions {
+        id: fileActions
         chats: page.chats
-        onSave: f => page.saveFile(f)
+        onFailed: why => page.chats.failed(why)
     }
+    function saveFile(f) { fileActions.save(f) }
+    function openFile(f) { fileActions.open(f) }
 
     FileDialog {
         id: picker
@@ -373,7 +340,7 @@ Pane {
                                 chats: page.chats
                                 files: msg.model.files || []
                                 messageId: msg.model.id
-                                onViewMedia: (list, i) => mediaViewer.show(list, i)
+                                onViewMedia: (list, i) => fileActions.view(list, i)
                                 onSaveFile: f => page.saveFile(f)
                                 onOpenFile: f => page.openFile(f)
                             }
@@ -519,77 +486,13 @@ Pane {
             }
         }
 
-        // the files that go with the next message: a tile each, with its upload once it is going
-        Flow {
-            id: tray
-            objectName: "attachments"
-            visible: composer.count > 0
+        // the files that go with the next message
+        AttachmentTray {
+            composer: composer
             Layout.fillWidth: true
             Layout.leftMargin: 16
             Layout.rightMargin: 16
             Layout.topMargin: 8
-            spacing: 8
-            Repeater {
-                model: composer.items
-                delegate: Rectangle {
-                    id: tile
-                    required property var model
-                    objectName: "attachment"
-                    width: 76; height: 76
-                    radius: Theme.radius
-                    color: Theme.tint(palette.text, 0.08)
-                    border.width: model.state === "failed" ? 2 : 0
-                    border.color: Theme.danger
-                    clip: true
-                    Accessible.name: model.name
-                    Image {
-                        anchors.fill: parent
-                        visible: status === Image.Ready
-                        source: tile.model.kind === "image" ? tile.model.url : tile.model.kind === "video" ? tile.model.thumb : ""
-                        sourceSize: Qt.size(152, 152)
-                        fillMode: Image.PreserveAspectCrop
-                        asynchronous: true
-                    }
-                    Column {
-                        anchors.centerIn: parent
-                        width: parent.width - 8
-                        visible: tile.model.kind === "file" || (tile.model.kind === "video" && tile.model.thumb === "")
-                        spacing: 2
-                        Icon { anchors.horizontalCenter: parent.horizontalCenter; glyph: tile.model.kind === "video" ? "player-play" : "file"; size: 22 }
-                        Label { width: parent.width; horizontalAlignment: Text.AlignHCenter; elide: Text.ElideMiddle; font.pixelSize: 10; text: tile.model.name }
-                    }
-                    Rectangle { // a video's play mark over its first frame
-                        visible: tile.model.kind === "video" && tile.model.thumb !== ""
-                        anchors.centerIn: parent
-                        width: 26; height: 26; radius: 13
-                        color: Qt.rgba(0, 0, 0, 0.55)
-                        Icon { anchors.centerIn: parent; glyph: "player-play"; size: 14; color: "white" }
-                    }
-                    Label { visible: tile.model.state === "preparing"; anchors.centerIn: parent; text: "…"; font.pixelSize: 18 }
-                    Rectangle { // how much has gone
-                        visible: tile.model.state === "uploading"
-                        anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
-                        height: 4
-                        color: Theme.tint(palette.text, 0.2)
-                        Rectangle { width: parent.width * tile.model.progress; height: parent.height; color: Theme.primary }
-                    }
-                    ToolButton {
-                        objectName: "removeAttachment"
-                        visible: !composer.sending
-                        anchors.top: parent.top; anchors.right: parent.right
-                        width: 24; height: 24
-                        icon.source: Theme.icon("x"); icon.width: 14; icon.height: 14
-                        display: AbstractButton.IconOnly
-                        Accessible.name: qsTr("Remove %1").arg(tile.model.name)
-                        background: Rectangle { radius: 12; color: Qt.rgba(0, 0, 0, 0.45) }
-                        icon.color: "white"
-                        onClicked: composer.remove(tile.model.key)
-                    }
-                    ToolTip.text: tile.model.name
-                    ToolTip.visible: tileHover.hovered
-                    HoverHandler { id: tileHover }
-                }
-            }
         }
 
         // the box: one line is a pill; it grows with the text. The send button sits in its bottom right corner, the same distance from the top, the

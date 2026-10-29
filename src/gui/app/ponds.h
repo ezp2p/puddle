@@ -15,7 +15,7 @@ class Ponds : public QObject {
     Q_PROPERTY(QObject *list READ list CONSTANT)           // the rail: id, name, status, address
     Q_PROPERTY(QObject *channels READ channels CONSTANT)   // of the open Pond: id, name, topic
     Q_PROPERTY(QObject *members READ members CONSTANT)     // of the open Pond: id, name, color, isMe
-    Q_PROPERTY(QObject *messages READ messages CONSTANT)   // the open channel, oldest first: id, author, name, tint, text, ts, mine, grouped, dayStart
+    Q_PROPERTY(QObject *messages READ messages CONSTANT)   // the open channel, oldest first: id, author, name, tint, text, files, ts, mine, grouped, dayStart
     Q_PROPERTY(QString current READ current NOTIFY currentChanged)            // the open Pond's id, "" for none
     Q_PROPERTY(QString currentName READ currentName NOTIFY currentInfoChanged)
     Q_PROPERTY(QString currentStatus READ currentStatus NOTIFY currentInfoChanged) // connecting, connected, unreachable, removed, certificate_changed
@@ -53,6 +53,8 @@ public:
     Q_INVOKABLE void close();
     Q_INVOKABLE void send(const QString &text);              // to the open channel
     Q_INVOKABLE void loadOlder();
+    Q_INVOKABLE QString sendPath() const;                   // the open channel's send route (for sending files)
+    Q_INVOKABLE void fetchFile(const QString &messageId, const QString &fileId); // one that did not come by itself
     Q_INVOKABLE void leave(const QString &pondId);
     Q_INVOKABLE void setProfile(const QString &pondId, const QString &profile);
     Q_INVOKABLE QString nameAt(int row) const { return list_.at(row).value("name").toString(); }

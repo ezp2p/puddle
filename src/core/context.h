@@ -62,9 +62,12 @@ typedef struct {
     int (*file_request)(puddle_ctx *ctx, const char *chat, const char *message, const char *file, const char **code);
     int (*file_answer)(puddle_ctx *ctx, const char *chat, const char *message, const char *file, const char *peer, int yes, const char **code);
     int (*pond_join)(puddle_ctx *ctx, const puddle_link *link, const char *profile_id, char out_id[PUDDLE_USER_ID_LEN + 1], const char **code);
-    int (*pond_send)(puddle_ctx *ctx, const char *pond, int64_t channel, const char *text, const char **code);
-    int (*pond_history)(puddle_ctx *ctx, const char *pond, int64_t channel, int64_t before, int limit, puddle_jw *w, const char **code);
+    int (*pond_send)(puddle_ctx *ctx, const char *pond, int64_t channel, const char *text, const char *files, size_t files_len,
+                     const char **code);
+    int (*pond_history)(puddle_ctx *ctx, const char *pond, int64_t channel, int64_t before, int limit, char **page, size_t *len,
+                        const char **code);
     int (*pond_leave)(puddle_ctx *ctx, const char *pond, const char **code);
+    int (*pond_fetch)(puddle_ctx *ctx, const char *pond, int64_t channel, int64_t message, const char *file, const char **code);
 } puddle_courier;
 
 /* What handlers can reach. */

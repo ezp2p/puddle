@@ -860,6 +860,7 @@ void Chats::send(const QString &text, const QString &replyTo)
 
 struct Chats::FileSend {
     QString conversation, text, replyTo;
+    QString path;              // where the message goes, if not to `conversation` (a Pond channel)
     QVariantList files;        // as sendFiles was given them
     QStringList ids;           // each one's id, once uploaded
 };
@@ -876,6 +877,15 @@ void Chats::sendFiles(const QString &text, const QString &replyTo, const QVarian
     job->conversation = current_; // the chat it was written in, even if the owner opens another meanwhile
     job->text = text.trimmed();
     job->replyTo = replyTo;
+    job->files = files;
+    uploadFile(job, 0);
+}
+
+void Chats::sendFilesTo(const QString &path, const QString &text, const QVariantList &files)
+{
+    auto job = std::make_shared<FileSend>();
+    job->path = path;
+    job->text = text.trimmed();
     job->files = files;
     uploadFile(job, 0);
 }
@@ -982,14 +992,19 @@ void Chats::sendWithFiles(std::shared_ptr<FileSend> job)
         o.insert("body", job->text);
     if (!job->replyTo.isEmpty())
         o.insert("reply_to", job->replyTo);
-    api_.post(path("conversations", job->conversation, "messages/send"), o, [this](int status, const QJsonDocument &doc) {
-        if (status != 201) {
+    const QString to = job->path.isEmpty() ? path("conversations", job->conversation, "messages/send") : job->path;
+    api_.post(to, o, [this, job](int status, const QJsonDocument &doc) {
+        if (status != 201 && status != 200) {
             const QString code = doc.object().value("error").toString();
-            emit filesFailed(code == QLatin1String("no_stream") ? tr("You are not connected to them right now.") : tr("The message could not be sent."));
+            emit filesFailed(code == QLatin1String("no_stream")   ? tr("You are not connected to them right now.")
+                             : code == QLatin1String("too_large") ? tr("The Pond does not take files that large.")
+                             : code == QLatin1String("files_off") ? tr("This Pond does not take files.")
+                                                                  : tr("The message could not be sent."));
             return;
         }
         emit filesSent();
-        refresh();
+        if (job->path.isEmpty())
+            refresh();
     });
 }
 

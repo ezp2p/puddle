@@ -3,6 +3,8 @@
 #include "core/link.h"
 #include "core/ponds.h"
 #include "core/profile.h"
+#include "objects/file.hpp"
+#include "storage/files.h"
 
 #include <cstdlib>
 #include <cstring>
@@ -29,6 +31,8 @@ static Error failure(const char *code)
         return Error(404, code);
     if (!strcmp(code, "bad_text") || !strcmp(code, "bad_query"))
         return Error(400, code);
+    if (!strcmp(code, "files_off") || !strcmp(code, "too_large") || !strcmp(code, "no_file"))
+        return Error(409, code); /* the Pond takes no files, or not one this large; or it is not here whole */
     if (!strcmp(code, "slow_down"))
         return Error(429, code);
     if (!strcmp(code, "invite_refused") || !strcmp(code, "removed"))
@@ -97,6 +101,20 @@ static int join_pond(const puddle_call *c, puddle_jw *)
     return big_json(c, 201, [&](puddle_jw *w) { return puddle_ponds_write_one(p, id, w); });
 }
 
+/* Each file of a Pond message as a File (objects/file.hpp): what the message says of it, and what is here of it. */
+static void write_file(void *user, puddle_jw *w, int64_t, int64_t, const char *json, size_t len)
+{
+    auto *c = static_cast<const puddle_call *>(user);
+    std::string arr = "[" + std::string(json, len) + "]";
+    puddle_file_ref *refs = nullptr;
+    size_t n = 0;
+    if (puddle_file_refs_parse(arr.data(), arr.size(), &refs, &n) == 0 && n == 1)
+        File::of(c->ctx, refs[0]).write(w);
+    else
+        puddle_jw_raw(w, json, len); /* kept, so cleaned; only a rule of the Puddle's own it breaks */
+    free(refs);
+}
+
 static int64_t channelOf(const puddle_call *c)
 {
     int64_t ch = strtoll(puddle_param(c, "channel"), nullptr, 10);
@@ -119,32 +137,66 @@ static int channel_messages(const puddle_call *c, puddle_jw *)
     puddle_ponds *p = pondsOf(c);
     const char *pond = puddle_param(c, "pond");
     int64_t ch = channelOf(c);
-    return big_json(c, 200, [&](puddle_jw *w) {
-        int r = puddle_ponds_write_messages(p, pond, ch, before, (int)limit, w);
+    puddle_pond_file_writer files = {write_file, (void *)c};
+    char *page = nullptr; /* further back than is kept: the Pond's answer */
+    size_t page_len = 0;
+    int rc = big_json(c, 200, [&](puddle_jw *w) {
+        if (page)
+            return puddle_ponds_write_page(page, page_len, (int)limit, w, &files);
+        int r = puddle_ponds_write_messages(p, pond, ch, before, (int)limit, w, &files);
         if (r <= 0)
             return r;
-        const char *code = "internal"; /* further back than is kept: ask the Pond */
+        const char *code = "internal";
         puddle_jw_init(w, w->buf, w->cap);
         if (!c->ctx->courier || !c->ctx->courier->pond_history ||
-            c->ctx->courier->pond_history(c->ctx, pond, ch, before, (int)limit, w, &code) != 0)
+            c->ctx->courier->pond_history(c->ctx, pond, ch, before, (int)limit, &page, &page_len, &code) != 0)
             throw failure(code);
-        return 0;
+        return puddle_ponds_write_page(page, page_len, (int)limit, w, &files);
     });
+    free(page);
+    return rc;
 }
 
+/* {body?, files?}: as a conversation's send. Each file must be here whole; it is sent to the Pond before the message. */
 static int send_message(const puddle_call *c, puddle_jw *w)
 {
     Body b(c);
-    std::string text = b.messageBody("body");
+    std::vector<puddle_file_ref> files;
+    if (b.has("files"))
+        files = filesOf(b.raw("files"));
+    std::string text = files.empty() || b.has("body") ? b.messageBody("body") : std::string();
+    for (auto &f : files) {
+        if (!c->ctx->files || puddle_files_state(c->ctx->files, f.id, &f.size, nullptr) != PUDDLE_FILE_WHOLE)
+            throw Error(409, "no_file");
+    }
+    std::string list;
+    if (!files.empty()) {
+        std::string buf(files.size() * 4096 + 64, '\0');
+        puddle_jw fw;
+        puddle_jw_init(&fw, buf.data(), buf.size());
+        puddle_file_refs_write(&fw, files.data(), files.size());
+        list = buf.substr(0, puddle_jw_finish(&fw));
+    }
     int64_t ch = channelOf(c);
     const char *code = "internal";
     if (!c->ctx->courier || !c->ctx->courier->pond_send ||
-        c->ctx->courier->pond_send(c->ctx, puddle_param(c, "pond"), ch, text.c_str(), &code) != 0)
+        c->ctx->courier->pond_send(c->ctx, puddle_param(c, "pond"), ch, text.c_str(), list.empty() ? nullptr : list.c_str(), list.size(),
+                                   &code) != 0)
         throw failure(code);
     puddle_jw_object(w);
     puddle_jw_flag(w, "sent", 1);
     puddle_jw_end_object(w);
     return 200;
+}
+
+/* Fetch a file a message carries that did not come by itself (over files.auto_download, or older than what is kept). */
+static int fetch_file(const puddle_call *c, puddle_jw *)
+{
+    int64_t ch = channelOf(c), message = strtoll(puddle_param(c, "message"), nullptr, 10);
+    const char *file = puddle_param(c, "file"), *code = "internal";
+    if (!c->ctx->courier || !c->ctx->courier->pond_fetch || c->ctx->courier->pond_fetch(c->ctx, puddle_param(c, "pond"), ch, message, file, &code) != 0)
+        throw failure(code);
+    return 204;
 }
 
 static int leave_pond(const puddle_call *c, puddle_jw *)
@@ -193,7 +245,8 @@ const puddle_route puddle_pond_api_routes[] = {
     { "POST", "/api/v1/ponds/join",                               PUDDLE_AUTH_OWNER, 1024,  join_pond,        NULL },
     { "GET",  POND,                                               PUDDLE_AUTH_OWNER, 0,     get_pond,         NULL },
     { "GET",  POND "/channels/{channel:num}/messages",            PUDDLE_AUTH_OWNER, 0,     channel_messages, NULL },
-    { "POST", POND "/channels/{channel:num}/messages/send",       PUDDLE_AUTH_OWNER, 20000, send_message,     NULL },
+    { "POST", POND "/channels/{channel:num}/messages/send",       PUDDLE_AUTH_OWNER, 40000, send_message,     NULL },
+    { "POST", POND "/channels/{channel:num}/messages/{message:num}/files/{file:event}/download", PUDDLE_AUTH_OWNER, 64, fetch_file, NULL },
     { "POST", POND "/profile",                                    PUDDLE_AUTH_OWNER, 128,   pond_profile,     NULL },
     { "POST", POND "/leave",                                      PUDDLE_AUTH_OWNER, 64,    leave_pond,       NULL },
 };

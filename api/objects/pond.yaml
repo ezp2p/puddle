@@ -15,12 +15,18 @@ properties:
     description: "`removed`: the Pond no longer has the owner as a member; what was kept can still be read until they leave"
   protocol: { type: integer, minimum: 1, description: "Which additions to /pond/v1 the Pond said it has, at its last /info" }
   features: { type: array, items: { type: string, pattern: "^[a-z0-9_-]{1,32}$" }, description: Optional parts the Pond said it has }
+  files:
+    type: object
+    description: What the Pond takes, if it said (it has the `files` feature); left out if it takes none
+    properties:
+      max_size: { type: integer, description: "The largest file it takes; 0 if its admin turned files off" }
   channels: { type: array, items: { $ref: "#/$defs/Channel" } }
   me: { $ref: "../wire/ids.yaml#/$defs/UserId", description: The owner's member id (their user id) }
   members: { type: array, items: { $ref: "#/$defs/Member" } }
 x-methods:
   messages: GET /api/v1/ponds/{pond}/channels/{channel}/messages
   send: POST /api/v1/ponds/{pond}/channels/{channel}/messages/send
+  download: POST /api/v1/ponds/{pond}/channels/{channel}/messages/{message}/files/{file}/download
   profile: POST /api/v1/ponds/{pond}/profile
   leave: POST /api/v1/ponds/{pond}/leave
 $defs:
@@ -43,5 +49,9 @@ $defs:
       id: { type: integer, description: Increasing across the whole Pond }
       channel: { type: integer }
       author: { $ref: "../wire/ids.yaml#/$defs/UserId" }
-      text: { type: string, maxLength: 4000 }
+      text: { type: string, maxLength: 4000, description: May be empty when there are files }
       ts: { type: integer, description: ms, by the Pond's clock }
+      files:
+        type: array
+        description: Left out when there are none. Each as a conversation's message has them, with what is here of it.
+        items: { $ref: "file.yaml" }

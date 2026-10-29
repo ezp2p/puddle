@@ -54,9 +54,7 @@ static int list_messages(const puddle_call *c, puddle_jw *w)
     return 200;
 }
 
-/* "files": [{id, name, mime, w?, h?, duration_ms?, preview?}]: files the owner uploaded, as the message will describe them
- * (the size is what was uploaded). Any one of them wrong is a 400. */
-static std::vector<puddle_file_ref> filesOf(puddle_span arr)
+std::vector<puddle_file_ref> puddle::api::filesOf(puddle_span arr)
 {
     std::vector<puddle_file_ref> out;
     size_t cur = 0;

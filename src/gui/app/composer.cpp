@@ -332,6 +332,9 @@ bool Composer::send(const QString &text, const QString &replyTo)
     items_.setItems(rows);
     sending_ = true;
     emit changed();
-    chats_->sendFiles(text, replyTo, files);
+    if (target_.isEmpty())
+        chats_->sendFiles(text, replyTo, files);
+    else
+        chats_->sendFilesTo(target_, text, files);
     return true;
 }
