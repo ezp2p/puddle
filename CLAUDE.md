@@ -57,4 +57,5 @@ or looks like it conflicts with this list, ask rather than guess.
 - `docs/levee.md`: the design draft for Levee (not built; open questions at its end)
 - `docs/roadmap.md`: the step-by-step plan for keys and streams; work through it in order, one step at a time
 - `docs/discuss-later.md`: open questions parked on purpose; don't raise them unprompted
+- `docs/hardening.md`: what junk and floods cost a Puddle (and a Pond), and the gaps still open
 - Build and test: `scripts/build.sh`
