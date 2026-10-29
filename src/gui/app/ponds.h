@@ -14,7 +14,8 @@ class Ponds : public QObject {
     Q_OBJECT
     Q_PROPERTY(QObject *list READ list CONSTANT)           // the rail: id, name, status, address
     Q_PROPERTY(QObject *channels READ channels CONSTANT)   // of the open Pond: id, name, topic
-    Q_PROPERTY(QObject *members READ members CONSTANT)     // of the open Pond: id, name, color, isMe
+    Q_PROPERTY(QObject *members READ members CONSTANT)     // of the open Pond: id, name, color, isMe, role
+    Q_PROPERTY(QObject *bans READ bans CONSTANT)           // of the open Pond, once loadBans() has asked: member, name, by, byName, reason, ts
     Q_PROPERTY(QObject *messages READ messages CONSTANT)   // the open channel, oldest first: id, author, name, tint, text, files, ts, mine, grouped, dayStart
     Q_PROPERTY(QString current READ current NOTIFY currentChanged)            // the open Pond's id, "" for none
     Q_PROPERTY(QString currentName READ currentName NOTIFY currentInfoChanged)
@@ -23,6 +24,10 @@ class Ponds : public QObject {
     Q_PROPERTY(QString channel READ channel NOTIFY channelChanged)            // the open channel's id, "" for none
     Q_PROPERTY(QString channelName READ channelName NOTIFY channelChanged)
     Q_PROPERTY(QString channelTopic READ channelTopic NOTIFY channelChanged)
+    Q_PROPERTY(QString currentRole READ currentRole NOTIFY currentInfoChanged)   // ours there: operator, administrator or member
+    Q_PROPERTY(bool canAdmin READ canAdmin NOTIFY currentInfoChanged)           // operator or administrator: Server Settings
+    Q_PROPERTY(QString currentOffer READ currentOffer NOTIFY currentInfoChanged) // a role it offers us ("operator", "administrator"), or ""
+    Q_PROPERTY(QString myId READ myId NOTIFY currentInfoChanged)
     Q_PROPERTY(bool hasOlder READ hasOlder NOTIFY hasOlderChanged)
     Q_PROPERTY(bool joining READ joining NOTIFY joiningChanged)
 public:
@@ -31,6 +36,11 @@ public:
     QObject *list() { return &list_; }
     QObject *channels() { return &channels_; }
     QObject *members() { return &members_; }
+    QObject *bans() { return &bans_; }
+    QString currentRole() const { return info_.value("role").toString(QStringLiteral("member")); }
+    bool canAdmin() const { return currentRole() == QLatin1String("operator") || currentRole() == QLatin1String("administrator"); }
+    QString currentOffer() const { return info_.value("offer").toObject().value("role").toString(); }
+    QString myId() const { return me_; }
     QObject *messages() { return &messages_; }
     QString current() const { return current_; }
     QString currentName() const { return info_.value("name").toString(); }
@@ -59,6 +69,20 @@ public:
     Q_INVOKABLE void setProfile(const QString &pondId, const QString &profile);
     Q_INVOKABLE QString nameAt(int row) const { return list_.at(row).value("name").toString(); }
 
+    // ---- roles (the Pond's docs/design.md, "Roles") ----
+    Q_INVOKABLE void answerOffer(bool accept);
+    // What an operator or administrator does, in Server Settings. Each says how it went with adminDone or adminFailed.
+    Q_INVOKABLE void saveOverview(const QString &name, const QString &description);
+    Q_INVOKABLE void createChannel(const QString &name, const QString &topic);
+    Q_INVOKABLE void editChannel(const QString &channelId, const QString &name, const QString &topic);
+    Q_INVOKABLE void deleteChannel(const QString &channelId);
+    Q_INVOKABLE void kick(const QString &memberId);
+    Q_INVOKABLE void ban(const QString &memberId, const QString &reason);
+    Q_INVOKABLE void unban(const QString &memberId);
+    Q_INVOKABLE void loadBans();
+    // May we act on this member from the app? (Never ourselves or an operator, and only a lower rank.)
+    Q_INVOKABLE bool canActOn(const QString &memberId) const;
+
 signals:
     void currentChanged();
     void currentInfoChanged();
@@ -67,6 +91,8 @@ signals:
     void joiningChanged();
     void joined(const QString &pondId);
     void failed(const QString &what);
+    void adminDone(const QString &what);   // said in words, for a short notice
+    void adminFailed(const QString &why);
 
 private:
     void refreshPond();
@@ -74,10 +100,11 @@ private:
     void rebuildMessages();
     QString pathOfChannel() const;
     QString why(int status, const QJsonDocument &json, const QString &doing) const;
+    void admin(const QString &path, const QJsonObject &body, const QString &done, const QString &doing, bool reloadBans = false);
 
     ApiClient *api_;
     QTimer timer_;
-    JsonListModel list_, channels_, members_, messages_;
+    JsonListModel list_, channels_, members_, messages_, bans_;
     qint64 version_ = -1;
     QString current_, channel_, me_;
     QJsonObject info_;

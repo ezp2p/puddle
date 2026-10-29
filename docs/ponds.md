@@ -112,6 +112,30 @@ the store. When a file arrives the Pond's `version` changes, so the app looks ag
 `files.auto_download` without being asked. A busy Pond can still mean many small files a day; this is the cost of
 not waiting on downloads, and why only the kept messages' files are fetched by themselves.
 
+## Roles
+
+A Pond has operators and administrators who run it from the app (the Pond's design, "Roles"). The Puddle's part:
+
+- **Being offered one.** The Pond's admin offers a role with `pondctl member offer`. It arrives as a `role_offer` event
+  sent to us alone (and in `/info` as `offer`, for after a reset). The Puddle keeps it in `pond.json` and shows it on
+  the owner's Pond as `offer`; the app shows a card under the Pond's name with **Accept** and **Decline**. The answer
+  goes to the Pond (`POST /pond/v1/roles/answer`), and the role takes effect at once. The app's "Copy my id", in the
+  Pond's menu, is what the owner gives the admin to name them.
+- **Knowing roles.** Every member, and `me`, carries `role` (`operator`, `administrator` or `member`), kept with the
+  members and shown on the owner's Pond as `role`. The app marks operators and administrators in the member list.
+- **Using one.** The owner's admin routes (below) are relayed to the Pond's `/pond/v1/admin/...` as they are, signed by
+  the Puddle, and the Pond's answer is passed back. Nothing is checked or kept here beyond that: the Pond decides who may
+  do what, and its events bring the results (a new channel, a member gone) as for any change. A Pond that does not know
+  the route for us (we hold no role) answers `404`, which the owner is told as `409 no_role`.
+
+In the app, the Pond's name drops down its menu, as Discord's server menu does: **Server Settings** (for an operator
+or administrator), **Appear as…**, **Copy my id**, and **Leave Pond**. Server Settings opens over the window, with
+sections on the left (Overview, Channels, Members, Bans) and each section's settings in groups on the right
+(`shell/PondSettings.qml`).
+
+The Pond never calls the Puddle for any of this. A Puddle always opens the connection: the offer comes on the event
+stream it already follows.
+
 ## What is kept
 
 `core/ponds.cpp`, in `<data_dir>/ponds/<pond id>/`:
@@ -140,9 +164,17 @@ Leaving deletes the folder.
 | `POST /api/v1/ponds/{pond}/channels/{channel}/messages/{message}/files/{file}/download` | Fetch a file that did not come by itself (`204`) |
 | `POST /api/v1/ponds/{pond}/profile` | `{profile}`: id or null |
 | `POST /api/v1/ponds/{pond}/leave` | Tells the Pond if it can be reached, and forgets it either way |
+| `POST /api/v1/ponds/{pond}/offer/accept`, `/offer/decline` | Answer the role the Pond offers (`404 no_offer` if none): `{role}` |
+| `POST /api/v1/ponds/{pond}/admin/pond` | `{name?, description?}` |
+| `POST /api/v1/ponds/{pond}/admin/channels/create` | `{name, topic?}` |
+| `POST /api/v1/ponds/{pond}/admin/channels/{channel}/edit`, `/delete` | `{name?, topic?}` for edit |
+| `POST /api/v1/ponds/{pond}/admin/members/{member}/remove`, `/ban` | `{reason?}` for a ban |
+| `GET /api/v1/ponds/{pond}/admin/bans` | Who is banned, as the Pond says |
+| `POST /api/v1/ponds/{pond}/admin/bans/{member}/unban` | |
 
 Errors: `no_pond`, `no_channel` and `no_profile` are `404`. `bad_text` is `400`. `slow_down` is `429`.
-`invite_refused`, `removed`, `no_file`, `files_off` and `too_large` are `409`. `unreachable`, `not_a_pond`, `certificate_changed` and `failed` are `502`.
+`invite_refused`, `removed`, `no_file`, `files_off`, `too_large` and `no_role` are `409`. The admin routes pass on
+what the Pond says: `204` when done, `400` with a `message` to show, `404 no_channel`, `409 outranked` or `not_yourself`. `unreachable`, `not_a_pond`, `certificate_changed` and `failed` are `502`.
 
 ## In the app
 

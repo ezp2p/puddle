@@ -50,11 +50,13 @@ Pane {
                 spacing: 10
                 Avatar { Layout.leftMargin: 8; name: parent.model.name; tint: parent.model.color || ""; size: 32 }
                 Label {
-                    Layout.fillWidth: true
+                    Layout.fillWidth: !badge.visible
                     elide: Text.ElideRight
                     text: parent.model.isMe ? qsTr("%1 (you)").arg(parent.model.name) : parent.model.name
                     color: parent.model.color ? parent.model.color : palette.text
                 }
+                RoleBadge { id: badge; role: parent.model.role || ""; Layout.rightMargin: 8 }
+                Item { visible: badge.visible; Layout.fillWidth: true }
             }
         }
     }

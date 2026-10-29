@@ -429,6 +429,66 @@ paths:
       tags: [ponds]
       summary: Leave. The Pond is told if it can be reached; it is forgotten here either way, with everything kept of it.
       responses: { "204": { description: Left } }
+  /api/v1/ponds/{pond}/offer/accept:
+    parameters: [{ $ref: "#/components/parameters/Pond" }]
+    post:
+      tags: [ponds]
+      summary: Accept the role the Pond offers (docs/ponds.md, "Roles")
+      responses:
+        "200": { description: "Our role now", content: { application/json: { schema: { type: object, properties: { role: { enum: [operator, administrator, member] } } } } } }
+        "404": { description: "`no_offer`: none open, or it lapsed" }
+  /api/v1/ponds/{pond}/offer/decline:
+    parameters: [{ $ref: "#/components/parameters/Pond" }]
+    post:
+      tags: [ponds]
+      summary: Decline the role the Pond offers
+      responses:
+        "200": { description: "Our role, unchanged" }
+        "404": { description: "`no_offer`" }
+  /api/v1/ponds/{pond}/admin/pond:
+    parameters: [{ $ref: "#/components/parameters/Pond" }]
+    post:
+      tags: [ponds]
+      summary: "As an operator or administrator: rename the Pond, or change its description"
+      description: |
+        Every admin route is relayed to the Pond's /pond/v1/admin/... and answers what the Pond said: `204` done, `400` with a
+        `message` the app may show, `404 no_channel` / `no_member` / `no_ban`, `409 outranked` / `not_yourself`. Without a
+        role there, `409 no_role`.
+      requestBody: { content: { application/json: { schema: { type: object, properties: { name: { type: string }, description: { type: string } } } } } }
+      responses: { "204": { description: Done } }
+  /api/v1/ponds/{pond}/admin/channels/create:
+    parameters: [{ $ref: "#/components/parameters/Pond" }]
+    post:
+      tags: [ponds]
+      summary: Make a channel
+      requestBody: { content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string }, topic: { type: string } } } } } }
+      responses: { "204": { description: Made } }
+  /api/v1/ponds/{pond}/admin/channels/{channel}/edit:
+    parameters: [{ $ref: "#/components/parameters/Pond" }, { $ref: "#/components/parameters/Channel" }]
+    post:
+      tags: [ponds]
+      summary: Rename a channel, or change its topic
+      requestBody: { content: { application/json: { schema: { type: object, properties: { name: { type: string }, topic: { type: string } } } } } }
+      responses: { "204": { description: Done } }
+  /api/v1/ponds/{pond}/admin/channels/{channel}/delete:
+    parameters: [{ $ref: "#/components/parameters/Pond" }, { $ref: "#/components/parameters/Channel" }]
+    post: { tags: [ponds], summary: Delete a channel, responses: { "204": { description: Deleted } } }
+  /api/v1/ponds/{pond}/admin/members/{member}/remove:
+    parameters: [{ $ref: "#/components/parameters/Pond" }, { name: member, in: path, required: true, schema: { $ref: "wire/ids.yaml#/$defs/UserId" } }]
+    post: { tags: [ponds], summary: "Remove a member; they may come back with an invite", responses: { "204": { description: Removed } } }
+  /api/v1/ponds/{pond}/admin/members/{member}/ban:
+    parameters: [{ $ref: "#/components/parameters/Pond" }, { name: member, in: path, required: true, schema: { $ref: "wire/ids.yaml#/$defs/UserId" } }]
+    post:
+      tags: [ponds]
+      summary: Ban a member
+      requestBody: { content: { application/json: { schema: { type: object, properties: { reason: { type: string, maxLength: 500 } } } } } }
+      responses: { "204": { description: Banned } }
+  /api/v1/ponds/{pond}/admin/bans:
+    parameters: [{ $ref: "#/components/parameters/Pond" }]
+    get: { tags: [ponds], summary: "Who is banned, as the Pond says (its /pond/v1/admin/bans)", responses: { "200": { description: "{bans: [{member, by, reason, ts, profile}]}" } } }
+  /api/v1/ponds/{pond}/admin/bans/{member}/unban:
+    parameters: [{ $ref: "#/components/parameters/Pond" }, { name: member, in: path, required: true, schema: { $ref: "wire/ids.yaml#/$defs/UserId" } }]
+    post: { tags: [ponds], summary: Lift a ban, responses: { "204": { description: Lifted } } }
   /api/v1/identity:
     get: { tags: [identity], summary: This Puddle's keys, responses: { "200": { $ref: "#/components/responses/Identity" } } }
   /api/v1/identity/roll:

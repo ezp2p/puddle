@@ -38,6 +38,11 @@ int puddle_pond_history(puddle_ctx *ctx, const char *pond, int64_t channel, int6
  * older than what is kept): fetch it soon, and keep it a week. 0, or -1 with `code`: "no_pond", "no_channel", "too_large". */
 int puddle_pond_fetch(puddle_ctx *ctx, const char *pond, int64_t channel, int64_t message, const char *file, const char **code);
 
+/* What an operator or administrator asks of the Pond (`target` under /pond/v1/admin/), or the answer to a role it offered
+ * (/pond/v1/roles/answer): the Pond's status and answer (malloc'd), as it gave them. 0, or -1 with `code` as for sending. */
+int puddle_pond_admin(puddle_ctx *ctx, const char *pond, const char *method, const char *target, const char *body, size_t len,
+                      int *status, char **reply, size_t *reply_len, const char **code);
+
 /* Leave: tell the Pond (if it can be reached; we leave either way) and forget it, with what was kept of it. 0, or -1 "no_pond". */
 int puddle_pond_leave(puddle_ctx *ctx, const char *pond, const char **code);
 

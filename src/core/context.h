@@ -68,6 +68,8 @@ typedef struct {
                         const char **code);
     int (*pond_leave)(puddle_ctx *ctx, const char *pond, const char **code);
     int (*pond_fetch)(puddle_ctx *ctx, const char *pond, int64_t channel, int64_t message, const char *file, const char **code);
+    int (*pond_admin)(puddle_ctx *ctx, const char *pond, const char *method, const char *target, const char *body, size_t len, int *status,
+                      char **reply, size_t *reply_len, const char **code);
 } puddle_courier;
 
 /* What handlers can reach. */

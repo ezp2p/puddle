@@ -37,4 +37,5 @@ const puddle_courier puddle_federation_courier = {
     puddle_pond_history,
     puddle_pond_leave,
     puddle_pond_fetch,
+    puddle_pond_admin,
 };

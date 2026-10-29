@@ -85,6 +85,8 @@ Pane {
     Connections {
         target: shell.ponds
         function onFailed(what) { toast.show(what) }
+        function onAdminDone(what) { if (!pondSettings.opened) toast.show(what) }
+        function onAdminFailed(why) { if (!pondSettings.opened) toast.show(why) }
         function onJoined(id) { shell.openPond(id) }
         // the open Pond went away (we left it): nothing to show but the empty page
         function onCurrentChanged() { if (shell.page === "pond" && shell.ponds.current === "") shell.goHome() }
@@ -342,6 +344,8 @@ Pane {
                 anchors.leftMargin: Theme.railWidth + 1
                 anchors.right: parent.right
                 chats: shell.chats
+                onSettingsRequested: pondSettings.show("overview")
+                onNotice: text => toast.show(text)
                 onLeaveRequested: leaveConfirm.ask(qsTr("Leave %1?").arg(shell.ponds.currentName),
                                                    qsTr("You will need a new invite to join again. What your Puddle kept of it is forgotten."),
                                                    qsTr("Leave Pond"), () => shell.ponds.leave(shell.ponds.current))
@@ -435,6 +439,7 @@ Pane {
     ConversationMenu { id: groupTools; chats: shell.chats }
     ConfirmDialog { id: leaveConfirm }
     JoinPondDialog { id: joinPondDialog; chats: shell.chats }
+    PondSettings { id: pondSettings; chats: shell.chats }
 
     NewConversationDialog {
         id: newConv

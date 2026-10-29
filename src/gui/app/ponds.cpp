@@ -9,8 +9,9 @@ Ponds::Ponds(ApiClient *api, QObject *parent)
       api_(api),
       list_({ "id", "name", "status", "address" }),
       channels_({ "id", "name", "topic" }),
-      members_({ "id", "name", "color", "isMe" }),
-      messages_({ "id", "author", "name", "tint", "text", "files", "ts", "mine", "grouped", "dayStart" })
+      members_({ "id", "name", "color", "isMe", "role" }),
+      messages_({ "id", "author", "name", "tint", "text", "files", "ts", "mine", "grouped", "dayStart" }),
+      bans_({ "member", "name", "by", "byName", "reason", "ts" }, nullptr, QStringLiteral("member"))
 {
     timer_.setInterval(1000);
     connect(&timer_, &QTimer::timeout, this, &Ponds::refresh);
@@ -119,9 +120,14 @@ void Ponds::refreshPond()
             const QJsonArray colors = prof.value("color").toObject().value("colors").toArray();
             const QString color = colors.isEmpty() ? QString() : colors.first().toString();
             people_.insert(mid, { { "name", name }, { "color", color } });
-            members.append({ { "id", mid }, { "name", name }, { "color", color }, { "isMe", mid == me_ } });
+            members.append({ { "id", mid }, { "name", name }, { "color", color }, { "isMe", mid == me_ },
+                             { "role", mo.value("role").toString(QStringLiteral("member")) } });
         }
-        std::stable_sort(members.begin(), members.end(), [](const QJsonObject &a, const QJsonObject &b) {
+        // operators first, then administrators, then everyone else; by name within each
+        auto rank = [](const QJsonObject &m) { const QString r = m.value("role").toString(); return r == "operator" ? 0 : r == "administrator" ? 1 : 2; };
+        std::stable_sort(members.begin(), members.end(), [&](const QJsonObject &a, const QJsonObject &b) {
+            if (rank(a) != rank(b))
+                return rank(a) < rank(b);
             return a.value("name").toString().compare(b.value("name").toString(), Qt::CaseInsensitive) < 0;
         });
         members_.setItems(members);
@@ -232,6 +238,116 @@ void Ponds::fetchFile(const QString &messageId, const QString &fileId)
                });
 }
 
+// ---- roles ----
+
+void Ponds::answerOffer(bool accept)
+{
+    if (current_.isEmpty())
+        return;
+    const QString id = current_;
+    api_->post(QStringLiteral("/api/v1/ponds/%1/offer/%2").arg(id, accept ? "accept" : "decline"), QJsonObject{},
+               [this, accept](int status, const QJsonDocument &json) {
+                   if (status != 200)
+                       emit failed(json.object().value("error").toString() == QLatin1String("no_offer") ? tr("That offer has lapsed.")
+                                                                                                    : why(status, json, tr("answer the offer")));
+                   else if (accept)
+                       emit adminDone(tr("You are now %1 here.").arg(json.object().value("role").toString() == QLatin1String("operator")
+                                                                         ? tr("an operator") : tr("an administrator")));
+                   refresh();
+               });
+}
+
+void Ponds::admin(const QString &path, const QJsonObject &body, const QString &done, const QString &doing, bool reloadBans)
+{
+    if (current_.isEmpty())
+        return;
+    api_->post(QStringLiteral("/api/v1/ponds/%1/admin/%2").arg(current_, path), body, [this, done, doing, reloadBans](int status, const QJsonDocument &json) {
+        if (status < 200 || status > 299) {
+            const QJsonObject o = json.object();
+            const QString code = o.value("error").toString();
+            emit adminFailed(!o.value("message").toString().isEmpty() ? o.value("message").toString()
+                             : code == QLatin1String("no_role")       ? tr("You no longer have a role in this Pond.")
+                             : code == QLatin1String("outranked")     ? tr("They are your rank or above.")
+                             : code == QLatin1String("not_yourself")  ? tr("You can't do that to yourself.")
+                                                                      : why(status, json, doing));
+            return;
+        }
+        emit adminDone(done);
+        if (reloadBans)
+            loadBans();
+        refresh();
+    });
+}
+
+void Ponds::saveOverview(const QString &name, const QString &description)
+{
+    admin(QStringLiteral("pond"), { { "name", name.trimmed() }, { "description", description.trimmed() } }, tr("Saved."), tr("save that"));
+}
+
+void Ponds::createChannel(const QString &name, const QString &topic)
+{
+    admin(QStringLiteral("channels/create"), { { "name", name.trimmed() }, { "topic", topic.trimmed() } },
+          tr("#%1 made.").arg(name.trimmed()), tr("make that channel"));
+}
+
+void Ponds::editChannel(const QString &channelId, const QString &name, const QString &topic)
+{
+    admin(QStringLiteral("channels/%1/edit").arg(channelId), { { "name", name.trimmed() }, { "topic", topic.trimmed() } }, tr("Saved."),
+          tr("change that channel"));
+}
+
+void Ponds::deleteChannel(const QString &channelId)
+{
+    admin(QStringLiteral("channels/%1/delete").arg(channelId), {}, tr("Channel deleted."), tr("delete that channel"));
+}
+
+void Ponds::kick(const QString &memberId)
+{
+    admin(QStringLiteral("members/%1/remove").arg(memberId), {}, tr("%1 was removed.").arg(people_.value(memberId).value("name").toString()),
+          tr("remove them"));
+}
+
+void Ponds::ban(const QString &memberId, const QString &reason)
+{
+    admin(QStringLiteral("members/%1/ban").arg(memberId), { { "reason", reason.trimmed() } },
+          tr("%1 was banned.").arg(people_.value(memberId).value("name").toString()), tr("ban them"), true);
+}
+
+void Ponds::unban(const QString &memberId)
+{
+    admin(QStringLiteral("bans/%1/unban").arg(memberId), {}, tr("Unbanned. They can join again with an invite."), tr("unban them"), true);
+}
+
+void Ponds::loadBans()
+{
+    if (current_.isEmpty())
+        return;
+    api_->get(QStringLiteral("/api/v1/ponds/%1/admin/bans").arg(current_), [this](int status, const QJsonDocument &json) {
+        if (status != 200)
+            return;
+        QList<QJsonObject> rows;
+        for (const QJsonValue &v : json.object().value("bans").toArray()) {
+            const QJsonObject b = v.toObject();
+            const QString id = b.value("member").toString(), by = b.value("by").toString();
+            QString name = b.value("profile").toObject().value("display_name").toString();
+            rows.append({ { "member", id }, { "name", name.isEmpty() ? id.left(8) : name }, { "by", by },
+                          { "byName", by == QLatin1String("pondctl") ? tr("the server's admin") : people_.value(by).value("name").toString(by.left(8)) },
+                          { "reason", b.value("reason").toString() }, { "ts", b.value("ts").toDouble() } });
+        }
+        bans_.setItems(rows);
+    });
+}
+
+bool Ponds::canActOn(const QString &memberId) const
+{
+    auto rank = [](const QString &r) { return r == QLatin1String("operator") ? 2 : r == QLatin1String("administrator") ? 1 : 0; };
+    QString theirs = QStringLiteral("member");
+    for (const QJsonObject &m : members_.items())
+        if (m.value("id").toString() == memberId)
+            theirs = m.value("role").toString();
+    return memberId != me_ && theirs != QLatin1String("operator") && rank(currentRole()) > rank(theirs);
+}
+
 void Ponds::join(const QString &link, const QString &profile)
 {
     if (joining_)
@@ -268,6 +384,7 @@ void Ponds::open(const QString &pondId)
     loaded_.clear();
     messages_.clear();
     channels_.clear();
+    bans_.clear();
     members_.clear();
     generation_++;
     emit currentChanged();
