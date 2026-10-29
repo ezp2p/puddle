@@ -59,6 +59,10 @@ void puddle_sock_finish(puddle_sock s);
 
 void puddle_sock_close(puddle_sock s);
 
+/* End a connection that another thread is using, so a read or write it is blocked in fails at once. The other thread still
+ * closes it. */
+void puddle_sock_cut(puddle_sock s);
+
 /* For OpenSSL's SSL_set_fd. */
 int puddle_sock_fd(puddle_sock s);
 

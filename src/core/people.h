@@ -5,7 +5,7 @@
  * record per person, collection "people", keyed by their user id.
  *
  * A person can show us a different profile in each place we share: one for our direct conversation ("dm") and one for
- * each group ("group:<group id>"; Ponds will add "pond:<id>"). Each arrives from their Puddle (with their request for a
+ * each group ("group:<group id>"). (Pond members' profiles are kept with the Pond, core/ponds.h.) Each arrives from their Puddle (with their request for a
  * stream, their answer to ours, or POST /stream/v1/profile whenever they change it), and whichever comes last for a place
  * replaces what we held for it. They may also take one back, and then we forget it. What they sent was cleaned on arrival
  * (wire/wireprofile.h); the notes say what had to be left out. */

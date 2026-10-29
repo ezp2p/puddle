@@ -50,6 +50,9 @@ int puddle_address_parse(const char *text, puddle_address *out);
  * schemes, spaces, a path, a fragment, unknown query parameters, an `@`. */
 int puddle_link_parse(const char *text, puddle_link *out, char *err, size_t errlen);
 
+/* A Pond invite, `pond://host[:port]?invite=<token>` (the scheme and the invite are both needed). As puddle_link_parse. */
+int puddle_pond_link_parse(const char *text, puddle_link *out, char *err, size_t errlen);
+
 /* The text to give someone for `address` ("host:port"): the port is left off when it is the default. `invite` may be NULL
  * or "". 0 or -1 if it does not fit. */
 int puddle_link_format(const char *address, const char *invite, char *out, size_t cap);

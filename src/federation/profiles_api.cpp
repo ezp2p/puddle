@@ -3,6 +3,7 @@
 #include "base/log.h"
 #include "core/group.h"
 #include "core/people.h"
+#include "federation/ponds.h"
 #include "storage/media.h"
 #include "wire/wireprofile.h"
 
@@ -118,7 +119,9 @@ static int push_one(puddle_ctx *ctx, const char *peer, const char *place)
 
 int puddle_profile_push(puddle_ctx *ctx, const char *place)
 {
-    const char *dm = puddle_place_dm_id(place), *gid = puddle_place_group_id(place);
+    const char *dm = puddle_place_dm_id(place), *gid = puddle_place_group_id(place), *pond = puddle_place_pond_id(place);
+    if (pond)
+        return puddle_pond_profile_push(ctx, pond);
     if (dm)
         return is_active(ctx, dm) ? push_one(ctx, dm, place) : 0; /* no stream yet: it goes with the request or the answer */
     if (!gid || !ctx->groups)

@@ -12,7 +12,7 @@ out="$doco/puddle"
 
 # the designs that describe what a Puddle does on the wire or for its owner; working notes (roadmap, port logs,
 # questions parked for later) stay here
-pages=(identity streams groups profiles files storage objects levee)
+pages=(identity streams groups profiles files ponds storage objects levee)
 
 rm -rf "$out/api" "$out/docs"
 mkdir -p "$out/api" "$out/docs"

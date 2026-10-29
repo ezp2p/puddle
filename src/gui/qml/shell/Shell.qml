@@ -8,8 +8,8 @@ import "../dialogs"
 import "../settings"
 
 // The main window: a canvas with the open conversation (or the settings) straight on it, and two cards floating on it. At the left, one card holds
-// the rail (where servers will go later) and the list of conversations; at the right, the panel about the open conversation (members, or the
-// person's profile). A little circle at the top of the conversation folds each card away. When narrow, the conversation has the whole window and
+// the rail (home, then the Ponds) and the list of conversations, or of the open Pond's channels; at the right, the panel about the open
+// conversation (members, or the person's profile) or the Pond's members. A little circle at the top of the conversation folds each card away. When narrow, the conversation has the whole window and
 // the left card slides in over it, as a drawer, when the circle is pressed.
 Pane {
     id: shell
@@ -23,8 +23,9 @@ Pane {
 
     required property var backend
     readonly property var chats: backend.chats
+    readonly property var ponds: chats.ponds
     readonly property bool wide: width >= Theme.wideBreakpoint
-    // "home" (nothing open), "chat" or "log" (the settings, for now)
+    // "home" (nothing open), "chat", "pond" (a Pond's channel) or "log" (the settings, for now)
     property string page: "home"
     // the side panel (members, or the person's profile): beside the conversation when the window is wide enough, a drawer over it when not
     property bool showContext: true
@@ -36,7 +37,7 @@ Pane {
         else if (contextDrawer.opened) contextDrawer.close()
         else contextDrawer.open()
     }
-    readonly property bool contextWanted: page === "chat" && chats.current !== ""
+    readonly property bool contextWanted: (page === "chat" && chats.current !== "") || (page === "pond" && ponds.current !== "")
     // the conversations: beside the page when wide, a drawer over it when narrow
     readonly property bool sidebarOpen: wide ? showSidebar : sidebarDrawer.opened
     function toggleSidebar() {
@@ -46,6 +47,8 @@ Pane {
     }
     // Alt+Up / Alt+Down walk through the conversations, whichever of the two holds the list
     function step(delta) { const l = wide ? sidebarInline : sidebarInDrawer; if (l.item) l.item.step(delta) }
+    function openPond(id) { sidebarDrawer.close(); chats.close(); ponds.open(id); page = "pond" }
+    function joinPond() { sidebarDrawer.close(); joinPondDialog.show() }
 
     // theme.yaml: the owner's colours and sizes
     Binding { target: Theme; property: "overrides"; value: shell.backend.themeValues }
@@ -78,6 +81,13 @@ Pane {
         function onCurrentChanged() { if (shell.page === "chat" && shell.chats.current === "") { shell.lastChat = ({}); shell.goHome() } }
         function onFailed(what) { toast.show(what) }
         function onGroupCreated(id) { shell.openChat(id, "group") }
+    }
+    Connections {
+        target: shell.ponds
+        function onFailed(what) { toast.show(what) }
+        function onJoined(id) { shell.openPond(id) }
+        // the open Pond went away (we left it): nothing to show but the empty page
+        function onCurrentChanged() { if (shell.page === "pond" && shell.ponds.current === "") shell.goHome() }
     }
 
     // The window cannot reach its own Puddle: say so, rather than showing stale lists as if they were current.
@@ -150,6 +160,17 @@ Pane {
                 sidebarShown: shell.sidebarOpen
                 onToggleSidebar: shell.toggleSidebar()
             }
+            PondPage {
+                objectName: "pondPage"
+                anchors.fill: parent
+                visible: shell.page === "pond"
+                chats: shell.chats
+                narrow: !shell.wide
+                sidebarShown: shell.sidebarOpen
+                contextShown: shell.contextVisible
+                onToggleSidebar: shell.toggleSidebar()
+                onToggleContext: shell.toggleContext()
+            }
             ChatPage {
                 objectName: "chatPage"
                 anchors.fill: parent
@@ -191,7 +212,7 @@ Pane {
     Component {
         id: sidebarPanel
         Card {
-            function step(delta) { sidebar.step(delta) }
+            function step(delta) { if (shell.page === "pond") pondSidebar.step(delta); else sidebar.step(delta) }
 
             Rectangle { x: Theme.railWidth; width: 1; height: parent.height; color: Theme.hairline }
 
@@ -206,8 +227,9 @@ Pane {
                     anchors.horizontalCenter: parent.horizontalCenter
                     width: 44
                     height: 44
-                    radius: shell.page === "chat" ? 22 : 16
-                    color: shell.page !== "chat" || homeHover.hovered ? Theme.accent : Theme.tint(Theme.text, Theme.selected)
+                    readonly property bool active: shell.page !== "chat" && shell.page !== "pond"   // the empty page, or the settings
+                    radius: active ? 16 : 22
+                    color: active || homeHover.hovered ? Theme.accent : Theme.tint(Theme.text, Theme.selected)
                     Behavior on radius { NumberAnimation { duration: 120 } }
                     Accessible.role: Accessible.Button
                     Accessible.name: qsTr("Home")
@@ -240,10 +262,93 @@ Pane {
                     }
                 }
                 Rectangle { width: 28; height: 2; radius: 1; color: Theme.hairline; anchors.horizontalCenter: parent.horizontalCenter }
+
+                // the Ponds we are in, by their initial, then a "+" to join another
+                Repeater {
+                    model: shell.ponds.list
+                    delegate: Rectangle {
+                        id: pondIcon
+                        required property var model
+                        readonly property bool open: shell.page === "pond" && shell.ponds.current === model.id
+                        objectName: "pond_" + model.name
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        width: 44
+                        height: 44
+                        radius: open || pondHover.hovered ? 16 : 22
+                        Behavior on radius { NumberAnimation { duration: 120 } }
+                        color: open || pondHover.hovered ? Theme.accent : Theme.tint(Theme.text, Theme.selected)
+                        opacity: model.status === "removed" ? 0.5 : 1
+                        Accessible.role: Accessible.Button
+                        Accessible.name: model.name
+                        Accessible.onPressAction: shell.openPond(model.id)
+                        Label {
+                            anchors.centerIn: parent
+                            // the first letter of up to the first three words, as Discord shows a server with no picture
+                            text: String(pondIcon.model.name).split(/\s+/).filter(w => w.length).slice(0, 3).map(w => w.charAt(0)).join("")
+                            font.bold: true
+                            font.pixelSize: 15
+                            color: pondIcon.open || pondHover.hovered ? "white" : Theme.text
+                        }
+                        // where it is selected, a bar at the rail's edge
+                        Rectangle {
+                            visible: pondIcon.open
+                            x: -10
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 4; height: 32; radius: 2
+                            color: Theme.text
+                        }
+                        // it cannot be reached, or no longer has us
+                        Rectangle {
+                            visible: pondIcon.model.status === "unreachable" || pondIcon.model.status === "removed" || pondIcon.model.status === "certificate_changed"
+                            anchors.right: parent.right; anchors.bottom: parent.bottom
+                            anchors.rightMargin: -2; anchors.bottomMargin: -2
+                            width: 14; height: 14; radius: 7
+                            color: pondIcon.model.status === "removed" ? Theme.danger : Theme.warning
+                            border.width: 3; border.color: Theme.card
+                        }
+                        HoverHandler { id: pondHover }
+                        TapHandler { onTapped: shell.openPond(pondIcon.model.id) }
+                        ToolTip.visible: pondHover.hovered
+                        ToolTip.text: pondIcon.model.status === "unreachable" ? qsTr("%1 (can't be reached)").arg(pondIcon.model.name)
+                                      : pondIcon.model.status === "removed" ? qsTr("%1 (no longer a member)").arg(pondIcon.model.name)
+                                      : pondIcon.model.name
+                    }
+                }
+                Rectangle {
+                    objectName: "joinPondRailButton"
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    width: 44
+                    height: 44
+                    radius: joinHover.hovered ? 16 : 22
+                    Behavior on radius { NumberAnimation { duration: 120 } }
+                    color: joinHover.hovered ? Theme.primary : Theme.tint(Theme.text, Theme.hover)
+                    Accessible.role: Accessible.Button
+                    Accessible.name: qsTr("Join a Pond")
+                    Accessible.onPressAction: shell.joinPond()
+                    Icon { anchors.centerIn: parent; glyph: "plus"; size: 22; color: joinHover.hovered ? "white" : Theme.primary }
+                    HoverHandler { id: joinHover }
+                    TapHandler { onTapped: shell.joinPond() }
+                    ToolTip.visible: joinHover.hovered
+                    ToolTip.text: qsTr("Join a Pond")
+                }
             }
 
+            PondSidebar {
+                id: pondSidebar
+                visible: shell.page === "pond"
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                anchors.left: parent.left
+                anchors.leftMargin: Theme.railWidth + 1
+                anchors.right: parent.right
+                chats: shell.chats
+                onLeaveRequested: leaveConfirm.ask(qsTr("Leave %1?").arg(shell.ponds.currentName),
+                                                   qsTr("You will need a new invite to join again. What your Puddle kept of it is forgotten."),
+                                                   qsTr("Leave Pond"), () => shell.ponds.leave(shell.ponds.current))
+            }
             Sidebar {
                 id: sidebar
+                visible: shell.page !== "pond"
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
                 anchors.left: parent.left
@@ -283,6 +388,13 @@ Pane {
 
     Component {
         id: contextPanel
+        Loader {
+            anchors.fill: parent
+            sourceComponent: shell.page === "pond" ? pondMembers : conversationContext
+        }
+    }
+    Component {
+        id: conversationContext
         ContextBar {
             chats: shell.chats
             developer: shell.backend.developerMode
@@ -291,6 +403,14 @@ Pane {
             onOpenChat: id => { contextDrawer.close(); shell.openChat(id, "dm") }
             onAddPeople: newConv.showAdd(shell.chats.current, shell.chats.currentName)
             onRenameGroup: groupTools.rename(shell.chats.current, shell.chats.currentName)
+        }
+    }
+    Component {
+        id: pondMembers
+        PondMembers {
+            ponds: shell.ponds
+            closable: !shell.contextInline
+            onCloseRequested: contextDrawer.close()
         }
     }
     // when there is no room beside the conversation: slides in over it from the right, on a card like the one it would sit on
@@ -313,6 +433,8 @@ Pane {
         }
     }
     ConversationMenu { id: groupTools; chats: shell.chats }
+    ConfirmDialog { id: leaveConfirm }
+    JoinPondDialog { id: joinPondDialog; chats: shell.chats }
 
     NewConversationDialog {
         id: newConv

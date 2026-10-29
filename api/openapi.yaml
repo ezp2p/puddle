@@ -32,6 +32,7 @@ tags:
   - { name: streams, description: Connections to other Puddles }
   - { name: conversations, description: DMs and groups alike, and their messages }
   - { name: groups, description: Group chats }
+  - { name: ponds, description: "Community servers the owner is in: their channels and messages, through this Puddle (docs/ponds.md)" }
   - { name: identity, description: This Puddle's keys }
   - { name: profiles, description: "The owner's profiles: files in the data folder, each shown only where the owner chooses (docs/profiles.md)" }
   - { name: invites, description: Links that are accepted automatically }
@@ -308,6 +309,86 @@ paths:
       responses: { "200": { $ref: "#/components/responses/Group" } }
 
   # ---- identity, profiles, invites, media ----
+  /api/v1/ponds:
+    get:
+      tags: [ponds]
+      summary: The Ponds the owner is in. `version` changes whenever anything kept of any of them does.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version: { type: integer }
+                  items: { type: array, items: { $ref: "objects/pond.yaml" } }
+  /api/v1/ponds/join:
+    post:
+      tags: [ponds]
+      summary: Join the Pond a pond:// invite names
+      description: |
+        `bad_link` (400) if it is not a pond:// link with an invite; `invite_refused` (409) if the Pond did not accept it (it
+        does not say why); `no_profile` (404); `unreachable`, `not_a_pond` (502).
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [link]
+              properties:
+                link: { type: string, maxLength: 400, examples: ["pond://pond.example.org?invite=abcdefghijklmnopqrstuvwxyz"] }
+                profile: { type: [string, "null"], description: Which of the owner's profiles the members see; null or left out for none }
+      responses:
+        "201": { $ref: "#/components/responses/Pond" }
+  /api/v1/ponds/{pond}:
+    parameters: [{ $ref: "#/components/parameters/Pond" }]
+    get:
+      tags: [ponds]
+      summary: The Pond, with the owner's member id and every member
+      responses: { "200": { $ref: "#/components/responses/Pond" } }
+  /api/v1/ponds/{pond}/channels/{channel}/messages:
+    parameters: [{ $ref: "#/components/parameters/Pond" }, { $ref: "#/components/parameters/Channel" }]
+    get:
+      tags: [ponds]
+      summary: A page of a channel, oldest first
+      description: Answered from what the Puddle keeps (the newest 200 of each channel) when it can, else asked of the Pond.
+      parameters:
+        - { name: before, in: query, schema: { type: integer, minimum: 1 }, description: Only messages with a lower id; the newest when left out }
+        - { $ref: "#/components/parameters/Limit" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "objects/pond.yaml#/$defs/Message" } }
+                  more: { type: boolean, description: There are older messages }
+  /api/v1/ponds/{pond}/channels/{channel}/messages/send:
+    parameters: [{ $ref: "#/components/parameters/Pond" }, { $ref: "#/components/parameters/Channel" }]
+    post:
+      tags: [ponds]
+      summary: Post to a channel
+      description: "`bad_text` (400), `slow_down` (429), `removed` (409: the Pond no longer has us), `unreachable` (502)."
+      requestBody: { content: { application/json: { schema: { type: object, required: [body], properties: { body: { type: string, minLength: 1, maxLength: 4000 } } } } } }
+      responses:
+        "200": { description: Posted, content: { application/json: { schema: { type: object, properties: { sent: { const: true } } } } } }
+  /api/v1/ponds/{pond}/profile:
+    parameters: [{ $ref: "#/components/parameters/Pond" }]
+    post:
+      tags: [ponds]
+      summary: Choose which of the owner's profiles the Pond's members see; the Pond is told
+      requestBody: { content: { application/json: { schema: { type: object, required: [profile], properties: { profile: { type: [string, "null"] } } } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { profile: { type: [string, "null"] } } } } } }
+  /api/v1/ponds/{pond}/leave:
+    parameters: [{ $ref: "#/components/parameters/Pond" }]
+    post:
+      tags: [ponds]
+      summary: Leave. The Pond is told if it can be reached; it is forgotten here either way, with everything kept of it.
+      responses: { "204": { description: Left } }
   /api/v1/identity:
     get: { tags: [identity], summary: This Puddle's keys, responses: { "200": { $ref: "#/components/responses/Identity" } } }
   /api/v1/identity/roll:
@@ -577,6 +658,8 @@ components:
     File: { name: file, in: path, required: true, schema: { type: string, pattern: "^[0-9a-f]{64}$" } }
     Upload: { name: upload, in: path, required: true, schema: { type: string, pattern: "^[0-9a-f]{32}$" } }
     Profile: { name: profile, in: path, required: true, description: One of the owner's profile ids, schema: { type: string, pattern: "^[a-z0-9_-]{1,32}$" } }
+    Pond: { name: pond, in: path, required: true, description: The Pond's id, made like a user id, schema: { $ref: "wire/ids.yaml#/$defs/UserId" } }
+    Channel: { name: channel, in: path, required: true, schema: { type: integer, minimum: 1 } }
     Limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
     Offset: { name: offset, in: query, description: "Where to start: a page's `next`", schema: { type: integer, minimum: 0, default: 0 } }
 
@@ -589,6 +672,7 @@ components:
     File: { description: OK, content: { application/json: { schema: { $ref: "objects/file.yaml" } } } }
     Upload: { description: OK, content: { application/json: { schema: { $ref: "objects/upload.yaml" } } } }
     Group: { description: OK, content: { application/json: { schema: { $ref: "objects/group.yaml" } } } }
+    Pond: { description: OK, content: { application/json: { schema: { $ref: "objects/pond.yaml" } } } }
     Identity: { description: OK, content: { application/json: { schema: { $ref: "objects/identity.yaml" } } } }
     Error: { description: Not possible now, content: { application/json: { schema: { $ref: "objects/error.yaml" } } } }
     NotFound: { description: No such thing, or not allowed (the same answer), content: { application/json: { schema: { $ref: "objects/error.yaml" } } } }

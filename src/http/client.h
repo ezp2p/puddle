@@ -17,6 +17,7 @@
 #include "core/identity.h"
 #include "core/delivery.h"
 #include "core/link.h"
+#include "platform/net.h"
 
 #include <stddef.h>
 
@@ -32,6 +33,9 @@ typedef struct {
     size_t max_body;          /* the largest answer to accept; 0 = PUDDLE_NET_BODY_MAX. Larger ones fail rather than fill memory. */
     /* Asked once the certificate is known and before anything is sent: 1 to go on, 0 to stop. NULL = always. */
     int (*fingerprint_ok)(void *user, const char *fingerprint_hex);
+    /* Told the connection once it is made, and PUDDLE_SOCK_NONE just before it is closed, so another thread can end a call
+     * that is waiting (puddle_sock_cut): a Pond holds a request for events open for up to 25 seconds. NULL = not told. */
+    void (*on_socket)(void *user, puddle_sock s);
     void *user;
 } puddle_net_opts;
 

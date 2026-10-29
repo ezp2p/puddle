@@ -137,6 +137,8 @@ void puddle_net_request(const puddle_address *addr, const char *method, const ch
     puddle_sock sock = dial(addr, connect_s, io_s, deadline, out);
     if (sock == PUDDLE_SOCK_NONE)
         return;
+    if (o.on_socket)
+        o.on_socket(o.user, sock);
 
     SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
     SSL *ssl = NULL;
@@ -284,5 +286,7 @@ done:
     }
     SSL_CTX_free(ctx);
     free(raw);
+    if (o.on_socket)
+        o.on_socket(o.user, PUDDLE_SOCK_NONE);
     puddle_sock_close(sock);
 }

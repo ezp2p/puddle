@@ -9,6 +9,7 @@
 
 #include "apiclient.h"
 #include "jsonlistmodel.h"
+#include "ponds.h"
 
 // What the window shows, kept fresh from the owner API of our own Puddle: the people (friends and requests), the
 // conversations with their unread counts, and the messages of the chat that is open. All of it is read over the
@@ -40,6 +41,7 @@ class Chats : public QObject {
     Q_PROPERTY(bool hasOlder READ hasOlder NOTIFY hasOlderChanged)                 // more history than is loaded
     Q_PROPERTY(bool attentive READ attentive WRITE setAttentive NOTIFY attentiveChanged) // someone is looking at the window
     Q_PROPERTY(bool connected READ connected NOTIFY connectedChanged)
+    Q_PROPERTY(QObject *ponds READ ponds CONSTANT)                  // the Ponds we are in, and the one that is open (ponds.h)
 public:
     explicit Chats(QObject *parent = nullptr);
 
@@ -76,6 +78,8 @@ public:
     int incomingRequests() const { return incomingRequests_; }
     bool connected() const { return connected_; }
     ApiClient *api() { return &api_; }
+    QObject *ponds() { return &ponds_; }
+    Ponds *pondList() { return &ponds_; }
 
     // Start talking to the Puddle at `base`, reading its token and certificate from the files.
     bool attach(const QUrl &base, const QString &tokenFile, const QString &certFile);
@@ -204,6 +208,7 @@ private:
     void getAll(const QString &path, const QString &key, std::function<void(int, const QJsonDocument &)> done);
 
     ApiClient api_;
+    Ponds ponds_{ &api_ };
     QTimer timer_;
     JsonListModel people_, conversations_, messages_, blocked_, profiles_, invites_, members_, sidebar_;
     QHash<QString, QJsonObject> groups_;   // the groups we are in or invited to, by id

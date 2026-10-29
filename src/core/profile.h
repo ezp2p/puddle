@@ -132,14 +132,17 @@ int puddle_profiles_image(puddle_profiles *p, puddle_media *m);
 /* ---- where each profile is shown ---- */
 
 /* A place is where a profile can be shown: "dm:<user id>" (a direct conversation, and everything else between two Puddles
- * outside groups) or "group:<group id>". Ponds will add "pond:<id>". */
+ * outside groups), "group:<group id>" or "pond:<pond id>". */
 #define PUDDLE_PLACE_MAX 64
 int puddle_place_dm(const char *user_id, char out[PUDDLE_PLACE_MAX]);   /* 0, or -1 if the id is not valid */
 int puddle_place_group(const char *group_id, char out[PUDDLE_PLACE_MAX]);
+int puddle_place_pond(const char *pond_id, char out[PUDDLE_PLACE_MAX]);
 int puddle_place_valid(const char *place);
-/* For "group:<id>", the group id (else NULL); for "dm:<id>", the user id (else NULL). Pointers into `place`. */
+/* For "group:<id>", the group id (else NULL); for "dm:<id>", the user id; for "pond:<id>", the Pond's id. Pointers into
+ * `place`. */
 const char *puddle_place_group_id(const char *place);
 const char *puddle_place_dm_id(const char *place);
+const char *puddle_place_pond_id(const char *place);
 
 /* Which profile each place is shown: the owner's choices. Kept in <data_dir>/state/profile-places.tsv (the choices made
  * for streams before groups had their own, in stream-profiles.tsv, are read from there the first time). */

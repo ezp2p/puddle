@@ -82,6 +82,38 @@ a new phrase. Authority to roll comes from a **roll key**, derived from the phra
 Built in `src/core/identity.cpp`; run it with `puddled --roll`, or over the owner API while the Puddle runs (`POST /api/v1/identity/roll`, then `/confirm`). If it is interrupted, the next start finishes it:
 the signed record and the new keys are written together to a journal before either real file changes.
 
+## The chain file
+
+`identity/chain.jsonl` is what other Puddles and Ponds are given to check an identity (as `chain` in requests). It is
+one record per line, each line ending in `\n`. This is the exact format; a separate implementation (the Pond's
+`src/identity.cpp`) checks chains from this description.
+
+Encodings: keys and signatures are standard base64 with padding (32 and 64 bytes); hashes are 64 lowercase hex
+characters of SHA-256; the id is RFC 4648 base32, lowercase, without padding (52 characters).
+
+The first line, the **inception**:
+
+    {"record":{"type":"identity.inception","seq":0,"signing":"<b64>","encryption":"<b64>","next":"<hex>","ts":<ms>},"sig":"<b64>"}
+
+- `signing` is the first Ed25519 signing key, `encryption` the X25519 key, `next` the SHA-256 of the first roll key.
+- `sig` is by `signing`, over the exact bytes of the `record` value as they appear in the line, from its `{` to its
+  `}`. Signatures always cover those bytes, never a re-serialisation, so a checker must take the record's text from
+  the line rather than rebuild it.
+- The id is `base32(SHA-256(signing key || the 32 bytes that next encodes))`.
+
+Each later line, a **rotation**:
+
+    {"record":{"type":"identity.rotate","seq":N,"prev":"<hex>","signing":"<b64>","encryption":"<b64>","roll":"<b64>","next":"<hex>","ts":<ms>},"sig":"<b64>","sig_roll":"<b64>","sig_prev":"<b64>"}
+
+- `seq` is one more than the record before, and `prev` is the SHA-256 of that record's bytes.
+- `roll` reveals the roll key whose SHA-256 the record before gave as `next`; `next` commits to the following one.
+- `sig` is by the new `signing` key, `sig_roll` by `roll`, and `sig_prev` by the signing key of the record before,
+  all over this record's bytes.
+
+A chain is valid when every line checks. The current keys are those of the last record, and the key id a request
+names (`kid`) is the hex SHA-256 of the current signing key. Puddle writes the fields in the order shown, but a checker
+should find them by name. Blank lines are skipped. A chain is at most 4 MiB and 10,000 records.
+
 ## Restoring on a new computer
 
 Built in `src/core/identity.cpp` (`puddle_identity_restore`) and run with `puddled --restore --chain FILE`.

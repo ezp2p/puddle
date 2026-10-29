@@ -203,9 +203,9 @@ group and the requester is invited to it. The whole design is in `docs/groups.md
 
 ## Ponds
 
-A Pond is a peer with `kind: pond`. The same flows apply (link, invite token, `open` policy, signed
-requests). What differs is what crosses the stream afterwards: channels and history held by the
-Pond, rather than logs replicated between peers.
+A Pond is not a stream peer, as was first drafted here. Its members' Puddles sign their requests the same way, but a Puddle
+joins a Pond with a `pond://` invite and then calls it directly, holding a request for its events open; the Pond never
+calls a Puddle, so none of the stream flow (asking, answers, the outbox) is used. See docs/ponds.md.
 
 ## Not decided
 

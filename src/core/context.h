@@ -5,6 +5,7 @@
  * routes other Puddles call, and the outbox's callbacks. service/server.cpp builds it. Each part is named here
  * without saying what it is, so this header needs nothing from the layers above core. */
 
+#include "base/json.h"
 #include "core/config.h"
 #include "core/link.h"
 #include "core/profile.h"
@@ -26,6 +27,8 @@ typedef struct puddle_groups puddle_groups;
 typedef struct puddle_outbox puddle_outbox;
 typedef struct puddle_files puddle_files;
 typedef struct puddle_transfers puddle_transfers;
+typedef struct puddle_ponds puddle_ponds;
+typedef struct puddle_pond_followers puddle_pond_followers;
 typedef struct puddle_replay puddle_replay;
 typedef struct puddle_bucket puddle_bucket;
 typedef struct puddle_keyed puddle_keyed;
@@ -58,6 +61,10 @@ typedef struct {
     int (*file_fetch)(puddle_ctx *ctx, const char *chat, const char *message, const char *file, const char **code);
     int (*file_request)(puddle_ctx *ctx, const char *chat, const char *message, const char *file, const char **code);
     int (*file_answer)(puddle_ctx *ctx, const char *chat, const char *message, const char *file, const char *peer, int yes, const char **code);
+    int (*pond_join)(puddle_ctx *ctx, const puddle_link *link, const char *profile_id, char out_id[PUDDLE_USER_ID_LEN + 1], const char **code);
+    int (*pond_send)(puddle_ctx *ctx, const char *pond, int64_t channel, const char *text, const char **code);
+    int (*pond_history)(puddle_ctx *ctx, const char *pond, int64_t channel, int64_t before, int limit, puddle_jw *w, const char **code);
+    int (*pond_leave)(puddle_ctx *ctx, const char *pond, const char **code);
 } puddle_courier;
 
 /* What handlers can reach. */
@@ -74,6 +81,8 @@ struct puddle_ctx {
     puddle_outbox *outbox;                 /* what we owe other Puddles; NULL in tests that do not send */
     puddle_files *files;                   /* files sent in chats (storage/files.h); NULL in tests that keep none */
     puddle_transfers *transfers;           /* fetching others' files (core/transfers.h); NULL = nothing is fetched */
+    puddle_ponds *ponds;                   /* the Ponds we are in (core/ponds.h); NULL in tests that have none */
+    puddle_pond_followers *pond_followers; /* a thread following each (federation/ponds.h); NULL = none are followed */
     puddle_replay *replay;                 /* one nonce memory for the whole Puddle */
     puddle_bucket *anon_bucket;            /* work done for strangers before they are authenticated; NULL = unlimited */
     puddle_keyed *access_limit;            /* requests for a stream, per requester; NULL = unlimited */

@@ -1076,9 +1076,22 @@ const char *puddle_place_dm_id(const char *place)
     return place && !strncmp(place, "dm:", 3) && puddle_id_valid(place + 3) ? place + 3 : NULL;
 }
 
+int puddle_place_pond(const char *pond_id, char out[PUDDLE_PLACE_MAX])
+{
+    if (!puddle_id_valid(pond_id))
+        return -1;
+    snprintf(out, PUDDLE_PLACE_MAX, "pond:%s", pond_id);
+    return 0;
+}
+
+const char *puddle_place_pond_id(const char *place)
+{
+    return place && !strncmp(place, "pond:", 5) && puddle_id_valid(place + 5) ? place + 5 : NULL;
+}
+
 int puddle_place_valid(const char *place)
 {
-    return puddle_place_dm_id(place) || puddle_place_group_id(place);
+    return puddle_place_dm_id(place) || puddle_place_group_id(place) || puddle_place_pond_id(place);
 }
 
 /* ---------------------------------------------------------- assignments */

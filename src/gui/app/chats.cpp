@@ -103,6 +103,7 @@ bool Chats::attach(const QUrl &base, const QString &tokenFile, const QString &ce
         return false;
     timer_.start();
     refresh();
+    ponds_.start();
     return true;
 }
 

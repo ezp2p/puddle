@@ -438,7 +438,9 @@ static void test_places(void)
     CHECK(puddle_place_dm(PEER_A, place) == 0 && !strcmp(place, "dm:" PEER_A) && !strcmp(puddle_place_dm_id(place), PEER_A));
     CHECK(puddle_place_group(GROUP, gplace) == 0 && !strcmp(puddle_place_group_id(gplace), GROUP) && !puddle_place_dm_id(gplace));
     CHECK(puddle_place_dm("short", place) == -1 && puddle_place_group("x", place) == -1);
-    CHECK(!puddle_place_valid("dm:short") && !puddle_place_valid("pond:" GROUP) && !puddle_place_valid("") && !puddle_place_valid(PEER_A));
+    CHECK(puddle_place_pond(GROUP, place) == 0 && !strcmp(place, "pond:" GROUP) && !strcmp(puddle_place_pond_id(place), GROUP) &&
+          puddle_place_valid(place) && !puddle_place_group_id(place) && puddle_place_pond("x", place) == -1);
+    CHECK(!puddle_place_valid("dm:short") && !puddle_place_valid("pond:short") && !puddle_place_valid("") && !puddle_place_valid(PEER_A));
     CHECK(puddle_place_dm(PEER_A, place) == 0);
 
     /* the choices made per stream before groups had their own are read once, as direct places */

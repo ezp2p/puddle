@@ -13,7 +13,7 @@ certificate pinning), the retrying outbox, direct messages with edit and delete,
 pictures over a stream, and the Qt app (Friends, conversations, chat, delivery state). 32 test suites, including two Puddles
 talking over TLS and the window driven by real clicks and keys.
 
-Group chats (phase 5) are built. Not built: Ponds, the phone client, encryption at rest. See "Later" below and `discuss-later.md`.
+Group chats (phase 5) are built, and joining Ponds' text channels (docs/ponds.md). Not built: the phone client, encryption at rest. See "Later" below and `discuss-later.md`.
 
 ## Order, and why
 
@@ -487,7 +487,7 @@ now travels directly (`told`); events about the group go to the invited too, or 
 
 ## Later, not planned in detail
 
-Removing a member, a display name for the group-only connection, Ponds, encrypting message
+Removing a member, a display name for the group-only connection, more of Ponds (docs/ponds.md, "Not yet"), encrypting message
 bodies, encrypting data at rest, the phone client and device pairing. Parked questions are in
 `discuss-later.md`.
 
