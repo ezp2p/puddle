@@ -10,7 +10,7 @@ Ponds::Ponds(ApiClient *api, QObject *parent)
       list_({ "id", "name", "status", "address" }),
       channels_({ "id", "name", "topic" }),
       members_({ "id", "name", "color", "isMe" }),
-      messages_({ "id", "author", "name", "tint", "text", "ts", "mine", "grouped", "dayStart" })
+      messages_({ "id", "author", "name", "tint", "text", "files", "ts", "mine", "grouped", "dayStart" })
 {
     timer_.setInterval(1000);
     connect(&timer_, &QTimer::timeout, this, &Ponds::refresh);
@@ -170,6 +170,15 @@ void Ponds::refreshMessages()
                 emit hasOlderChanged();
             }
         } else {
+            // the page's messages replace the ones loaded (what is here of their files changes), and newer ones are added
+            QHash<double, QJsonObject> byId;
+            for (const QJsonObject &m : page)
+                byId.insert(m.value("id").toDouble(), m);
+            for (QJsonObject &m : loaded_) {
+                auto it = byId.constFind(m.value("id").toDouble());
+                if (it != byId.cend())
+                    m = *it;
+            }
             for (const QJsonObject &m : page)
                 if (m.value("id").toDouble() > newest)
                     loaded_.append(m);
@@ -194,6 +203,7 @@ void Ponds::rebuildMessages()
                        { "name", mine ? tr("You") : who.isEmpty() ? author.left(8) : who.value("name").toString() },
                        { "tint", who.value("color").toString() },
                        { "text", m.value("text") },
+                       { "files", m.value("files") },
                        { "ts", double(ts) },
                        { "mine", mine },
                        { "dayStart", newDay },
@@ -202,6 +212,24 @@ void Ponds::rebuildMessages()
         prev = m;
     }
     messages_.setItems(rows);
+}
+
+QString Ponds::sendPath() const
+{
+    return channel_.isEmpty() ? QString() : pathOfChannel() + QStringLiteral("/send");
+}
+
+void Ponds::fetchFile(const QString &messageId, const QString &fileId)
+{
+    if (channel_.isEmpty() || messageId.isEmpty() || fileId.size() != 64)
+        return;
+    api_->post(pathOfChannel() + QStringLiteral("/%1/files/%2/download").arg(messageId, fileId), QJsonObject{},
+               [this](int status, const QJsonDocument &json) {
+                   if (status != 204)
+                       emit failed(why(status, json, tr("fetch the file")));
+                   else
+                       refreshMessages();
+               });
 }
 
 void Ponds::join(const QString &link, const QString &profile)

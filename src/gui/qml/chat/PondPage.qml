@@ -1,11 +1,13 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Dialogs
 import QtQuick.Layouts
+import Puddle.Files
 import "../components"
 import "../theme"
 
 // A Pond's text channel, laid out like a conversation: each message under the name and time of who wrote it, following messages from the same
-// person tucked under the first. The words are all there is for now (docs/ponds.md): no files, replies or edits yet.
+// person tucked under the first. Files go with messages as in a conversation (docs/ponds.md, "Files"); no replies or edits yet.
 Pane {
     id: page
 
@@ -36,10 +38,41 @@ Pane {
     }
     function send() {
         const t = input.text.trim()
-        if (!canSend || t === "") return
-        ponds.send(t)
+        if (!canSend) return
+        if (composer.count > 0) {          // files, with the words as their caption
+            if (!composer.send(t, "")) return
+            composer.caption = t
+        } else {
+            if (t === "") return
+            ponds.send(t)
+        }
         input.text = ""
         list.stickToEnd = true
+    }
+
+    // the files waiting to go with the next message: chosen with the paperclip, dropped on the page, or pasted
+    Composer {
+        id: composer
+        property string caption: ""        // the words that went with them, given back if they could not be sent
+        chats: page.chats
+        target: page.ponds.channel !== "" ? page.ponds.sendPath() : ""
+        onRefused: why => page.chats.failed(why)
+        onFailed: why => {
+            page.chats.failed(why)
+            if (input.text === "") input.text = caption
+        }
+        onSent: { caption = ""; page.ponds.refresh() }
+    }
+    FileActions {
+        id: fileActions
+        chats: page.chats
+        onFailed: why => page.chats.failed(why)
+    }
+    FileDialog {
+        id: picker
+        title: qsTr("Choose files to send")
+        fileMode: FileDialog.OpenFiles
+        onAccepted: composer.add(selectedFiles)
     }
 
     // each channel keeps its own unsent text
@@ -215,6 +248,7 @@ Pane {
                             TextEdit {
                                 id: bodyText
                                 objectName: "pondMessageText"
+                                visible: text !== ""
                                 Layout.fillWidth: true
                                 readOnly: true
                                 selectByMouse: true
@@ -227,13 +261,34 @@ Pane {
                                 Accessible.role: Accessible.StaticText
                                 Accessible.name: msg.model.name + ": " + text
                             }
+                            MessageFiles {
+                                visible: !!msg.model.files && msg.model.files.length > 0
+                                Layout.fillWidth: true
+                                Layout.topMargin: 4
+                                chats: page.chats
+                                fetcher: page.ponds
+                                files: msg.model.files || []
+                                messageId: msg.model.id
+                                onViewMedia: (list, i) => fileActions.view(list, i)
+                                onSaveFile: f => fileActions.save(f)
+                                onOpenFile: f => fileActions.open(f)
+                            }
                         }
                     }
                 }
             }
         }
 
-        // the box: as in a conversation, without files
+        // the files that go with the next message
+        AttachmentTray {
+            composer: composer
+            Layout.fillWidth: true
+            Layout.leftMargin: 16
+            Layout.rightMargin: 16
+            Layout.topMargin: 8
+        }
+
+        // the box: as in a conversation
         Rectangle {
             id: box
             readonly property int pad: 6
@@ -262,7 +317,7 @@ Pane {
                     wrapMode: TextArea.Wrap
                     selectByMouse: true
                     color: Theme.text
-                    leftPadding: 14
+                    leftPadding: box.pad + box.buttonSize + 8
                     rightPadding: box.pad * 2 + box.buttonSize + 10
                     topPadding: Math.max(6, Math.round((box.buttonSize + 2 * box.pad - fontMetrics.height) / 2))
                     bottomPadding: topPadding
@@ -275,15 +330,33 @@ Pane {
                         if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && !(event.modifiers & Qt.ShiftModifier) && !inputMethodComposing) {
                             page.send()
                             event.accepted = true
+                        } else if (event.matches(StandardKey.Paste) && composer.canPaste()) { // a picture or files: they go with the message
+                            composer.paste()
+                            event.accepted = true
                         }
                     }
                 }
             }
 
+            ToolButton {
+                objectName: "pondAttachButton"
+                anchors.left: parent.left
+                anchors.bottom: parent.bottom
+                anchors.margins: box.pad
+                width: box.buttonSize
+                height: box.buttonSize
+                enabled: page.canSend && !composer.sending
+                icon.source: Theme.icon("paperclip"); icon.width: 18; icon.height: 18
+                display: AbstractButton.IconOnly
+                Accessible.name: qsTr("Add files")
+                ToolTip.text: qsTr("Add files"); ToolTip.visible: hovered
+                onClicked: picker.open()
+            }
+
             Rectangle {
                 id: sendButton
                 objectName: "pondSendButton"
-                readonly property bool ready: page.canSend && input.text.trim() !== ""
+                readonly property bool ready: page.canSend && !composer.sending && (input.text.trim() !== "" || composer.ready)
                 anchors.right: parent.right
                 anchors.bottom: parent.bottom
                 anchors.margins: box.pad
@@ -302,6 +375,29 @@ Pane {
                     onTapped: { page.send(); input.forceActiveFocus() }
                 }
             }
+        }
+    }
+
+    // files dropped anywhere on the channel go with the next message
+    DropArea {
+        id: dropArea
+        anchors.fill: parent
+        enabled: page.canSend && !composer.sending
+        onEntered: drag => { if (!drag.hasUrls) drag.accepted = false }
+        onDropped: drop => {
+            composer.add(drop.urls)
+            drop.accept(Qt.CopyAction)
+            input.forceActiveFocus()
+        }
+        Rectangle {
+            anchors.fill: parent
+            anchors.margins: 8
+            visible: dropArea.containsDrag
+            radius: Theme.radiusLarge
+            color: Theme.tint(Theme.accent, 0.12)
+            border.width: 2
+            border.color: Theme.accent
+            Label { anchors.centerIn: parent; text: qsTr("Drop to add to your message"); font.pixelSize: 16; font.bold: true }
         }
     }
 }

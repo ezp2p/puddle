@@ -21,6 +21,8 @@ class QMediaPlayer;
 class Composer : public QObject {
     Q_OBJECT
     Q_PROPERTY(QObject *chats READ chats WRITE setChats NOTIFY chatsChanged)
+    // where the message goes: "" is the open chat; otherwise an owner API send route, such as a Pond channel's
+    Q_PROPERTY(QString target MEMBER target_ NOTIFY targetChanged)
     // key, name, size, mime, kind ("image", "video" or "file"), url (the file, to show a photo), thumb (a picture of a video),
     // state ("preparing", "ready", "uploading", "failed"), progress (0 to 1)
     Q_PROPERTY(QObject *items READ items CONSTANT)
@@ -56,6 +58,7 @@ public:
 
 signals:
     void chatsChanged();
+    void targetChanged();
     void changed();
     void refused(const QString &why);   // a file that cannot be added, said in words
     void sent();
@@ -70,6 +73,7 @@ private:
 
     JsonListModel items_;
     QPointer<Chats> chats_;
+    QString target_;
     QHash<QString, QJsonObject> extra_;          // per key: path, w, h, duration_ms, preview (sent, not shown)
     QHash<QString, QMediaPlayer *> players_;     // videos being looked at
     int next_ = 0;

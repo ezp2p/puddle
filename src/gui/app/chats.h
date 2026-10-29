@@ -103,6 +103,8 @@ public:
     // uploaded a chunk at a time (uploadProgress), then the message goes with them (filesSent), or not (filesFailed).
     // `text` may be empty.
     Q_INVOKABLE void sendFiles(const QString &text, const QString &replyTo, const QVariantList &files);
+    // The same, to another place's send route (`path`, such as a Pond channel's .../messages/send), rather than the open chat.
+    void sendFilesTo(const QString &path, const QString &text, const QVariantList &files);
     Q_INVOKABLE void edit(const QString &messageId, const QString &text);
     Q_INVOKABLE void remove(const QString &messageId);
 

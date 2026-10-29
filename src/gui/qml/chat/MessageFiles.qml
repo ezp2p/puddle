@@ -13,6 +13,7 @@ ColumnLayout {
     id: root
 
     required property var chats
+    property var fetcher: chats      // who fetches a file that did not come by itself: the chats, or the Ponds for a channel
     required property var files
     required property string messageId
     signal viewMedia(var list, int index)
@@ -149,7 +150,7 @@ ColumnLayout {
                         visible: (tile.f.state === "waiting" || tile.f.state === "failed") && !root.refusedToUs(tile.f)
                         anchors.horizontalCenter: parent.horizontalCenter
                         text: tile.f.state === "failed" ? qsTr("Try again") : qsTr("Download %1").arg(root.chats.sizeText(tile.f.size))
-                        onClicked: root.chats.fetchFile(root.messageId, tile.f.id)
+                        onClicked: root.fetcher.fetchFile(root.messageId, tile.f.id)
                     }
                     Button {
                         objectName: "askAgain"
@@ -220,7 +221,7 @@ ColumnLayout {
                     display: AbstractButton.IconOnly
                     Accessible.name: card.f.state === "failed" ? qsTr("Try again") : qsTr("Download")
                     ToolTip.text: Accessible.name; ToolTip.visible: hovered
-                    onClicked: root.chats.fetchFile(root.messageId, card.f.id)
+                    onClicked: root.fetcher.fetchFile(root.messageId, card.f.id)
                 }
                 ToolButton {
                     objectName: "saveFile"

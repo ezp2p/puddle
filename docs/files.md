@@ -9,6 +9,9 @@ Code: `storage/files` (the bytes, by id), `core/transfers` (fetching), `events/m
 `objects/file` and `api/files.cpp` (the owner's side), `federation/files` (between Puddles), and in the app
 `app/composer` (sending) and `qml/chat/MessageFiles.qml`, `MediaViewer.qml` (showing).
 
+Files in Pond channels use the same store, ids and app pieces, fetched from the Pond instead of from a peer: see
+`docs/ponds.md`, "Files".
+
 ## What was decided
 
 | Question | Decision |

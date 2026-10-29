@@ -222,6 +222,8 @@ if(PUDDLE_BUILD_GUI)
         src/gui/qml/chat/PondPage.qml
         src/gui/qml/chat/MessageFiles.qml
         src/gui/qml/chat/MediaViewer.qml
+        src/gui/qml/chat/FileActions.qml
+        src/gui/qml/chat/AttachmentTray.qml
         src/gui/qml/settings/PersonRow.qml
         src/gui/qml/settings/LogPage.qml
         src/gui/qml/components/Avatar.qml

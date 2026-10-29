@@ -370,11 +370,51 @@ paths:
     parameters: [{ $ref: "#/components/parameters/Pond" }, { $ref: "#/components/parameters/Channel" }]
     post:
       tags: [ponds]
-      summary: Post to a channel
-      description: "`bad_text` (400), `slow_down` (429), `removed` (409: the Pond no longer has us), `unreachable` (502)."
-      requestBody: { content: { application/json: { schema: { type: object, required: [body], properties: { body: { type: string, minLength: 1, maxLength: 4000 } } } } } }
+      summary: Post to a channel, with files
+      description: |
+        Files are given as for a conversation's send (each uploaded or taken first, so it is here whole). Each is sent to the
+        Pond before the message, a chunk at a time, skipping what the Pond has already (docs/ponds.md, "Files"); the call
+        answers once the message is posted. `bad_text`, `bad_file`, `too_many_files` (400); `slow_down` (429); `removed`
+        (409: the Pond no longer has us); `no_file` (409: one is not here whole); `files_off` (409: the Pond takes no files);
+        `too_large` (409: one is over the Pond's `files.max_size`); `unreachable` (502).
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                body: { type: string, minLength: 1, maxLength: 4000, description: Required without files }
+                files:
+                  type: array
+                  maxItems: 10
+                  items:
+                    type: object
+                    required: [id, name, mime]
+                    properties:
+                      id: { type: string, pattern: "^[0-9a-f]{64}$" }
+                      name: { type: string }
+                      mime: { type: string }
+                      w: { type: integer }
+                      h: { type: integer }
+                      duration_ms: { type: integer }
+                      preview: { type: string }
       responses:
         "200": { description: Posted, content: { application/json: { schema: { type: object, properties: { sent: { const: true } } } } } }
+  /api/v1/ponds/{pond}/channels/{channel}/messages/{message}/files/{file}/download:
+    parameters:
+      - { $ref: "#/components/parameters/Pond" }
+      - { $ref: "#/components/parameters/Channel" }
+      - { name: message, in: path, required: true, schema: { type: integer, minimum: 1 } }
+      - { $ref: "#/components/parameters/File" }
+    post:
+      tags: [ponds]
+      summary: "Fetch a file a Pond message carries that did not come by itself"
+      description: |
+        One over files.auto_download, or in a message older than the newest 200 of its channel. It is fetched from the Pond
+        soon, and kept for a week past its message. Watch the message's file `state` and `received`. `removed` (409).
+      responses:
+        "204": { description: It will be fetched }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/v1/ponds/{pond}/profile:
     parameters: [{ $ref: "#/components/parameters/Pond" }]
     post:

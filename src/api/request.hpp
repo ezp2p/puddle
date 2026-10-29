@@ -4,11 +4,13 @@
 // reads what it needs in one line each and never checks a return code.
 
 #include "core/error.hpp"
+#include "events/message.h"
 #include "http/router.h"
 
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace puddle::api {
 
@@ -43,5 +45,9 @@ Page paging(const puddle_call *c, size_t maxLimit, const char *extra = nullptr, 
 // {"items": [...], "next": <offset or null>}: call begin(), write the items, then end() with where the next page starts.
 void beginPage(puddle_jw *w);
 void endPage(puddle_jw *w, std::optional<size_t> next);
+
+// "files": [{id, name, mime, w?, h?, duration_ms?, preview?}]: files the owner sends with a message, as it will describe them
+// (the size is filled in from what is here). Any one wrong is a 400 (conversations.cpp).
+std::vector<puddle_file_ref> filesOf(puddle_span arr);
 
 } // namespace puddle::api
