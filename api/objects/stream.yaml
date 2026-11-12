@@ -12,7 +12,6 @@ properties:
   state: { $ref: "#/$defs/StreamState" }
   address: { type: string, description: "Where we reach them, host:port: the best of the addresses we hold" }
   error: { type: string, description: Why a request of ours, or an answer we owed, did not get through }
-  certificate_changed: { type: boolean, description: "Present, true: their certificate is not the one first seen, and nothing goes to them until the owner trusts it" }
   message: { type: string, maxLength: 500, description: The note sent with the request }
   profile: { type: string, description: "The id of the owner's profile this person sees directly; absent: none, they see only the id" }
   created_at: { $ref: "../wire/ids.yaml#/$defs/Timestamp" }
@@ -28,5 +27,4 @@ x-methods:
   accept: POST /api/v1/streams/{user}/accept
   decline: POST /api/v1/streams/{user}/decline
   remove: POST /api/v1/streams/{user}/delete
-  trust: POST /api/v1/streams/{user}/trust
   show_profile: POST /api/v1/streams/{user}/profile

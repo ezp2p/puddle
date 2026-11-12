@@ -339,21 +339,10 @@ int main(void)
         CHECK(rec.owed == PUDDLE_OWED_NONE && strstr(rec.error, "could not be told") && strstr(rec.error, "HTTP 404") && rec.state == PUDDLE_STREAM_ACTIVE);
         puddle_stream_free(&rec);
 
-        /* a held item changes nothing */
-        set_record(a, PUDDLE_STREAM_ACTIVE, PUDDLE_OWED_APPROVED, "");
-        it = item_of(a, "result", approved, "different certificate");
-        puddle_flow_done(&ctx, &it, PUDDLE_OB_HOLD, NULL);
-        rec_of(a, &rec);
-        CHECK(rec.owed == PUDDLE_OWED_APPROVED && !rec.error[0]);
-        puddle_stream_free(&rec);
-
         /* our request: delivery changes nothing, a refusal closes it, and only it */
         set_record(b, PUDDLE_STREAM_PENDING_OUT, PUDDLE_OWED_NONE, "");
         it = item_of(b, "access", "{}", "");
         puddle_flow_done(&ctx, &it, PUDDLE_OB_DELIVERED, NULL);
-        CHECK(puddle_streams_get(ss, b, &rec) == 0 && rec.state == PUDDLE_STREAM_PENDING_OUT);
-        puddle_stream_free(&rec);
-        puddle_flow_done(&ctx, &it, PUDDLE_OB_HOLD, NULL);
         CHECK(puddle_streams_get(ss, b, &rec) == 0 && rec.state == PUDDLE_STREAM_PENDING_OUT);
         puddle_stream_free(&rec);
         snprintf(it.reason, sizeof it.reason, "they answered HTTP 404");

@@ -186,9 +186,21 @@ static int close_post(const puddle_call *c, puddle_jw *w)
     return puddle_fail(w, 500, "internal");
 }
 
+/* ---- a peer about to send asks us to prove who we are ---- */
+
+/* Nothing to do: the router signs the answer (a receipt naming our certificate), and that is the whole point. Only a peer
+ * whose key we hold gets here; anyone else has had the usual 404. */
+static int hello_get(const puddle_call *c, puddle_jw *w)
+{
+    (void)c;
+    (void)w;
+    return 204;
+}
+
 const puddle_route puddle_inbound_routes[] = {
+    { "GET",  "/stream/v1/hello",         PUDDLE_AUTH_PEER,  0, hello_get, NULL },
     { "POST", "/stream/v1/access/result", PUDDLE_AUTH_CHAIN, PUDDLE_ACCESS_BODY_MAX, result_post, result_chain_key },
-    { "POST", "/stream/v1/access/status", PUDDLE_AUTH_CHAIN, PUDDLE_ACCESS_BODY_MAX, status_post, puddle_access_chain_key },
+    { "POST", "/stream/v1/access/status", PUDDLE_AUTH_CHAIN_ANON, PUDDLE_ACCESS_BODY_MAX, status_post, puddle_access_chain_key },
     { "POST", "/stream/v1/close",         PUDDLE_AUTH_PEER,  4096, close_post, NULL },
 };
 const size_t puddle_inbound_routes_count = sizeof puddle_inbound_routes / sizeof puddle_inbound_routes[0];

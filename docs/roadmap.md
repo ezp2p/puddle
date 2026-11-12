@@ -9,11 +9,11 @@ Items marked **needs you** are decisions I should not make alone.
 
 Built and tested (phases 1 to 4): the identity (keys from a recovery phrase, the signed key chain, rolling), the owner token and
 the uniform `404`, the HTTPS listener and request signing, streams between Puddles (request, accept, close, block, invites,
-certificate pinning), the retrying outbox, direct messages with edit and delete, key and address announcements, profiles and
+signed receipts), the retrying outbox, direct messages with edit and delete, key and address announcements, profiles and
 pictures over a stream, and the Qt app (Friends, conversations, chat, delivery state). 32 test suites, including two Puddles
 talking over TLS and the window driven by real clicks and keys.
 
-Group chats (phase 5) are built, and joining Ponds' text channels (docs/ponds.md). Not built: the phone client, encryption at rest. See "Later" below and `discuss-later.md`.
+Group chats (phase 5) are built, and so is proving who answers (phase 6), which replaced certificate pinning for streams. So is joining Ponds' text channels (docs/ponds.md). Not built: the phone client, encryption at rest. See "Later" below and `discuss-later.md`.
 
 ## Order, and why
 
@@ -484,6 +484,28 @@ Found while doing it, and fixed: a made-up stream id was being sent key pushes (
 now travels directly (`told`); events about the group go to the invited too, or they cannot tell who else is coming.
 
 *Commit point.*
+
+## Phase 6: Proving who answers
+
+Certificate pinning (3.4, 4.2) proved the far end by its TLS certificate, so a regenerated certificate stopped
+everything until the owner approved it, and anything that answered at a peer's old address was handed the message.
+The owner decided the certificate should only encrypt, and the far end should prove itself by its keys, before
+anything is sent and for every answer. The design is in `streams.md`, "Proving who answers".
+
+- [x] **6.1 Receipts and the handshake.**
+  - **Receipts:** the router signs every answer (one sent straight from a file on disk is hashed as it is read) to an authenticated request from someone it holds a record of
+    (`X-Puddle-Receipt`), over the request's nonce, the status, the body's hash and its own certificate's fingerprint.
+    `access` and `access/status` are never signed (they answer strangers alike), nor is anything to a stranger. `GET /stream/v1/hello` answers
+    `204` to a peer and exists to be signed for.
+  - **Client:** given the key it holds for the peer, `puddle_net_request` checks the receipt against the connection it
+    came on; given a fingerprint already proven, it sends nothing on a connection that shows another.
+  - **Outbox and sender:** (`federation/sender.cpp`) for a peer it holds a key for, a `hello` comes before any request on a route that needs a stream, and
+    the proof is kept in memory for ten minutes, renewed by each good receipt. Only a signed answer settles an item;
+    anything else leaves it waiting on the offline schedule with a reason, and every address is tried. A peer with no
+    key held (first contact) is sent to as before.
+  - **Gone:** the recorded certificate, the "held" state, `certificate_changed`, `POST /api/v1/stream/trust`, and
+    `tls_fp` in address records (ignored if an older Puddle sends one). Ponds keep their pinned certificate: they don't
+    sign receipts yet.
 
 ## Later, not planned in detail
 

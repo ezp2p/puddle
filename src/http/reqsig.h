@@ -9,6 +9,7 @@
  * with `sig` an Ed25519 signature over: "puddle-request-v1", METHOD, request target, hex SHA-256 of the
  * body, ts, nonce and the recipient's user id, one per line. */
 
+#include "core/delivery.h"
 #include "core/identity.h"
 
 #include <stddef.h>
@@ -66,6 +67,31 @@ puddle_authn puddle_reqsig_authenticate(const char *header, const char *method, 
                                         const void *body, size_t body_len, const char *my_id,
                                         puddle_peer_key_fn lookup, void *user, puddle_replay *replay,
                                         int64_t now_ms, puddle_reqsig *out);
+
+/* ---- receipts: Bob's side signing for an answer, Alice's side checking it (docs/streams.md, "Proving who answers") ----
+ *
+ *   X-Puddle-Receipt: v1 id=<responder id>; kid=<key id>; fp=<hex>; sig=<base64>
+ *
+ * `fp` is the hex SHA-256 of the responder's own TLS certificate, and `sig` an Ed25519 signature over
+ * "puddle-receipt-v1", the responder's id, the request's nonce, the status, hex SHA-256 of the answer's body and `fp`,
+ * one per line. */
+
+#define PUDDLE_RECEIPT_MAX 320 /* room for the header value */
+
+/* Sign for the answer to the request with `nonce`. `tls_fp_hex` is our certificate's fingerprint. 0 or -1. */
+int puddle_receipt_sign(puddle_identity *me, const char *nonce, int status, const void *body, size_t body_len, const char *tls_fp_hex,
+                        char *out, size_t cap);
+/* The same, for a body that is not in memory (a file sent from disk): `body_hash_hex` is the SHA-256 of exactly the bytes sent. */
+int puddle_receipt_sign_hash(puddle_identity *me, const char *nonce, int status, const char *body_hash_hex, const char *tls_fp_hex,
+                             char *out, size_t cap);
+
+/* puddle_receipt_check is in core/delivery.h, beside the reply it describes */
+
+/* Alice's side: is `header` (NULL or "" = none) the receipt `peer_id`, whose current key is `peer_pub`, gives for the
+ * request with `nonce`, answered `status` with `body`, on a connection showing the certificate `seen_fp_hex`? */
+puddle_receipt_check puddle_receipt_verify(const char *header, const char *peer_id, const unsigned char peer_pub[32], const char *nonce,
+                                           int status, const void *body, size_t body_len, const char *seen_fp_hex);
+
 
 #ifdef __cplusplus
 }

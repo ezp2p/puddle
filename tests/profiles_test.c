@@ -531,8 +531,6 @@ int main(void)
         puddle_profiles_done(&ctx, &it, PUDDLE_OB_REJECTED, &nr);
         CHECK(strstr(error_of(&alice), "could not be fetched") && strstr(error_of(&alice), "404"));
         set_peer(&alice, PUDDLE_STREAM_ACTIVE, prof);
-        puddle_profiles_done(&ctx, &it, PUDDLE_OB_HOLD, &nr);
-        CHECK(!error_of(&alice)[0]);
         it.kind[0] = 'x';
         puddle_profiles_done(&ctx, &it, PUDDLE_OB_REJECTED, &nr);
         CHECK(!error_of(&alice)[0]);

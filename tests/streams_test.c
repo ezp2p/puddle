@@ -260,42 +260,12 @@ int main(void)
     puddle_stream_list_free(list, count);
     CHECK(puddle_streams_count(s, PUDDLE_STREAM_PENDING_IN) == 1);
 
-    /* ---- the certificate we know for a peer ---- */
+    /* ---- the key a peer's answers must be signed by (their certificate is not kept: it only encrypts) ---- */
     {
-        const char *fp1 = "1111111111111111111111111111111111111111111111111111111111111111";
-        const char *fp2 = "2222222222222222222222222222222222222222222222222222222222222222";
-        const char *fp3 = "3333333333333333333333333333333333333333333333333333333333333333";
-        CHECK(puddle_streams_check_fingerprint(s, dave_uid_placeholder(), fp1) == 1); /* no record of them: nobody's to judge */
-        CHECK(puddle_streams_check_fingerprint(s, alice.uid, "short") == 0);
-        CHECK(puddle_streams_check_fingerprint(s, alice.uid, "zzzz111111111111111111111111111111111111111111111111111111111111") == 0);
-        CHECK(puddle_streams_check_fingerprint(s, "junk", fp1) == 0);
-        CHECK(puddle_streams_get(s, alice.uid, &got) == 0 && !got.tls_fp[0]);
-        puddle_stream_free(&got);
-        CHECK(puddle_streams_check_fingerprint(s, alice.uid, fp1) == 1);              /* the first one seen is the one we hold */
-        CHECK(puddle_streams_get(s, alice.uid, &got) == 0 && !strcmp(got.tls_fp, fp1) && !got.tls_fp_seen[0]);
-        puddle_stream_free(&got);
-        CHECK(puddle_streams_check_fingerprint(s, alice.uid, fp1) == 1);
-        CHECK(puddle_streams_check_fingerprint(s, alice.uid, fp2) == 0);              /* a different one: refused, and noted */
-        CHECK(puddle_streams_get(s, alice.uid, &got) == 0 && !strcmp(got.tls_fp, fp1) && !strcmp(got.tls_fp_seen, fp2));
-        puddle_stream_free(&got);
-        CHECK(puddle_streams_check_fingerprint(s, alice.uid, fp2) == 0);
-        CHECK(puddle_streams_check_fingerprint(s, alice.uid, fp3) == 0);
-        CHECK(puddle_streams_get(s, alice.uid, &got) == 0 && !strcmp(got.tls_fp, fp1) && !strcmp(got.tls_fp_seen, fp3));
-        puddle_stream_free(&got);
-        puddle_streams_close(s);                                                       /* waiting for the owner survives a restart */
-        s = open_streams();
-        CHECK(puddle_streams_get(s, alice.uid, &got) == 0 && !strcmp(got.tls_fp, fp1) && !strcmp(got.tls_fp_seen, fp3));
-        puddle_stream_free(&got);
-        CHECK(puddle_streams_check_fingerprint(s, alice.uid, fp1) == 1);              /* the old one is back: nothing to decide */
-        CHECK(puddle_streams_get(s, alice.uid, &got) == 0 && !got.tls_fp_seen[0]);
-        puddle_stream_free(&got);
-        CHECK(puddle_streams_trust_fingerprint(s, alice.uid, err, sizeof err) == 1);   /* nothing was waiting */
-        CHECK(puddle_streams_check_fingerprint(s, alice.uid, fp2) == 0);
-        CHECK(puddle_streams_trust_fingerprint(s, alice.uid, err, sizeof err) == 0);
-        CHECK(puddle_streams_get(s, alice.uid, &got) == 0 && !strcmp(got.tls_fp, fp2) && !got.tls_fp_seen[0]);
-        puddle_stream_free(&got);
-        CHECK(puddle_streams_check_fingerprint(s, alice.uid, fp2) == 1 && puddle_streams_check_fingerprint(s, alice.uid, fp1) == 0);
-        CHECK(puddle_streams_trust_fingerprint(s, "junk", err, sizeof err) == -1 && puddle_streams_trust_fingerprint(s, carol.uid, err, sizeof err) == -1);
+        unsigned char cur[32];
+        CHECK(puddle_streams_current_key(s, alice.uid, cur) == 1 && !memcmp(cur, pub2, 32));      /* the current one, after her roll */
+        CHECK(puddle_streams_current_key(s, dave_uid_placeholder(), cur) == 0);                 /* no record of them */
+        CHECK(puddle_streams_current_key(s, "junk", cur) == 0 && puddle_streams_current_key(s, NULL, cur) == 0);
     }
 
     /* ---- blocks ---- */
@@ -303,6 +273,10 @@ int main(void)
     CHECK(puddle_streams_block(s, alice.uid, T0 + 20, err, sizeof err) == 0);
     CHECK(puddle_streams_is_blocked(s, alice.uid));
     CHECK(puddle_streams_peer_key(s, alice.uid, kid2, found) == 0);           /* their signature is no longer accepted */
+    {
+        unsigned char cur[32];
+        CHECK(puddle_streams_current_key(s, alice.uid, cur) == 0);                /* nor is anything sent to her checked against her */
+    }
     CHECK(puddle_streams_get(s, alice.uid, &got) == 0 && got.state == PUDDLE_STREAM_CLOSED && got.updated_ms == T0 + 20 && got.chain);
     puddle_stream_free(&got);
     CHECK(puddle_streams_count(s, PUDDLE_STREAM_ACTIVE) == 0);

@@ -352,26 +352,14 @@ int main(void)
     CHECK(status("POST", at("users", a, "unblock"), NULL) == 404);
     CHECK(!puddle_streams_is_blocked(ss, a) && puddle_streams_is_blocked(ss, f));
 
-    /* ---- a peer whose certificate changed ---- */
+    /* ---- certificates are nobody's business: nothing to see, nothing to trust ---- */
     {
-        const char *fp = "4444444444444444444444444444444444444444444444444444444444444444";
-        const char *fp2 = "5555555555555555555555555555555555555555555555555555555555555555";
         char g[64];
         fake_id(7, g);
         put(g, PUDDLE_STREAM_ACTIVE, T0 + 50000, NULL, NULL, "10.0.0.7:1");
-        CHECK(puddle_streams_check_fingerprint(ss, g, fp) == 1);
-        CHECK(status("POST", at("streams", g, "trust"), NULL) == 409);              /* nothing to decide */
+        CHECK(status("POST", at("streams", g, "trust"), NULL) == 404);              /* the route is gone */
         r = call("GET", "/api/v1/streams?state=active", NULL, 1);
-        CHECK(!strstr(body_of(r), "certificate_changed"));
-        CHECK(puddle_streams_check_fingerprint(ss, g, fp2) == 0);
-        r = call("GET", "/api/v1/streams?state=active", NULL, 1);
-        CHECK(strstr(body_of(r), "\"certificate_changed\":true"));                  /* the owner is told */
-        r = call("POST", at("streams", g, "trust"), NULL, 1);
-        CHECK(r->status == 200 && valid_body(r) && !strstr(body_of(r), "certificate_changed"));
-        CHECK(puddle_streams_check_fingerprint(ss, g, fp2) == 1);                    /* the new one is now the one */
-        CHECK(status("POST", at("streams", g, "trust"), NULL) == 409);
-        CHECK(call("POST", at("streams", g, "trust"), NULL, 0)->status == 404);
-        CHECK(status("POST", at("streams", f, "trust"), NULL) == 409 || status("POST", at("streams", f, "trust"), NULL) == 404);
+        CHECK(r->status == 200 && !strstr(body_of(r), "certificate"));
         put(g, PUDDLE_STREAM_CLOSED, T0, NULL, NULL, NULL);
     }
 

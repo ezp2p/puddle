@@ -331,7 +331,8 @@ int main(int argc, char **argv)
             return false;
         bool said = false;
         walk(n, [&](QQuickItem *i) {
-            said = said || i->property("text").toString().contains("can't be reached");
+            const QString t = i->property("text").toString();
+            said = said || (t.contains("Not delivered to") && t.contains("cannot reach") && t.contains("Trying again at")); /* who, why, and when next */
             return false;
         });
         return said;

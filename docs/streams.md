@@ -65,7 +65,7 @@ doesn't know is a request for a stream, and its answer to that is always the sam
    on the schedule in `roadmap.md` (3.4) if A is away; what B still owes is kept on the stream (`owed`), so a
    restart loses nothing. B puts the requester's ticket in the answer. A accepts it only if the ticket is one
    it made and has not used, the chain belongs to the id the answer claims and the result is signed by a key in
-   it; then the record is refiled under that id (state, note, addresses and the certificate it saw carry over),
+   it; then the record is refiled under that id (state, note and addresses carry over),
    the ticket is spent, and it becomes `active`. This is the first time A learns who B is and sees B's keys. A
    second answer with the same ticket, from anyone, is ignored. If A already has a closed stream with that id the
    request starts it afresh, if A has blocked that id the request is dropped, and any other existing record stands.
@@ -96,6 +96,9 @@ the Puddle at an address is the person you meant. That is the owner's choice, ma
 - **Names and notes are self-declared.** Anyone can type "Alice". What can't be faked later is her key.
 - **Every later request proves it again.** Each one is signed with the sender's current key and checked against
   the chain stored at accept. Knowing an address, or having seen old traffic, is not enough to be them.
+- **So does every answer.** Once we hold a peer's key, nothing counts as delivered to them unless their Puddle signs
+  for it, and a message is not even sent until the Puddle at the address has proved it is them (see "Proving who
+  answers"). Whoever holds their old address, or sits between the two, gets nothing that matters and is reported.
 - **An address change is proven the same way** (see "Telling friends about a new address"): a signed record from a
   key we already hold, so a friend who moves is still the same friend, wherever they write from.
 
@@ -108,15 +111,17 @@ the Puddle at an address is the person you meant. That is the owner's choice, ma
 
 ## Telling friends about a new address
 
-A Puddle's address can change, and so can its certificate. It publishes an **address record**
-`{"type":"address","id":..,"addresses":[..],"tls_fp":..,"seq":N,"ts":..}`, signed by its current key, to every
+A Puddle's address can change. It publishes an **address record**
+`{"type":"address","id":..,"addresses":[..],"seq":N,"ts":..}`, signed by its current key, to every
 active stream with `POST /stream/v1/address`. The highest `seq` wins. It notices a change at start (the address in its
-config, the certificate's fingerprint, compared with what it last announced, kept in `state/address.json`), and what
+config, compared with what it last announced, kept in `state/address.json`), and what
 each peer is known to hold is kept on its stream record (`addr_sent`), so one who was away is told when it returns.
 Peers try all known addresses, newest first, and a peer that takes a record sends whatever it was holding for the
-sender straight away rather than at its next scheduled try. A `tls_fp` in a record is accepted without asking, because it is signed by
-a key the peer already trusts, which is how a Puddle that regenerates its certificate stays on speaking terms. If both
+sender straight away rather than at its next scheduled try. If both
 sides move while offline they cannot find each other; that is the accepted limit for now (no middleman servers).
+
+The TLS certificate is not part of this. It can change whenever its owner likes (see "Proving who answers"), so it is
+neither announced nor remembered. Older Puddles put a `tls_fp` in the record; it is ignored.
 
 A Puddle is told only what the sender can prove: `address` is checked against the key we hold for them, and a
 numeric address we would never connect to is refused.
@@ -161,6 +166,83 @@ other: `404` unless the chain extends one the recipient already holds.
 
 Events inside chats are signed separately, over their exact bytes, and name the key that signed them
 (`kid`), so history signed before a key roll still verifies.
+
+## Proving who answers
+
+A request signature proves the sender to the recipient. This is the other direction: the sender learning that what
+answered really is the Puddle it meant, by its keys, before it hands anything over and before it believes anything was
+received.
+
+**TLS only encrypts.** Every Puddle makes its own certificate, nobody checks it against anything, and it may be
+replaced at any time. It is not remembered between connections and never needs anyone's approval. What a certificate
+does still give is a fingerprint of *this* connection, and that is what ties the signatures below to the connection
+they arrived on.
+
+**Receipts.** A Puddle answering a request it has authenticated (from step 4 of the checks above, so `clock_skew`,
+`replayed` and refusals included) from someone it already holds a record of adds
+
+    X-Puddle-Receipt: v1 id=<responder id>; kid=<key id>; fp=<certificate fingerprint>; sig=<base64>
+
+where `fp` is the hex SHA-256 of its own TLS certificate, and `sig` an Ed25519 signature by its current key over
+
+    puddle-receipt-v1
+    <the responder's user id>
+    <the request's nonce>
+    <the HTTP status>
+    <hex SHA-256 of the answer's body>
+    <hex SHA-256 of the responder's own TLS certificate>
+
+A request that did not authenticate gets the usual `404` with no receipt, so a stranger still learns nothing, not even
+whose Puddle it reached. Neither does a stranger who *did* authenticate, as anyone can on the routes proven by a chain
+in the body: an answer is signed only for someone we already hold a record of, in any state (blocked or not, so a
+block is not given away; for an answer to our own request, that is decided after it has been filed). `access` and
+`access/status`, which must answer everyone the same whatever they decide, are never signed at all.
+
+An answer sent straight from a file on disk (a download, any part of it asked for with `Range`) is signed for over
+exactly the bytes that go, hashed as they are read. Ponds don't sign receipts (yet): a Puddle still pins a Pond's certificate
+(`docs/ponds.md`).
+
+**Checking a receipt.** When the sender holds a key for the peer, it accepts an answer only if the receipt is there,
+names the peer's id and the key it holds for them, carries this request's nonce, the status and body it got, and the
+fingerprint of the certificate *it* saw on this connection. That last part is what catches someone in the middle: they
+can pass the request on to the real Puddle and its signed answer back, but the real Puddle signs its own certificate,
+and the sender saw theirs.
+
+**Handshake first.** A receipt arrives after the request has gone. So before sending anything to a peer it holds a key
+for on a route that needs a stream (every route but the four below: `events`, `close`, `address`, `profile`, `media`,
+`group/invite` and the `files/...` routes), the sender calls
+`GET /stream/v1/hello`, which carries nothing, and checks its receipt. That proves the certificate on that connection
+belongs to the peer. The real request then goes out on a connection only if it shows that same certificate; one that
+shows another gets a fresh handshake first. A proof is kept in memory for ten minutes, and each good receipt renews it,
+so a steady conversation costs one handshake, not one per message.
+
+Requests that set up or repair a stream (`access`, `access/result`, `access/status`, `identity`) are checked by the receipt
+alone (or, for `access` and `access/status`, not at all, as below): the other
+side may not have our current key, so it could not answer a handshake without answering a stranger. What they carry is
+our public chain, a profile and a one-time ticket bound to that recipient, so nothing a squatter could use.
+
+**First contact** (a request to an address, with no key for whoever lives there) can't be checked at all; see "Proving
+who you are". Nor can any request for a stream (`access`, and `access/status`), since those answers are never signed.
+The answer to it, `access/result`, brings their chain, and everything from then on is checked.
+
+**What the sender makes of it.** Only a signed answer means anything. Everything else means nothing was delivered: the
+item stays queued, is retried on the outbox's schedule, and carries the reason, which the app shows on the message:
+
+| what happened | outcome | what the owner is told |
+|---|---|---|
+| signed `2xx` | delivered | |
+| signed refusal (`4xx`/`5xx`) | failed, kept with the reason | they refused it, and why (`no_stream`: they closed the stream) |
+| nothing answered | waiting | nothing answered at the address |
+| something answered that isn't a Puddle (no TLS, no HTTP) | waiting | something at the address answered, but it isn't a Puddle |
+| an answer with no receipt (such as the plain `404` a stranger gets) | waiting | the Puddle at the address didn't recognise us: it isn't them, or they no longer have a stream with us |
+| a receipt from another key, or one that doesn't verify | waiting | the Puddle at the address couldn't prove it's them |
+| a good signature for a different certificate | waiting | the connection to the address was intercepted |
+
+A peer that rolled its keys and hasn't reached us yet "couldn't prove it's them" until its new chain arrives (its
+outbox is retrying it); taking the new chain, like taking a new address, sends whatever was waiting for them at once,
+and an attempt that crossed paths with it is simply made again with the new key. Every address we hold for the peer is tried, newest first,
+before giving up on a round.
+
 
 ## Keys
 

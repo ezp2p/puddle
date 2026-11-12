@@ -62,7 +62,7 @@ void requireOpen(puddle_ctx *ctx, const std::string &to)
 
 int deliveryRank(const puddle_ob_item *it)
 {
-    return it->state == PUDDLE_OB_FAILED ? 3 : it->state == PUDDLE_OB_HELD ? 2 : it->attempts ? 1 : 0;
+    return it->state == PUDDLE_OB_FAILED ? 2 : it->attempts ? 1 : 0;
 }
 
 const char *typeName(Message::Type t)
@@ -357,7 +357,7 @@ void Message::write(puddle_jw *w, puddle_ctx *ctx, PartialUsers &people, const D
     if (it) {
         puddle_jw_key(w, "delivery");
         puddle_jw_object(w);
-        puddle_jw_str(w, "state", it->state == PUDDLE_OB_FAILED ? "failed" : it->state == PUDDLE_OB_HELD ? "held" : it->attempts ? "retrying" : "queued");
+        puddle_jw_str(w, "state", it->state == PUDDLE_OB_FAILED ? "failed" : it->attempts ? "retrying" : "queued");
         if (it->reason[0])
             puddle_jw_str(w, "reason", it->reason);
         if (it->state == PUDDLE_OB_QUEUED && it->attempts)

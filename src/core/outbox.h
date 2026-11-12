@@ -9,10 +9,15 @@
  *     for the first 24 hours of its being away, then every thirty minutes, for as long as it takes. The check
  *     is the delivery itself, tried on the oldest waiting item; once it gets through, everything else for that
  *     peer follows at once. The schedule is saved, so it survives a restart.
- *   - ANYTHING ELSE (a TLS error, an HTTP error, a 404, a rejected signature) fails once and is never retried.
+ *   - for a peer whose key we hold, only an answer THEY SIGNED counts (docs/streams.md, "Proving who answers"). Before
+ *     a request on a route that needs a stream there is a handshake (`GET /stream/v1/hello`), unless a certificate was
+ *     proven for them in the last ten minutes, and the request goes only over a connection showing it (the sender does
+ *     this: federation/sender.h). An answer they did not sign for, something that isn't a Puddle, someone in between:
+ *     nothing was delivered, so it is treated like OFFLINE, with the reason saved on every item waiting for them so
+ *     the app can say what happened. Every address we hold for them is tried first.
+ *   - a SIGNED REFUSAL (any status but 2xx, in their name) fails once and is never retried. So does anything but an
+ *     answer when we hold no key for them (a first request to an address): there is nobody to prove.
  *     The item is kept, with the reason, so the app can say "this failed because...".
- *   - the peer's certificate is not what it was: nothing is sent, and the peer's items are HELD until the owner
- *     says the new certificate is fine (puddle_outbox_release).
  * Items for one peer go out in the order they were queued, one at a time, except that news of a key change
  * (kind "identity") goes first: whatever else is waiting is signed by the new key, and the other side has to be told
  * about it before it will believe them. Different peers are delivered to
@@ -39,7 +44,7 @@ extern "C" {
 #define PUDDLE_OUTBOX_BODY_MAX (128u * 1024)
 #define PUDDLE_OUTBOX_PARALLEL 8    /* peers delivered to at the same time */
 
-typedef enum { PUDDLE_OB_QUEUED, PUDDLE_OB_FAILED, PUDDLE_OB_HELD } puddle_ob_state;
+typedef enum { PUDDLE_OB_QUEUED, PUDDLE_OB_FAILED } puddle_ob_state;
 
 typedef struct {
     uint64_t seq;
@@ -54,13 +59,12 @@ typedef struct {
     int attempts;
     puddle_ob_state state;
     int status;                /* the last HTTP status seen, 0 if none */
-    char reason[200];          /* why it is waiting, failed or held, in words */
+    char reason[200];          /* why it is waiting or failed, in words */
 } puddle_ob_item;
 
 typedef enum {
-    PUDDLE_OB_DELIVERED,  /* a 2xx came back */
-    PUDDLE_OB_REJECTED,   /* failed for good; the item stays, marked failed, with its reason */
-    PUDDLE_OB_HOLD        /* the peer's certificate changed; the peer's items are held */
+    PUDDLE_OB_DELIVERED,  /* a 2xx came back (in their name, if we hold their key) */
+    PUDDLE_OB_REJECTED    /* failed for good; the item stays, marked failed, with its reason */
 } puddle_ob_outcome;
 
 /* How long one delivery may take, in seconds; 0 = the sender's default. */
@@ -79,8 +83,8 @@ struct puddle_outbox_hooks {
     puddle_identity *identity;                                   /* signs everything */
     /* where to reach `peer`, best first; returns how many (0 = we do not know where) */
     int (*addresses)(void *user, const char *peer, puddle_address *out, int max);
-    /* is this certificate right for `peer`? 1 yes (a first contact is recorded), 0 it has changed */
-    int (*fingerprint)(void *user, const char *peer, const char *fingerprint_hex);
+    /* the current signing key we hold for `peer`: 1 and `sign_pub` filled, or 0 if we hold none (then nothing is checked) */
+    int (*peer_key)(void *user, const char *peer, unsigned char sign_pub[32]);
     /* An item reached an end. Called without the outbox's lock, so it may queue more. `reply` may be NULL. */
     void (*done)(void *user, const puddle_ob_item *item, puddle_ob_outcome outcome, const puddle_net_reply *reply);
     void *user;
@@ -112,11 +116,8 @@ int puddle_outbox_enqueue_get(puddle_outbox *ob, const char *peer, const char *k
 /* One pass: deliver what is due. The worker calls this; tests call it directly. */
 void puddle_outbox_poll(puddle_outbox *ob);
 
-/* The owner accepts the peer's new certificate: held items go back to waiting, to be tried now. Returns how many. */
-int puddle_outbox_release(puddle_outbox *ob, const char *peer);
-
 /* Change what a waiting item will say (a key chain or a signature inside it has gone out of date). Only for an item
- * that is still waiting or held. An attempt already under way carries on with what it had. Returns 0, 1 if there is no such item or it is
+ * that is still waiting. An attempt already under way carries on with what it had. Returns 0, 1 if there is no such item or it is
  * not in a state to change, -1 on failure. */
 int puddle_outbox_rewrite(puddle_outbox *ob, uint64_t seq, const char *body, size_t body_len);
 
@@ -130,7 +131,7 @@ int puddle_outbox_requeue(puddle_outbox *ob, uint64_t seq);
 int puddle_outbox_list(puddle_outbox *ob, puddle_ob_item **out, size_t *count);
 void puddle_outbox_list_free(puddle_ob_item *items, size_t count);
 
-/* Remove an item that failed or is held, once the owner has seen it. 0, 1 no such item, -1. */
+/* Remove an item that failed, once the owner has seen it. 0, 1 no such item, -1. */
 int puddle_outbox_dismiss(puddle_outbox *ob, uint64_t seq);
 
 /* How long to wait before trying an offline peer again, given when it was first found offline. */

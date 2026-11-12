@@ -371,13 +371,9 @@ int main(void)
     /* ---- they moved ---- */
     {
         set_peer(&alice, PUDDLE_STREAM_ACTIVE, 0, 0);                                           /* starts again with v2 and addr_seq 0 */
-        const char *fp = "2222222222222222222222222222222222222222222222222222222222222222";
         char extra[200];
-        snprintf(extra, sizeof extra, "\"tls_fp\":\"%s\"", fp);
+        snprintf(extra, sizeof extra, "\"tls_fp\":\"%s\"", "2222222222222222222222222222222222222222222222222222222222222222");  /* as older Puddles send */
         puddle_stream rec;
-        /* a certificate we had noted as different, and a note that something is held */
-        CHECK(puddle_streams_check_fingerprint(ss, alice.uid, "3333333333333333333333333333333333333333333333333333333333333333") == 1);
-        CHECK(puddle_streams_check_fingerprint(ss, alice.uid, fp) == 0);                         /* now it is "seen", waiting for the owner */
         /* a message has been waiting for her, its next try half an hour off: news of where she is now sends it at once */
         write_outbox_item_at(900000, alice.uid, "events", "/stream/v1/events", "{\"chat\":\"x\",\"events\":[]}", "queued", clock_now + 1800000);
         reopen_outbox();
@@ -396,7 +392,7 @@ int main(void)
             CHECK(due);
         }
         CHECK(puddle_streams_get(ss, alice.uid, &rec) == 0 && rec.addr_seq == 1 && rec.naddr == 2 && !strcmp(rec.addresses[0], "198.51.100.4:9000") &&
-              !strcmp(rec.addresses[1], "[2001:db8::7]:9000") && !strcmp(rec.tls_fp, fp) && !rec.tls_fp_seen[0]);   /* the new certificate is accepted quietly */
+              !strcmp(rec.addresses[1], "[2001:db8::7]:9000"));                                     /* the certificate in it is left unread */
         puddle_stream_free(&rec);
         free(b);
         /* the highest seq wins: the same, or an older one, changes nothing */
@@ -408,11 +404,11 @@ int main(void)
         free(b);
         CHECK(puddle_streams_get(ss, alice.uid, &rec) == 0 && !strcmp(rec.addresses[0], "198.51.100.4:9000") && rec.addr_seq == 1);
         puddle_stream_free(&rec);
-        /* newer, with no certificate and no addresses: the address list and certificate stay */
+        /* newer, with no addresses: the address list stays */
         b = address_body(&alice, alice.uid, "address", "[]", NULL, 2, T0 + 700);
         CHECK(post_as(&alice, "/stream/v1/address", b, 1).status == 204);
         free(b);
-        CHECK(puddle_streams_get(ss, alice.uid, &rec) == 0 && rec.addr_seq == 2 && rec.naddr == 2 && !strcmp(rec.tls_fp, fp));
+        CHECK(puddle_streams_get(ss, alice.uid, &rec) == 0 && rec.addr_seq == 2 && rec.naddr == 2);
         puddle_stream_free(&rec);
         /* what is refused */
         struct { const char *type, *id_is, *addrs, *extra; int64_t seq, ts; person *signer; } bad[] = {
@@ -421,7 +417,6 @@ int main(void)
             { "address", NULL, "[\"not an address\"]", NULL, 5, T0, &alice },
             { "address", NULL, "[\"1.2.3.4:1\",\"1.2.3.5:1\",\"1.2.3.6:1\",\"1.2.3.7:1\",\"1.2.3.8:1\"]", NULL, 5, T0, &alice },  /* too many */
             { "address", NULL, "[\"0.0.0.0:8443\"]", NULL, 5, T0, &alice },                       /* somewhere we would never connect */
-            { "address", NULL, "[]", "\"tls_fp\":\"nothex\"", 5, T0, &alice },
             { "address", NULL, "[]", NULL, -1, T0, &alice },
             { "address", NULL, "[]", NULL, 5, 0, &alice },
             { "address", NULL, "[]", NULL, 5, T0, &carol },                                       /* signed by someone else */
@@ -645,8 +640,6 @@ int main(void)
             it.body = ib;
             it.body_len = strlen(ib);
             CHECK(sent_of(&alice, 0) == 0);
-            puddle_sync_done(&ctx, &it, PUDDLE_OB_HOLD);
-            CHECK(sent_of(&alice, 0) == 0);                                                      /* held: not yet */
             puddle_sync_done(&ctx, &it, PUDDLE_OB_DELIVERED);
             CHECK(sent_of(&alice, 0) == 2);                                                      /* two key changes ago to now */
             puddle_sync_done(&ctx, &it, PUDDLE_OB_DELIVERED);
@@ -725,13 +718,16 @@ int main(void)
                 CHECK(!puddle_event_verify(pub, rec, strlen(rec), sg));                         /* an address signature is not an event signature */
                 int64_t sq = 0;
                 CHECK(puddle_json_member(rec, strlen(rec), "seq", &v) == 0 && puddle_json_int64(v, &sq) == 0 && sq == 1);
-                CHECK(strstr(rec, "\"198.51.100.77:9443\"") && strstr(rec, "\"tls_fp\":\"1111") && strstr(rec, me.uid) && strstr(rec, "\"type\":\"address\""));
+                CHECK(strstr(rec, "\"198.51.100.77:9443\"") && !strstr(rec, "tls_fp") && strstr(rec, me.uid) && strstr(rec, "\"type\":\"address\""));
             }
             free(ab);
             CHECK(puddle_sync_resume(&ctx) == 0);                                                /* told, or waiting to be: not twice */
-            /* a new certificate */
+            /* a new certificate is no news: it proves itself on every answer */
             snprintf(ctx.own_tls_fp, sizeof ctx.own_tls_fp, "%s", "4444444444444444444444444444444444444444444444444444444444444444");
-            CHECK(puddle_sync_resume(&ctx) == 0 && queued(alice.uid, "address") == 1);           /* the waiting record is not doubled... */
+            CHECK(puddle_sync_resume(&ctx) == 0 && queued(alice.uid, "address") == 1);
+            /* a new address is: the waiting record is not doubled... */
+            snprintf(cfg.advertise, sizeof cfg.advertise, "198.51.100.78:9443");
+            CHECK(puddle_sync_resume(&ctx) == 0 && queued(alice.uid, "address") == 1);
             clear_outbox();
             CHECK(puddle_sync_resume(&ctx) == 1);                                                /* ...and once it is gone, the next is made */
             ab = item_body(alice.uid, "address", &seq);
@@ -741,7 +737,7 @@ int main(void)
                 char rec[1000];
                 int64_t sq = 0;
                 CHECK(puddle_json_member(ab, strlen(ab), "record", &rv) == 0 && puddle_json_string(rv, rec, sizeof rec) == 0);
-                CHECK(puddle_json_member(rec, strlen(rec), "seq", &v) == 0 && puddle_json_int64(v, &sq) == 0 && sq == 2);   /* the address, then the certificate: two records on */
+                CHECK(puddle_json_member(rec, strlen(rec), "seq", &v) == 0 && puddle_json_int64(v, &sq) == 0 && sq == 2);   /* two addresses on: two records */
             }
             free(ab);
             /* delivery marks it */
@@ -765,7 +761,7 @@ int main(void)
         puddle_identity_close(erin.id);
     }
 
-    /* ---- an announced certificate frees what was held for it; an old failure is left as it was ---- */
+    /* ---- something waiting from when certificates were pinned ("held") is simply waiting; an old failure is left as it was ---- */
     {
         clear_outbox();
         set_peer(&alice, PUDDLE_STREAM_ACTIVE, 99, 99);
@@ -775,20 +771,7 @@ int main(void)
         puddle_ob_item *l;
         size_t n;
         puddle_outbox_list(ob, &l, &n);
-        CHECK(n == 2 && l[0].state == PUDDLE_OB_HELD && l[1].state == PUDDLE_OB_FAILED);
-        puddle_outbox_list_free(l, n);
-        /* a record without a certificate in it does not release them */
-        char *nb = address_body(&alice, alice.uid, "address", "[\"192.0.2.50:5\"]", NULL, 31, T0 + 1);
-        CHECK(post_as(&alice, "/stream/v1/address", nb, 1).status == 204);
-        free(nb);
-        puddle_outbox_list(ob, &l, &n);
-        CHECK(n == 2 && l[0].state == PUDDLE_OB_HELD);
-        puddle_outbox_list_free(l, n);
-        nb = address_body(&alice, alice.uid, "address", "[\"192.0.2.51:5\"]", "\"tls_fp\":\"5555555555555555555555555555555555555555555555555555555555555555\"", 32, T0 + 2);
-        CHECK(post_as(&alice, "/stream/v1/address", nb, 1).status == 204);
-        free(nb);
-        puddle_outbox_list(ob, &l, &n);
-        CHECK(n == 2 && l[0].state == PUDDLE_OB_QUEUED && l[1].state == PUDDLE_OB_FAILED);        /* released, and the failure is still a failure */
+        CHECK(n == 2 && l[0].state == PUDDLE_OB_QUEUED && l[1].state == PUDDLE_OB_FAILED);
         puddle_outbox_list_free(l, n);
         /* after a change of keys, what failed is not rewritten: it is over */
         set_peer(&alice, PUDDLE_STREAM_ACTIVE, 99, 99);

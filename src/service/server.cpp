@@ -144,19 +144,16 @@ static int ob_addresses(void *user, const char *peer, puddle_address *out, int m
     return n;
 }
 
-static int ob_fingerprint(void *user, const char *peer, const char *fp)
+static int ob_peer_key(void *user, const char *peer, unsigned char pub[32])
 {
-    int ok = puddle_streams_check_fingerprint(((puddle_server *)user)->streams, peer, fp);
-    if (!ok)
-        puddle_log(PUDDLE_LOG_WARN, "%.12s… has a different certificate from before; nothing is sent until you say it is fine", peer);
-    return ok;
+    return puddle_streams_current_key(((puddle_server *)user)->streams, peer, pub);
 }
 
 static void ob_done(void *user, const puddle_ob_item *it, puddle_ob_outcome outcome, const puddle_net_reply *reply)
 {
     puddle_flow_done(&((puddle_server *)user)->ctx, it, outcome, reply);
     puddle_log(outcome == PUDDLE_OB_DELIVERED ? PUDDLE_LOG_INFO : PUDDLE_LOG_WARN, "outbox: %s to %.12s… %s%s%s", it->kind, it->peer,
-               outcome == PUDDLE_OB_DELIVERED ? "delivered" : outcome == PUDDLE_OB_HOLD ? "held" : "failed",
+               outcome == PUDDLE_OB_DELIVERED ? "delivered" : "failed",
                outcome == PUDDLE_OB_DELIVERED ? "" : ": ", outcome == PUDDLE_OB_DELIVERED ? "" : it->reason);
 }
 
@@ -240,7 +237,7 @@ puddle_server *puddle_server_create(const puddle_config *cfg, char *err, size_t 
         goto fail;
     }
     {
-        puddle_outbox_hooks hooks = { .send = puddle_federation_send, .identity = s->identity, .addresses = ob_addresses, .fingerprint = ob_fingerprint,
+        puddle_outbox_hooks hooks = { .send = puddle_federation_send, .identity = s->identity, .addresses = ob_addresses, .peer_key = ob_peer_key,
                                       .done = ob_done, .user = s };
         s->outbox = puddle_outbox_open(cfg->data_dir, &hooks, err, errlen);
         if (!s->outbox)

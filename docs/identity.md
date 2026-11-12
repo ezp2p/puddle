@@ -132,8 +132,10 @@ someone else's hands, roll the keys straight afterwards.
 
 ## Transport
 
-TLS stays self-signed and only provides confidentiality on the wire. Servers authenticate each other
-by signatures, not by certificate. A contact may also pin the certificate fingerprint they last saw.
+TLS stays self-signed and only provides confidentiality on the wire. Puddles authenticate each other
+by signatures, not by certificate, in both directions: requests are signed by the sender, and answers carry a
+receipt signed by the responder over the certificate it used for that connection, so nothing is pinned and a
+certificate may change at any time (`streams.md`, "Proving who answers").
 
 ## Signing
 

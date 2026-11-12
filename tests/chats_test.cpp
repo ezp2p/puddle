@@ -157,7 +157,7 @@ int main(int argc, char **argv)
     CHECK(until([&] { return msgs_b->at(0).value("deleted").toBool() && msgs_b->at(0).value("body").toString().isEmpty(); }));
 
     /* what the chat page needs: who it is with, grouping, replies, and "away" */
-    CHECK(B.currentName() == "Alice" && B.currentState() == "active" && !B.currentCertChanged() && !B.hasOlder());
+    CHECK(B.currentName() == "Alice" && B.currentState() == "active" && !B.hasOlder());
     CHECK(msgs_b->at(0).value("dayStart").toBool() && !msgs_b->at(1).value("dayStart").toBool() && !msgs_b->at(0).value("grouped").toBool());
     B.send("two");
     CHECK(until([&] { return msgs_b->rowCount() == 3; }));

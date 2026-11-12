@@ -1,5 +1,6 @@
 /* Two (and more) real Puddles in one process, talking over real TLS on loopback: asking for a stream, accepting
- * and declining, invites, blocks, closing, a changed certificate, and what a stranger is told. Each Puddle is the
+ * and declining, invites, blocks, closing, a changed certificate, someone else at a friend's address, and what a stranger
+ * is told. Each Puddle is the
  * real server with its own data directory; the "owner" calls are real HTTPS calls with the owner token. */
 #include "federation/access.h"
 #include "core/people.h"
@@ -379,6 +380,8 @@ static int send_as(node *to, puddle_identity *who, const char *path, const char 
 }
 
 /* ask `to` how a request from `who` is going; the state it answers with */
+static int status_signed; /* whether the last status_of answer was signed for by the Puddle asked */
+
 static const char *status_of(node *to, puddle_identity *who, const char *who_id)
 {
     static char state[16];
@@ -405,9 +408,13 @@ static const char *status_of(node *to, puddle_identity *who, const char *who_id)
     snprintf(t, sizeof t, "127.0.0.1:%u", to->cfg.port);
     puddle_address_parse(t, &at);
     puddle_net_reply r;
-    puddle_net_request(&at, "POST", "/stream/v1/access/status", big, n, who, to->uid, NULL, &r);
+    unsigned char pub[32];
+    puddle_identity_public(puddle_server_identity(to->srv), pub, NULL, NULL);
+    puddle_net_opts o = { .peer_pub = pub };
+    puddle_net_request(&at, "POST", "/stream/v1/access/status", big, n, who, to->uid, &o, &r);
     snprintf(state, sizeof state, "error");
-    if (r.result == PUDDLE_NET_OK && r.status == 200 && r.body) {
+    status_signed = r.result == PUDDLE_NET_OK;
+    if ((r.result == PUDDLE_NET_OK || r.result == PUDDLE_NET_NOT_PROVEN) && r.status == 200 && r.body) {
         const char *p = strstr(r.body, "\"state\":\"");
         if (p) {
             p += 9;
@@ -501,9 +508,9 @@ int main(void)
     {
         puddle_stream st;
         CHECK(puddle_streams_get(puddle_server_streams(bob.srv), alice.uid, &st) == 0);
-        CHECK(st.chain && st.tls_fp[0] && has_profile(&bob, alice.uid, "Alice") && st.naddr >= 1);
+        CHECK(st.chain && has_profile(&bob, alice.uid, "Alice") && st.naddr >= 1);
         puddle_stream_free(&st);
-        CHECK(puddle_streams_get(puddle_server_streams(alice.srv), bob.uid, &st) == 0 && st.chain && st.tls_fp[0] &&
+        CHECK(puddle_streams_get(puddle_server_streams(alice.srv), bob.uid, &st) == 0 && st.chain &&
               has_profile(&alice, bob.uid, "Bob"));
         puddle_stream_free(&st);
     }
@@ -813,6 +820,24 @@ int main(void)
         CHECK(post(&alice, "/api/v1/streams/policy/set", "{\"access\":\"manual\"}") == 200);
         CHECK(!strcmp(status_of(&alice, puddle_server_identity(bob.srv), bob.uid), "approved"));    /* the one who was let in */
         CHECK(!strcmp(status_of(&alice, puddle_server_identity(carol.srv), carol.uid), "declined")); /* the one who was turned down */
+        CHECK(!status_signed);                    /* answered alike to everyone, so never in Alice's name: not even to those she knows */
+        /* proving who answers: a friend gets Alice's signature; a stranger, even one with a chain, gets nothing that says who is here */
+        {
+            puddle_address at;
+            char t[64];
+            unsigned char pub[32];
+            snprintf(t, sizeof t, "127.0.0.1:%u", alice.cfg.port);
+            CHECK(puddle_address_parse(t, &at) == 0);
+            puddle_identity_public(puddle_server_identity(alice.srv), pub, NULL, NULL);
+            puddle_net_opts o = { .peer_pub = pub };
+            puddle_net_reply r;
+            puddle_net_request(&at, "GET", "/stream/v1/hello", NULL, 0, puddle_server_identity(bob.srv), alice.uid, &o, &r);
+            CHECK(r.result == PUDDLE_NET_OK && r.status == 204 && r.proof == PUDDLE_RECEIPT_OK);
+            puddle_net_reply_free(&r);
+            puddle_net_request(&at, "GET", "/stream/v1/hello", NULL, 0, frank, alice.uid, &o, &r);
+            CHECK(r.result == PUDDLE_NET_NOT_PROVEN && r.status == 404 && r.proof == PUDDLE_RECEIPT_MISSING);
+            puddle_net_reply_free(&r);
+        }
         puddle_identity_close(frank);
     }
 
@@ -850,41 +875,7 @@ int main(void)
         CHECK(node_up(&dave) == 0);
     }
 
-    /* ---- a certificate that is changed on purpose is announced, and accepted quietly ---- */
-    {
-        node_down(&bob);
-        char path[900], want[65];
-        snprintf(path, sizeof path, "%s/cert.pem", bob.cfg.dir);
-        remove(path);
-        snprintf(path, sizeof path, "%s/key.pem", bob.cfg.dir);
-        remove(path);
-        CHECK(node_up(&bob) == 0);                                                                 /* a brand new certificate */
-        puddle_stream st;
-        int learned = 0;
-        for (int i = 0; i < 200 && !learned; i++) {
-            if (puddle_streams_get(puddle_server_streams(alice.srv), bob.uid, &st) == 0) {
-                learned = st.tls_fp[0] && st.addr_seq >= 1 && !st.tls_fp_seen[0];
-                if (learned) snprintf(want, sizeof want, "%s", st.tls_fp);
-                puddle_stream_free(&st);
-            }
-            if (!learned) usleep(50000);
-        }
-        CHECK(learned);                                                                            /* Bob told Alice, signed, before anyone asked */
-        CHECK(owed_of(&bob, alice.uid) == PUDDLE_OWED_NONE);
-        CHECK(get(&alice, "/api/v1/streams?state=active") == 200 && !json_has("certificate_changed"));
-        char b2[300], url[300];
-        snprintf(b2, sizeof b2, "{\"body\":\"still me, new certificate\"}"); dm_to = bob.uid;
-        CHECK(post(&alice, path_of("conversations", dm_to, "messages/send"), b2) == 201);                                         /* and nothing is held up */
-        snprintf(url, sizeof url, "/api/v1/conversations/%s/messages", alice.uid);
-        int got = 0;
-        for (int i = 0; i < 100 && !got; i++) {
-            got = get(&bob, url) == 200 && json_has("still me, new certificate");
-            if (!got) usleep(50000);
-        }
-        CHECK(got);
-    }
-
-    /* ---- one that changes without a word is not sent to until the owner agrees ---- */
+    /* ---- a new certificate is nobody's business: no announcement, nothing held, nobody asked (docs/streams.md) ---- */
     {
         node_down(&bob);
         char path[900];
@@ -892,27 +883,50 @@ int main(void)
         remove(path);
         snprintf(path, sizeof path, "%s/key.pem", bob.cfg.dir);
         remove(path);
-        snprintf(path, sizeof path, "%s/state/address.json", bob.cfg.data_dir);
-        remove(path);                                                                              /* as if restored from a backup: no memory of having announced */
-        CHECK(node_up(&bob) == 0);
-        stream_body(body, sizeof body, bob.uid);
-        CHECK(post(&alice, sp("delete"), body) == 200);
-        int held = 0;
-        for (int i = 0; i < 100 && !held; i++) {
-            puddle_ob_item *l;
-            size_t c;
-            puddle_outbox_list(puddle_server_outbox(alice.srv), &l, &c);
-            for (size_t k = 0; k < c; k++) held |= !strcmp(l[k].peer, bob.uid) && l[k].state == PUDDLE_OB_HELD;
-            puddle_outbox_list_free(l, c);
-            if (!held) usleep(50000);
+        CHECK(node_up(&bob) == 0);                                                                 /* a brand new certificate */
+        char b2[300], url[300];
+        snprintf(b2, sizeof b2, "{\"body\":\"still me, new certificate\"}"); dm_to = bob.uid;
+        CHECK(post(&alice, path_of("conversations", dm_to, "messages/send"), b2) == 201);
+        snprintf(url, sizeof url, "/api/v1/conversations/%s/messages", alice.uid);
+        int got = 0;
+        for (int i = 0; i < 100 && !got; i++) {
+            got = get(&bob, url) == 200 && json_has("still me, new certificate");
+            if (!got) usleep(50000);
         }
-        CHECK(held);
-        CHECK(get(&alice, "/api/v1/streams?state=closed") == 200 && json_has("\"certificate_changed\":true"));
-        puddle_stream_state s;
-        CHECK(stream_state(&bob, alice.uid, &s) && s == PUDDLE_STREAM_ACTIVE);                    /* nothing reached Bob */
-        CHECK(post(&alice, sp("trust"), body) == 200 && !json_has("certificate_changed"));
-        CHECK(wait_state(&bob, alice.uid, PUDDLE_STREAM_CLOSED));                                 /* now it did */
-        CHECK(wait_owed_cleared(&alice, bob.uid));
+        CHECK(got);
+        CHECK(get(&alice, "/api/v1/streams?state=active") == 200 && !json_has("certificate"));
+    }
+
+    /* ---- someone else answers at Bob's address: Alice's message is not handed over, and she is told why ---- */
+    {
+        node_down(&bob);
+        node_down(&carol);
+        uint16_t carol_port = carol.cfg.port;
+        carol.cfg.port = bob.cfg.port;                                                             /* Carol's Puddle, where Bob's was */
+        CHECK(node_up(&carol) == 0);
+        char b2[300], url[300];
+        snprintf(b2, sizeof b2, "{\"body\":\"for Bob only\"}"); dm_to = bob.uid;
+        CHECK(post(&alice, path_of("conversations", dm_to, "messages/send"), b2) == 201);
+        snprintf(url, sizeof url, "/api/v1/conversations/%s/messages", bob.uid);
+        int told = 0;
+        for (int i = 0; i < 100 && !told; i++) {
+            told = get(&alice, url) == 200 && json_has("didn't recognise us") && json_has("\"state\":\"retrying\"");
+            if (!told) usleep(50000);
+        }
+        CHECK(told);
+        snprintf(url, sizeof url, "/api/v1/conversations/%s/messages", alice.uid);
+        CHECK(get(&carol, url) != 200 || !json_has("for Bob only"));                               /* it never reached her */
+        /* Bob is back where he was: the message goes, to him */
+        node_down(&carol);
+        carol.cfg.port = carol_port;
+        CHECK(node_up(&carol) == 0 && node_up(&bob) == 0);
+        CHECK(post(&alice, path_of("conversations", bob.uid, "retry"), "{}") == 204 || post(&alice, path_of("conversations", bob.uid, "retry"), "{}") == 200);
+        int got = 0;
+        for (int i = 0; i < 100 && !got; i++) {
+            got = get(&bob, url) == 200 && json_has("for Bob only");
+            if (!got) usleep(50000);
+        }
+        CHECK(got);
     }
 
     /* ---- a request that can't be sent is refused at once, or waits ---- */
@@ -1108,6 +1122,21 @@ int main(void)
                 puddle_net_request(&at, "GET", t, NULL, 0, puddle_server_identity(asks[k].who->srv), hal.uid, &o, &r);
                 CHECK(r.result == PUDDLE_NET_OK && r.status == asks[k].want && (asks[k].want != 200 || r.body_len == asks[k].len));
                 puddle_net_reply_free(&r);
+            }
+            {   /* Hal signs for what he sends Ivy: the list of hashes, and a chunk of the file (streams.md, "Proving who answers") */
+                unsigned char hal_pub[32];
+                puddle_identity_public(puddle_server_identity(hal.srv), hal_pub, NULL, NULL);
+                o.peer_pub = hal_pub;
+                puddle_net_reply r;
+                snprintf(t, sizeof t, "/stream/v1/files/%s/chunks?chat=%s&message=%s", fid, dm, mid);
+                puddle_net_request(&at, "GET", t, NULL, 0, puddle_server_identity(ivy.srv), hal.uid, &o, &r);
+                CHECK(r.result == PUDDLE_NET_OK && r.status == 200 && r.proof == PUDDLE_RECEIPT_OK);
+                puddle_net_reply_free(&r);
+                snprintf(t, sizeof t, "/stream/v1/files/%s/chunks/1?chat=%s&message=%s", fid, dm, mid);
+                puddle_net_request(&at, "GET", t, NULL, 0, puddle_server_identity(ivy.srv), hal.uid, &o, &r);
+                CHECK(r.result == PUDDLE_NET_OK && r.status == 200 && r.body_len == 1048576 && r.proof == PUDDLE_RECEIPT_OK);
+                puddle_net_reply_free(&r);
+                o.peer_pub = NULL;
             }
             node_down(&jo);
         }

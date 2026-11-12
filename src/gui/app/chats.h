@@ -37,7 +37,6 @@ class Chats : public QObject {
     Q_PROPERTY(QString currentAvatar READ currentAvatar NOTIFY currentInfoChanged)
     Q_PROPERTY(QString currentColor READ currentColor NOTIFY currentInfoChanged)
     Q_PROPERTY(QString currentState READ currentState NOTIFY currentInfoChanged)   // stream state of the open chat
-    Q_PROPERTY(bool currentCertChanged READ currentCertChanged NOTIFY currentInfoChanged)
     Q_PROPERTY(bool hasOlder READ hasOlder NOTIFY hasOlderChanged)                 // more history than is loaded
     Q_PROPERTY(bool attentive READ attentive WRITE setAttentive NOTIFY attentiveChanged) // someone is looking at the window
     Q_PROPERTY(bool connected READ connected NOTIFY connectedChanged)
@@ -70,7 +69,6 @@ public:
     QString currentAvatar() const { return curAvatar_; }
     QString currentColor() const { return curColor_; }
     QString currentState() const { return curState_; }
-    bool currentCertChanged() const { return curCert_; }
     bool hasOlder() const { return hasOlder_; }
     bool attentive() const { return attentive_; }
     void setAttentive(bool a);
@@ -114,7 +112,7 @@ public:
     // starts with it first, then the rest, each in order of recent activity. At most `limit`. Each is { id, name, avatar, color }.
     Q_INVOKABLE QVariantList findFriends(const QString &text, int limit) const;
     Q_INVOKABLE int friendMatches(const QString &filter) const;
-    // What we know of a person we have a stream with, for their profile in the side panel: { name, blurb, about, pronouns, state, since, address, certChanged }.
+    // What we know of a person we have a stream with, for their profile in the side panel: { name, blurb, about, pronouns, state, since, address }.
     // Empty if there is no such stream.
     Q_INVOKABLE QVariantMap person(const QString &userId) const; // how many friends have `filter` (any case) in their name; all of them if empty
     Q_INVOKABLE bool isGroupMember(const QString &userId) const { for (const QJsonObject &m : members_.items()) if (m.value("id").toString() == userId) return true; return false; }
@@ -133,7 +131,6 @@ public:
     Q_INVOKABLE void cancel(const QString &userId);      // withdraw our own request, or end a stream we no longer want
     Q_INVOKABLE void block(const QString &userId);
     Q_INVOKABLE void unblock(const QString &userId);
-    Q_INVOKABLE void trust(const QString &userId);       // accept their changed certificate
     Q_INVOKABLE void request(const QString &link, const QString &note, const QString &profile = QString());
 
     // ---- files in messages (docs/files.md) ----
@@ -220,7 +217,7 @@ private:
     int groupInviteCount_ = 0;
     bool groupsLoaded_ = false;
     QString curName_, curAvatar_, curColor_, curState_;
-    bool curCert_ = false, hasOlder_ = false, attentive_ = true;
+    bool hasOlder_ = false, attentive_ = true;
     QString myName_, myAvatar_, cacheDir_, fileCacheDir_;
     QSet<QString> downloading_;
     QString cachedPath(const QString &id, const QString &name) const;

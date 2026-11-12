@@ -19,7 +19,6 @@ Rectangle {
     property string note: ""
     property string error: ""
     property bool provisional: false
-    property bool certChanged: false
     property bool developer: false // Developer Mode: show what is normally hidden
     property var confirmDialog: null // a ConfirmDialog to ask in; without one the action just happens
     signal message()
@@ -137,18 +136,6 @@ Rectangle {
                 color: Theme.danger
                 font.pixelSize: 12
                 text: row.error
-            }
-            RowLayout {
-                visible: row.certChanged
-                Layout.fillWidth: true
-                Label {
-                    Layout.fillWidth: true
-                    wrapMode: Text.Wrap
-                    color: Theme.warning
-                    font.pixelSize: 12
-                    text: qsTr("Their certificate changed. Nothing is sent until you trust it.")
-                }
-                Button { text: qsTr("Trust"); Layout.preferredWidth: 72; onClicked: chats.trust(row.userId) }
             }
         }
 

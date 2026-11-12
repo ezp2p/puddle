@@ -90,7 +90,6 @@ static int extends(const char *shorter, size_t sl, const char *longer, size_t ll
 typedef struct {
     int64_t seq;
     char address[PUDDLE_ADDR_MAX];
-    char tls_fp[65];
 } address_state;
 
 static void state_path(const puddle_ctx *ctx, char *out, size_t cap)
@@ -112,8 +111,7 @@ static int load_state(const puddle_ctx *ctx, address_state *st)
     puddle_span v;
     memset(st, 0, sizeof *st);
     if (!puddle_json_valid_object(text, n) || puddle_json_member(text, n, "seq", &v) != 0 || puddle_json_int64(v, &st->seq) != 0 ||
-        st->seq < 0 || puddle_json_member(text, n, "address", &v) != 0 || puddle_json_string(v, st->address, sizeof st->address) != 0 ||
-        puddle_json_member(text, n, "tls_fp", &v) != 0 || puddle_json_string(v, st->tls_fp, sizeof st->tls_fp) != 0)
+        st->seq < 0 || puddle_json_member(text, n, "address", &v) != 0 || puddle_json_string(v, st->address, sizeof st->address) != 0)
         return 1; /* damaged: start again from what is true now */
     return 0;
 }
@@ -126,7 +124,6 @@ static int save_state(const puddle_ctx *ctx, const address_state *st, int64_t no
     puddle_jw_object(&w);
     puddle_jw_num(&w, "seq", st->seq);
     puddle_jw_str(&w, "address", st->address);
-    puddle_jw_str(&w, "tls_fp", st->tls_fp);
     puddle_jw_num(&w, "ts", now);
     puddle_jw_end_object(&w);
     size_t n = puddle_jw_finish(&w);
@@ -150,8 +147,6 @@ static char *address_body(puddle_ctx *ctx, const address_state *st, int64_t now,
     if (st->address[0])
         puddle_jw_string(&w, st->address);
     puddle_jw_end_array(&w);
-    if (st->tls_fp[0])
-        puddle_jw_str(&w, "tls_fp", st->tls_fp);
     puddle_jw_num(&w, "seq", st->seq);
     puddle_jw_num(&w, "ts", now);
     puddle_jw_end_object(&w);
@@ -374,17 +369,16 @@ int puddle_sync_resume(puddle_ctx *ctx)
     puddle_my_address(ctx->config, addr, sizeof addr);
     memset(&now_state, 0, sizeof now_state);
     snprintf(now_state.address, sizeof now_state.address, "%s", addr);
-    snprintf(now_state.tls_fp, sizeof now_state.tls_fp, "%s", ctx->own_tls_fp);
     int have = load_state(ctx, &saved) == 0;
     int64_t now = puddle_ctx_now_ms(ctx);
     if (!have) {
         now_state.seq = 0; /* the first record: people were told where we are when the stream began */
         save_state(ctx, &now_state, now);
-    } else if (strcmp(saved.address, now_state.address) != 0 || strcmp(saved.tls_fp, now_state.tls_fp) != 0) {
+    } else if (strcmp(saved.address, now_state.address) != 0) { /* a new certificate needs no news: it proves itself (streams.md) */
         now_state.seq = saved.seq + 1;
         if (save_state(ctx, &now_state, now) != 0)
             puddle_log(PUDDLE_LOG_WARN, "cannot save our address record; friends will not be told it changed");
-        puddle_log(PUDDLE_LOG_INFO, "our address or certificate changed: telling the people we are connected to");
+        puddle_log(PUDDLE_LOG_INFO, "our address changed: telling the people we are connected to");
     } else {
         now_state = saved;
     }
@@ -421,8 +415,6 @@ void puddle_sync_done(puddle_ctx *ctx, const puddle_ob_item *item, puddle_ob_out
         return;
     char err[300], why[200];
     sent_note n = { -1, -1, NULL };
-    if (outcome == PUDDLE_OB_HOLD)
-        return;
     if (outcome == PUDDLE_OB_REJECTED) {
         if (!ours)
             return; /* a refused request or answer is dealt with where it is dealt with */
@@ -539,8 +531,12 @@ static int identity_post(const puddle_call *c, puddle_jw *w)
     newer_chain nc = { chain, cl };
     char err[300];
     if (!puddle_streams_is_blocked(c->ctx->streams, c->sender) &&
-        puddle_streams_update(c->ctx->streams, c->sender, apply_chain, &nc, err, sizeof err) == 0)
+        puddle_streams_update(c->ctx->streams, c->sender, apply_chain, &nc, err, sizeof err) == 0) {
         puddle_log(PUDDLE_LOG_INFO, "%.12s… changed keys", c->sender);
+        /* what waited because their answers were signed by a key we didn't know yet can go now (streams.md, "Proving who answers") */
+        if (c->ctx->outbox)
+            puddle_outbox_retry_now(c->ctx->outbox, c->sender);
+    }
     free(chain);
     return 202;
 }
@@ -551,7 +547,6 @@ typedef struct {
     int64_t seq;
     char addrs[PUDDLE_STREAM_MAX_ADDRS][PUDDLE_ADDR_MAX];
     int naddr;
-    char tls_fp[65];
     int newer;
 } moved;
 
@@ -565,11 +560,6 @@ static int apply_moved(void *user, puddle_stream *st, int exists)
         st->naddr = 0;
         for (int i = 0; i < m->naddr; i++)
             puddle_stream_add_address(st, m->addrs[i]);
-    }
-    if (m->tls_fp[0]) {
-        /* signed by their current key, so a new certificate announced here is theirs: accept it without asking */
-        snprintf(st->tls_fp, sizeof st->tls_fp, "%s", m->tls_fp);
-        st->tls_fp_seen[0] = '\0';
     }
     m->newer = 1;
     return 0;
@@ -617,10 +607,7 @@ static int address_post(const puddle_call *c, puddle_jw *w)
         }
         if (r < 0)
             ok = 0;
-        int frc = puddle_json_member(rec, rl, "tls_fp", &v);
-        unsigned char raw[32];
-        if (frc < 0 || (frc == 0 && (puddle_json_string(v, m.tls_fp, sizeof m.tls_fp) != 0 || puddle_hex_decode(m.tls_fp, raw, 32) != 0)))
-            ok = 0;
+        /* a `tls_fp`, which older Puddles send, is left unread: certificates prove nothing here (streams.md) */
     }
     /* it must be signed by their key as we hold it now: the request already was, and the record has to agree */
     if (ok) {
@@ -642,9 +629,7 @@ static int address_post(const puddle_call *c, puddle_jw *w)
     char err[300];
     int rc = puddle_streams_update(c->ctx->streams, c->sender, apply_moved, &m, err, sizeof err);
     if (rc == 0) {
-        puddle_log(PUDDLE_LOG_INFO, "%.12s… has a new address%s", c->sender, m.tls_fp[0] ? " or certificate" : "");
-        if (m.tls_fp[0] && c->ctx->outbox)
-            puddle_outbox_release(c->ctx->outbox, c->sender); /* whatever was held for their certificate may go now */
+        puddle_log(PUDDLE_LOG_INFO, "%.12s… has a new address", c->sender);
         /* they have just reached us, so they are up: what waited for them goes to the new address now, not at the next scheduled try */
         if (c->ctx->outbox)
             puddle_outbox_retry_now(c->ctx->outbox, c->sender);

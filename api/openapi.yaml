@@ -135,9 +135,6 @@ paths:
   /api/v1/streams/{user}/delete:
     parameters: [{ $ref: "#/components/parameters/User" }]
     post: { tags: [streams], summary: Withdraw a request, or end a stream, responses: { "200": { $ref: "#/components/responses/Stream" } } }
-  /api/v1/streams/{user}/trust:
-    parameters: [{ $ref: "#/components/parameters/User" }]
-    post: { tags: [streams], summary: Accept their changed certificate, responses: { "200": { $ref: "#/components/responses/Stream" } } }
   /api/v1/streams/{user}/profile:
     parameters: [{ $ref: "#/components/parameters/User" }]
     post:

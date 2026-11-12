@@ -77,7 +77,7 @@ QList<QJsonObject> noticesOf(const QJsonDocument &doc)
 
 Chats::Chats(QObject *parent)
     : QObject(parent),
-      people_({ "id", "name", "state", "note", "error", "certificate_changed", "avatar", "color", "updated_at", "address", "provisional" }),
+      people_({ "id", "name", "state", "note", "error", "avatar", "color", "updated_at", "address", "provisional" }),
       conversations_({ "id", "kind", "user", "group", "name", "avatar", "color", "stream", "last", "lastBy", "unread", "members" }, nullptr, "id"),
       messages_({ "id", "sender", "senderName", "ts", "body", "files", "outgoing", "edited", "deleted", "reply_to", "avatar", "tint", "grouped",
                   "dayStart", "replyName", "replyText", "replyMissing", "deliveryState", "deliveryReason", "deliveryNext", "kind", "noticeText" }),
@@ -417,8 +417,7 @@ QVariantMap Chats::person(const QString &userId) const
                             { "pronouns", profile.value("pronouns").toString() },
                             { "state", p.value("state").toString() },
                             { "since", qint64(p.value("created_at").toDouble()) },
-                            { "address", p.value("address").toString() },
-                            { "certChanged", p.value("certificate_changed").toBool() } };
+                            { "address", p.value("address").toString() } };
     }
     return {};
 }
@@ -786,14 +785,13 @@ void Chats::open(const QString &userId, const QString &kind)
 void Chats::updateCurrentInfo()
 {
     QString name, avatar, color, state;
-    bool cert = false;
     if (currentIsGroup() && groups_.contains(current_)) {
         const QJsonObject g = groups_.value(current_);
         name = g.value("name").toString();
         state = g.value("my").toString() == QLatin1String("in") ? QStringLiteral("active") : g.value("my").toString(); // "active" is "can write here"
-        if (name == curName_ && state == curState_ && curAvatar_.isEmpty() && curColor_.isEmpty() && !curCert_)
+        if (name == curName_ && state == curState_ && curAvatar_.isEmpty() && curColor_.isEmpty())
             return;
-        curName_ = name; curAvatar_.clear(); curColor_.clear(); curState_ = state; curCert_ = false;
+        curName_ = name; curAvatar_.clear(); curColor_.clear(); curState_ = state;
         emit currentInfoChanged();
         return;
     }
@@ -803,13 +801,12 @@ void Chats::updateCurrentInfo()
             avatar = p.value("avatar").toString();
             color = p.value("color").toString();
             state = p.value("state").toString();
-            cert = p.value("certificate_changed").toBool();
         }
     if (name.isEmpty() && !current_.isEmpty())
         name = shortId(current_);
-    if (name == curName_ && avatar == curAvatar_ && color == curColor_ && state == curState_ && cert == curCert_)
+    if (name == curName_ && avatar == curAvatar_ && color == curColor_ && state == curState_)
         return;
-    curName_ = name; curAvatar_ = avatar; curColor_ = color; curState_ = state; curCert_ = cert;
+    curName_ = name; curAvatar_ = avatar; curColor_ = color; curState_ = state;
     emit currentInfoChanged();
 }
 
@@ -1032,7 +1029,6 @@ void Chats::decline(const QString &u) { post(path("streams", u, "decline"), QJso
 void Chats::cancel(const QString &u) { post(path("streams", u, "delete"), QJsonObject{}, tr("Could not remove.")); }
 void Chats::block(const QString &u) { post(path("users", u, "block"), QJsonObject{}, tr("Could not block.")); }
 void Chats::unblock(const QString &u) { post(path("users", u, "unblock"), QJsonObject{}, tr("Could not unblock.")); }
-void Chats::trust(const QString &u) { post(path("streams", u, "trust"), QJsonObject{}, tr("Could not trust the new certificate.")); }
 
 void Chats::request(const QString &link, const QString &note, const QString &profile)
 {

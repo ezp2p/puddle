@@ -80,12 +80,6 @@ static int delete_stream(const puddle_call *c, puddle_jw *w)
     return 200;
 }
 
-static int trust_stream(const puddle_call *c, puddle_jw *w)
-{
-    streamOf(c).trust().write(w);
-    return 200;
-}
-
 /* Choose which of the owner's profiles this person sees directly. `profile: null`: none (they see only the id). */
 static int stream_profile(const puddle_call *c, puddle_jw *w)
 {
@@ -199,7 +193,6 @@ const puddle_route puddle_stream_api_routes[] = {
     { "POST", "/api/v1/streams/{user:id}/accept",   PUDDLE_AUTH_OWNER, 128,  accept_stream,  NULL },
     { "POST", "/api/v1/streams/{user:id}/decline",  PUDDLE_AUTH_OWNER, 64,   decline_stream, NULL },
     { "POST", "/api/v1/streams/{user:id}/delete",   PUDDLE_AUTH_OWNER, 64,   delete_stream,  NULL },
-    { "POST", "/api/v1/streams/{user:id}/trust",    PUDDLE_AUTH_OWNER, 64,   trust_stream,   NULL },
     { "POST", "/api/v1/streams/{user:id}/profile",  PUDDLE_AUTH_OWNER, 256,  stream_profile, NULL },
     { "GET",  "/api/v1/invites",                    PUDDLE_AUTH_OWNER, 0,    list_invites,   NULL },
     { "POST", "/api/v1/invites/create",             PUDDLE_AUTH_OWNER, 256,  create_invite,  NULL },

@@ -30,7 +30,10 @@
 extern "C" {
 #endif
 
-typedef enum { PUDDLE_AUTH_OWNER, PUDDLE_AUTH_PEER, PUDDLE_AUTH_CHAIN, PUDDLE_AUTH_CHAIN_OPEN } puddle_auth_kind;
+/* CHAIN_ANON is CHAIN for a route that answers everyone the same whatever it decides, so it never signs its answer;
+ * CHAIN_OPEN is that, and also takes a request signed for no recipient in particular (docs/streams.md, "Proving who answers").
+ * Answers to PEER, and to CHAIN from someone whose chain we already hold, carry a signed receipt. */
+typedef enum { PUDDLE_AUTH_OWNER, PUDDLE_AUTH_PEER, PUDDLE_AUTH_CHAIN, PUDDLE_AUTH_CHAIN_OPEN, PUDDLE_AUTH_CHAIN_ANON } puddle_auth_kind;
 
 /* An answer that is a file, not JSON: a handler fills this, with `data` (malloc'd; the router sends and frees it) or with an
  * open file (puddle_answer_file), which is sent as it is read and may be asked for in part (`Range`). */

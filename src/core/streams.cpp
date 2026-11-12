@@ -208,10 +208,6 @@ static char *encode(const puddle_stream *st, size_t *out_len)
         puddle_jw_num(&w, "owed", st->owed);
     puddle_jw_num(&w, "created", st->created_ms);
     puddle_jw_num(&w, "updated", st->updated_ms);
-    if (st->tls_fp[0])
-        puddle_jw_str(&w, "tls_fp", st->tls_fp);
-    if (st->tls_fp_seen[0])
-        puddle_jw_str(&w, "tls_fp_seen", st->tls_fp_seen);
     if (st->ticket[0])
         puddle_jw_str(&w, "ticket", st->ticket);
     if (st->provisional)
@@ -293,19 +289,7 @@ static int decode(const char *json, size_t len, const char *expect_id, puddle_st
             return -1;
         st->owed = (puddle_owed)o;
     }
-    for (int k = 0; k < 2; k++) {
-        const char *key = k ? "tls_fp_seen" : "tls_fp";
-        char *dst = k ? st->tls_fp_seen : st->tls_fp;
-        puddle_span fv;
-        int frc = puddle_json_member(json, len, key, &fv);
-        if (frc < 0)
-            return -1;
-        if (frc == 0) {
-            unsigned char raw[32];
-            if (puddle_json_string(fv, dst, 65) != 0 || puddle_hex_decode(dst, raw, 32) != 0)
-                return -1;
-        }
-    }
+    /* tls_fp and tls_fp_seen, from before certificates stopped mattering, are ignored */
     for (int k = 0; k < 2; k++) {
         puddle_span nv;
         int nrc = puddle_json_member(json, len, k ? "addr_sent" : "chain_sent", &nv);
@@ -1063,72 +1047,28 @@ int puddle_streams_peer_key(void *streams, const char *sender_id, const char *ki
     return ok;
 }
 
-/* ---- certificates ---- */
+/* ---- what answers is checked against (docs/streams.md, "Proving who answers") ---- */
 
-static int is_fp(const char *fp)
+int puddle_streams_knows(puddle_streams *s, const char *id)
 {
-    unsigned char raw[32];
-    return fp && strlen(fp) == 64 && puddle_hex_decode(fp, raw, 32) == 0;
+    if (!s || !puddle_id_valid(id))
+        return 0;
+    std::lock_guard<std::mutex> hold(s->mu);
+    return find_entry(s, id) != NULL;
 }
 
-typedef struct {
-    const char *fp;
-    int result;
-} fp_change;
-
-static int fp_apply(void *user, puddle_stream *st, int exists)
+int puddle_streams_current_key(void *streams, const char *id, unsigned char sign_pub[32])
 {
-    fp_change *c = (fp_change *)user;
-    c->result = 1;
-    if (!exists)
-        return 1; /* no record of them: nobody's to judge */
-    if (!st->tls_fp[0]) {
-        snprintf(st->tls_fp, sizeof st->tls_fp, "%s", c->fp);
-        st->tls_fp_seen[0] = '\0';
+    puddle_streams *s = (puddle_streams *)streams;
+    if (!s || !puddle_id_valid(id))
         return 0;
-    }
-    if (strcmp(st->tls_fp, c->fp) != 0) {
-        c->result = 0;
-        if (strcmp(st->tls_fp_seen, c->fp) == 0)
-            return 2; /* already noted */
-        snprintf(st->tls_fp_seen, sizeof st->tls_fp_seen, "%s", c->fp);
-        return 0;
-    }
-    if (st->tls_fp_seen[0]) {
-        st->tls_fp_seen[0] = '\0'; /* the old certificate is back: nothing to decide */
-        return 0;
-    }
-    return 2;
-}
-
-int puddle_streams_check_fingerprint(puddle_streams *s, const char *id, const char *fp)
-{
-    if (!puddle_id_valid(id) || !is_fp(fp))
-        return 0;
-    fp_change c = { fp, 1 };
-    char err[200];
-    puddle_streams_update(s, id, fp_apply, &c, err, sizeof err); /* if the write fails we only lose the note, and ask again next time */
-    return c.result;
-}
-
-static int trust_apply(void *user, puddle_stream *st, int exists)
-{
-    (void)user;
-    if (!exists)
-        return -1;
-    if (!st->tls_fp_seen[0])
+    std::lock_guard<std::mutex> hold(s->mu);
+    entry *e = find_entry(s, id);
+    if (e && e->has_key && !is_blocked_locked(s, id)) {
+        memcpy(sign_pub, e->sign_pub, 32);
         return 1;
-    snprintf(st->tls_fp, sizeof st->tls_fp, "%s", st->tls_fp_seen);
-    st->tls_fp_seen[0] = '\0';
+    }
     return 0;
-}
-
-int puddle_streams_trust_fingerprint(puddle_streams *s, const char *id, char *err, size_t errlen)
-{
-    int rc = puddle_streams_update(s, id, trust_apply, NULL, err, errlen);
-    if (rc < 0 && err && !err[0])
-        seterr(err, errlen, "no such stream");
-    return rc;
 }
 
 /* ---- blocks ---- */

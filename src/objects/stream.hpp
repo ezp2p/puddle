@@ -41,7 +41,6 @@ public:
     Stream accept();   // a request waiting on the owner: yes
     Stream decline();  // a request waiting on the owner: no
     Stream remove();   // withdraw our request, or end the stream
-    Stream trust();    // their certificate changed and the owner says the new one is fine
     Stream showProfile(const std::optional<std::string> &profileId); // nullopt: they see none of the owner's profiles
 
     void write(puddle_jw *w) const;

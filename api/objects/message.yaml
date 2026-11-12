@@ -36,8 +36,8 @@ properties:
     properties:
       state:
         type: string
-        enum: [queued, retrying, failed, held]
-        description: "`queued` not tried yet, `retrying` could not reach them (see next_at), `failed` given up (retry asks again), `held` waiting for the owner to trust their changed certificate"
+        enum: [queued, retrying, failed]
+        description: "`queued` not tried yet, `retrying` not delivered yet, tried again at next_at (with a `reason` when something answered that could not prove it is them: docs/streams.md, \"Proving who answers\"), `failed` refused in their name or given up (retry asks again)"
       reason: { type: string }
       next_at: { $ref: "../wire/ids.yaml#/$defs/Timestamp", description: "With retrying" }
       attempts: { type: integer, minimum: 0 }

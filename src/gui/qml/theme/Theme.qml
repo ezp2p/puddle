@@ -30,7 +30,7 @@ QtObject {
     // ---- colours that mean something, the same in light and dark
     readonly property color danger: pick("danger", "#d9534f")          // a failure, and the destructive item of a menu
     readonly property color badge: pick("badge", "#d9453d")            // unread counts
-    readonly property color warning: pick("warning", "#d9a000")        // held back, certificate changed
+    readonly property color warning: pick("warning", "#d9a000")        // not delivered yet, for a reason worth showing
     readonly property color banner: pick("banner", "#b8860b")          // "can't reach your Puddle", and cautions on the setup screens
     readonly property color alert: "#c0392b"           // a warning that must not be missed (setup)
     readonly property color toast: "#323232"           // the short message at the bottom
