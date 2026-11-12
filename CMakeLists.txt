@@ -349,13 +349,15 @@ enable_testing()
 # Each layer of src/ includes only the layers it may (tests/layers.cmake).
 add_test(NAME layers COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_CURRENT_SOURCE_DIR}/src -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/layers.cmake)
 
-foreach(t http json store storage files transfers people conversations config yaml profile encoding identity auth reqsig phrase serve router routes link group groupapi groupowner streams ratelimit access owner_streams client outbox inbound open_request flow message messages keysync devices wireprofile profiles e2e group_e2e)
+foreach(t http json store storage files transfers people conversations config yaml profile encoding identity auth reqsig phrase serve router routes link group groupapi groupowner streams ratelimit access owner_streams client outbox inbound open_request flow message messages keysync devices protocol_vectors wireprofile profiles e2e group_e2e)
   add_executable(${t}_test tests/${t}_test.c)
   target_link_libraries(${t}_test PRIVATE puddle_service)
   add_test(NAME ${t} COMMAND ${t}_test)
   # fill new and freed heap memory with garbage, so reading memory nobody wrote shows up as a failure
   set_tests_properties(${t} PROPERTIES ENVIRONMENT "MallocScribble=1;MALLOC_PERTURB_=165")
 endforeach()
+# The Puddle Protocol's vectors, from a checkout of ezp2p/protocol beside this one (skipped without one)
+target_compile_definitions(protocol_vectors_test PRIVATE PUDDLE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 endif()
 
 install(FILES dist/puddled.service DESTINATION share/puddle)
