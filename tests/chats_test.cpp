@@ -54,6 +54,7 @@ int main(int argc, char **argv)
     auto *msgs_b = static_cast<JsonListModel *>(B.messages());
 
     CHECK(until([&] { return A.connected() && B.connected(); }));
+    CHECK(until([&] { return B.peopleLoaded(); })); /* a request already there at the first look is not news */
     CHECK(people_a->rowCount() == 0 && conv_a->rowCount() == 0);
 
     /* Alice asks Bob; Bob sees a request from "Alice" and is told about it */
@@ -65,10 +66,16 @@ int main(int argc, char **argv)
     CHECK(req.value("name").toString() == "Alice" || req.value("name").toString() == alice.uid.left(8)); /* the name arrives with the profile */
     CHECK(newRequest.count() == 1 && newRequest.at(0).at(0).toString() == alice.uid);
     {
+        /* Alice's list is refreshed on a timer, so wait for her outgoing request to show instead of looking once */
         QJsonObject out;
-        for (const QJsonObject &o : people_a->items())
-            if (o.value("state").toString() == "pending_out")
-                out = o;
+        auto find_out = [&] {
+            out = QJsonObject();
+            for (const QJsonObject &o : people_a->items())
+                if (o.value("state").toString() == "pending_out")
+                    out = o;
+            return !out.isEmpty();
+        };
+        CHECK(until(find_out));
         CHECK(!out.isEmpty() && out.value("provisional").toBool() && out.value("name").toString() == bob.link && out.value("id").toString() != bob.uid);
     }
 
@@ -270,7 +277,7 @@ int main(int argc, char **argv)
                 if (m.value("body").toString() == "carol here")
                     return true;
             return false;
-        }) || true);
+        }));
         /* finding someone to talk to: the most recent first when nothing is typed, then by what was typed (names that start with it before names that have it inside) */
         {
             QVariantList all = A.findFriends("", 30);

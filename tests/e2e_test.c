@@ -310,6 +310,19 @@ static int outboxes_empty(node *a, node *b)
     return 0;
 }
 
+/* Wait for exactly one thing queued for `peer_id`, then give anything stray time to show up, so "once" means once. A fixed sleep before looking
+ * is a guess about how fast the machine is. */
+static int wait_queued_once(node *n, const char *peer_id)
+{
+    int queued = 0, ok = 0;
+    for (int i = 0; i < 200 && !ok; i++) {
+        ok = outbox_count(n, peer_id, &queued) == 1 && queued == 1;
+        if (!ok) usleep(50000);
+    }
+    usleep(300000);
+    return ok && outbox_count(n, peer_id, &queued) == 1 && queued == 1;
+}
+
 static void request(node *from, node *to, const char *message, const char *link_override, int expect)
 {
     char body[900];
@@ -768,7 +781,14 @@ int main(void)
         CHECK(has_provisional(&eve));                                                              /* Eve sees "pending", as ever */
         CHECK(!stream_state(&alice, eve.uid, &s));                                                /* and Alice holds nothing of Eve */
     }
-    CHECK(wait_owed_cleared(&eve, alice.uid) || 1);
+    {   /* Alice's block is invisible to Eve: her request was taken like any other, so nothing is left waiting to be sent */
+        int drained = 0;
+        for (int i = 0; i < 200 && !drained; i++) {
+            drained = outbox_count(&eve, NULL, NULL) == 0;
+            if (!drained) usleep(50000);
+        }
+        CHECK(drained);
+    }
     CHECK(post(&alice, "/api/v1/streams/policy/set", "{\"access\":\"closed\"}") == 200);
     {
         node *gina = &carol;                                                                      /* Carol asks again while Alice is closed */
@@ -814,23 +834,19 @@ int main(void)
         node_down(&dave);
         stream_body(body, sizeof body, dave.uid);
         CHECK(post(&alice, sp("delete"), body) == 200);                                 /* Dave is down: the news has to wait */
-        usleep(1500000);
-        int queued;
-        CHECK(outbox_count(&alice, dave.uid, &queued) == 1 && queued == 1);
+        CHECK(wait_queued_once(&alice, dave.uid));
         CHECK(owed_of(&alice, dave.uid) == PUDDLE_OWED_CLOSED);
         /* Alice restarts: what is owed is still queued, once */
         node_down(&alice);
         CHECK(node_up(&alice) == 0);
-        usleep(500000);
-        CHECK(outbox_count(&alice, dave.uid, &queued) == 1 && queued == 1);
+        CHECK(wait_queued_once(&alice, dave.uid));
         /* and if the queue file were lost, the record that says it is owed is enough to queue it again */
         node_down(&alice);
         char path[900];
         snprintf(path, sizeof path, "%s/state/outbox", alice.cfg.data_dir);
         rmtree(path);
         CHECK(node_up(&alice) == 0);
-        usleep(500000);
-        CHECK(outbox_count(&alice, dave.uid, &queued) == 1 && queued == 1);
+        CHECK(wait_queued_once(&alice, dave.uid));
         CHECK(node_up(&dave) == 0);
     }
 
@@ -1212,6 +1228,14 @@ int main(void)
             CHECK(get(&ivy, url) == 200 && json_has("\"state\":\"too_large\",\"received\":0,\"max\":1048576"));
             snprintf(url, sizeof url, "/api/v1/conversations/%s/messages/%s/delete", ivy.uid, mid4);
             CHECK(post(&hal, url, "{}") == 200);
+            {   /* Ivy is restarted next: let the delete reach her first, or it waits out the outbox's 5-minute retry */
+                int drained = 0;
+                for (int i = 0; i < 200 && !drained; i++) {
+                    drained = outbox_count(&hal, ivy.uid, NULL) == 0;
+                    if (!drained) usleep(50000);
+                }
+                CHECK(drained);
+            }
             node_down(&ivy);
             ivy.cfg.files_max_size = 0;
             CHECK(node_up(&ivy) == 0);

@@ -84,6 +84,7 @@ public:
     // Start talking to the Puddle at `base`, reading its token and certificate from the files.
     bool attach(const QUrl &base, const QString &tokenFile, const QString &certFile);
     void setInterval(int ms) { timer_.setInterval(ms); }
+    bool peopleLoaded() const { return peopleLoaded_; } // the first list has come: requests after this are new
     void setPageSize(int n) { pageSize_ = n; } // how many of a list to ask for at a time (for tests; the Puddle caps it at 100 or 200)
 
     // Fetch everything now (also runs on a timer).
