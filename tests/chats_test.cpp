@@ -425,8 +425,8 @@ int main(int argc, char **argv)
             QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
             return api->findChildren<QNetworkAccessManager *>(Qt::FindDirectChildrenOnly).size();
         };
-        CHECK(until([&] { return managers() == 1; }));
-        if (managers() != 1)
+        CHECK(until([&] { return managers() == 2; }));   /* the one in use, and the one a phone's handshake would use */
+        if (managers() != 2)
             fprintf(stderr, "network managers left: %d\n", int(managers()));
     }
 

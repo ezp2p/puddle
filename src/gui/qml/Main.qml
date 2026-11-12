@@ -39,6 +39,11 @@ ApplicationWindow {
     onClosing: close => {
         if (backend.quitting)
             return
+        if (backend.phone) { // Android's back button: back through the app first
+            if (shell.visible && shell.back())
+                close.accepted = false
+            return
+        }
         if (tray.available) {
             close.accepted = false
             hide()
@@ -82,6 +87,13 @@ ApplicationWindow {
         anchors.fill: parent
         visible: root.backend.needsSetup
         backend: root.backend
+    }
+
+    // a phone, before its Puddle has let it in (docs/identity.md, "Devices")
+    Loader {
+        anchors.fill: parent
+        active: root.backend.phone && !root.backend.running
+        sourceComponent: Pair { link: root.backend.phoneLink }
     }
 
     Label {
@@ -129,6 +141,10 @@ ApplicationWindow {
         function onGroupInvitesChanged() { root.updateBadge() }
         function onNewFileRequest(userId, conversationId) {
             root.notify(root.backend.chats.nameOf(userId), qsTr("Asked for a file again"), conversationId)
+        }
+        function onNewDevice(name) {
+            if (!root.visible || !root.active)
+                root.notify(qsTr("A phone wants to use your Puddle"), qsTr("Accept \"%1\" in Settings if it is yours.").arg(name), "")
         }
         function onNewGroupInvite(groupId) {
             if (!root.visible || !root.active)

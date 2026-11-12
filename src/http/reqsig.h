@@ -38,6 +38,15 @@ typedef struct {
 int puddle_reqsig_sign(puddle_identity *me, const char *method, const char *target, const void *body,
                        size_t body_len, const char *recipient_id, int64_t now_ms, char *out, size_t cap);
 
+/* Something that signs: `user` is whatever holds the key. 0 or -1. */
+typedef int (*puddle_sign_fn)(void *user, const void *data, size_t len, unsigned char sig[64]);
+
+/* The same, for a signer that is not this Puddle's identity: a paired phone, with its device id as `signer_id`
+ * (docs/identity.md, "Devices"). */
+int puddle_reqsig_sign_as(const char *signer_id, const unsigned char sign_pub[32], puddle_sign_fn sign, void *user, const char *method,
+                          const char *target, const void *body, size_t body_len, const char *recipient_id, int64_t now_ms, char *out,
+                          size_t cap);
+
 /* Strictly parse a header value: exact field order, exact formats, nothing extra. 0 or -1. */
 int puddle_reqsig_parse(const char *header, puddle_reqsig *out);
 
@@ -91,6 +100,9 @@ int puddle_receipt_sign_hash(puddle_identity *me, const char *nonce, int status,
  * request with `nonce`, answered `status` with `body`, on a connection showing the certificate `seen_fp_hex`? */
 puddle_receipt_check puddle_receipt_verify(const char *header, const char *peer_id, const unsigned char peer_pub[32], const char *nonce,
                                            int status, const void *body, size_t body_len, const char *seen_fp_hex);
+/* The same, for a body that was not kept in memory (a download written to a file): `body_hash_hex` is its SHA-256. */
+puddle_receipt_check puddle_receipt_verify_hash(const char *header, const char *peer_id, const unsigned char peer_pub[32], const char *nonce,
+                                                int status, const char *body_hash_hex, const char *seen_fp_hex);
 
 
 #ifdef __cplusplus

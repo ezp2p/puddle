@@ -9,6 +9,7 @@
 #include "core/config.h"
 #include "core/link.h"
 #include "core/profile.h"
+#include "core/devices.h"
 #include "core/streams.h"
 
 #include <stddef.h>
@@ -80,6 +81,7 @@ struct puddle_ctx {
     puddle_profiles *profiles;              /* the owner's profiles (core/profile.h) */
     puddle_assignments *assignments;
     puddle_streams *streams;
+    puddle_devices *devices;               /* paired phones (docs/identity.md, "Devices"); NULL = none can be (tests) */
     puddle_people *people;                 /* the profiles other Puddles sent us; NULL in tests that keep none */
     puddle_conversations *conversations;   /* conversation summaries; NULL = work each out from its log every time */
     puddle_groups *groups;                 /* the group chats we are in or invited to; NULL in tests that have none */

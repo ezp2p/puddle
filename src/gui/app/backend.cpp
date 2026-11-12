@@ -1,5 +1,7 @@
 #include "backend.h"
 
+#include <QStandardPaths>
+
 #include <QClipboard>
 #include <QCoreApplication>
 #include <QDir>
@@ -50,6 +52,13 @@ Backend::Backend(QObject *parent) : QObject(parent)
         loadTheme();
     }
 
+    if (phoneMode()) { /* no Puddle here: this is a phone of the owner's, once paired */
+        phone_ = new Phone(&chats_, phoneDir(), this);
+        connect(phone_, &Phone::changed, this, &Backend::startedChanged);
+        connect(&chats_, &Chats::profilesChanged, this, &Backend::startedChanged); /* myLink, from the Puddle */
+        return;
+    }
+
     char err[512];
     if (puddle_config_load(&cfg_, nullptr, err, sizeof err) != 0) {
         error_ = QString::fromUtf8(err);
@@ -63,6 +72,30 @@ Backend::Backend(QObject *parent) : QObject(parent)
     needsSetup_ = setupRedo_ || !puddle_identity_exists(cfg_.data_dir);
     if (!needsSetup_)
         startServer();
+}
+
+bool Backend::canDrawQr() const
+{
+#ifdef PUDDLE_HAVE_QRENCODE /* set on the app when libqrencode is found; see qrimage.h */
+    return true;
+#else
+    return false;
+#endif
+}
+
+bool Backend::phoneMode()
+{
+#ifdef Q_OS_ANDROID
+    return true;
+#else
+    return qEnvironmentVariableIsSet("PUDDLE_PHONE") || QCoreApplication::arguments().contains(QStringLiteral("--phone"));
+#endif
+}
+
+QString Backend::phoneDir()
+{
+    const QString d = qEnvironmentVariable("PUDDLE_PHONE_DIR");
+    return d.isEmpty() ? QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + QStringLiteral("/phone") : d;
 }
 
 QVariantMap Backend::parseTheme(const QByteArray &text)

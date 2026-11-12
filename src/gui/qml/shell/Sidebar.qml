@@ -134,9 +134,15 @@ Rectangle {
                     spacing: 0
                     Label { text: bar.chats.myName !== "" ? bar.chats.myName : qsTr("You"); font.bold: true; elide: Text.ElideRight; Layout.fillWidth: true }
                     Label {
-                        text: bar.chats.connected ? qsTr("Running") : qsTr("Not connected")
+                        /* a phone says whether it reaches its Puddle, and why not (docs/identity.md, "Devices") */
+                        Layout.fillWidth: true
+                        elide: Text.ElideRight
+                        text: !bar.backend.phone ? (bar.chats.connected ? qsTr("Running") : qsTr("Not connected"))
+                              : bar.chats.problem !== "" ? bar.chats.problem
+                              : bar.chats.connected ? qsTr("Connected to your Puddle") : qsTr("Can't reach your Puddle")
+                        color: bar.backend.phone && bar.chats.problem !== "" ? Theme.alert : palette.text
                         font.pixelSize: 11
-                        opacity: 0.6
+                        opacity: bar.backend.phone && bar.chats.problem !== "" ? 1 : 0.6
                     }
                 }
                 ToolButton {

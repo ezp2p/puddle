@@ -64,10 +64,27 @@ static int valid_user_id(const char *s)
     return 1;
 }
 
+static int identity_sign(void *user, const void *data, size_t len, unsigned char sig[64])
+{
+    return puddle_identity_sign((puddle_identity *)user, data, len, sig);
+}
+
 int puddle_reqsig_sign(puddle_identity *me, const char *method, const char *target, const void *body,
                        size_t body_len, const char *recipient_id, int64_t at_ms, char *out, size_t cap)
 {
-    if (!valid_method(method) || !valid_target(target) || !(valid_user_id(recipient_id) || !strcmp(recipient_id, PUDDLE_RECIPIENT_ANY)))
+    unsigned char pub[32];
+    char id[PUDDLE_USER_ID_LEN + 1];
+    puddle_identity_public(me, pub, NULL, NULL);
+    puddle_identity_id(me, id);
+    return puddle_reqsig_sign_as(id, pub, identity_sign, me, method, target, body, body_len, recipient_id, at_ms, out, cap);
+}
+
+int puddle_reqsig_sign_as(const char *signer_id, const unsigned char sign_pub[32], puddle_sign_fn sign, void *user, const char *method,
+                          const char *target, const void *body, size_t body_len, const char *recipient_id, int64_t at_ms, char *out,
+                          size_t cap)
+{
+    if (!signer_id || !valid_user_id(signer_id) || !sign || !valid_method(method) || !valid_target(target) ||
+        !(valid_user_id(recipient_id) || !strcmp(recipient_id, PUDDLE_RECIPIENT_ANY)))
         return -1;
     int64_t ts = at_ms ? at_ms : now_ms();
 
@@ -81,17 +98,15 @@ int puddle_reqsig_sign(puddle_identity *me, const char *method, const char *targ
     if (cl < 0)
         return -1;
 
-    unsigned char sig[64], pub[32];
-    char sig64[100], id[PUDDLE_USER_ID_LEN + 1], kid[65];
-    if (puddle_identity_sign(me, canon, (size_t)cl, sig) != 0)
+    unsigned char sig[64];
+    char sig64[100], kid[65];
+    if (sign(user, canon, (size_t)cl, sig) != 0)
         return -1;
-    puddle_identity_public(me, pub, NULL, NULL);
-    puddle_identity_id(me, id);
-    puddle_key_id(pub, kid);
+    puddle_key_id(sign_pub, kid);
     if (!puddle_base64_encode(sig, 64, sig64, sizeof sig64))
         return -1;
 
-    int n = snprintf(out, cap, "v1 id=%s; kid=%s; ts=%lld; nonce=%s; sig=%s", id, kid, (long long)ts, nonce, sig64);
+    int n = snprintf(out, cap, "v1 id=%s; kid=%s; ts=%lld; nonce=%s; sig=%s", signer_id, kid, (long long)ts, nonce, sig64);
     return (n > 0 && (size_t)n < cap) ? 0 : -1;
 }
 
@@ -309,14 +324,6 @@ static int receipt_canonical_hash(char *out, size_t cap, const char *id, const c
     return (n > 0 && (size_t)n < cap) ? n : -1;
 }
 
-static int receipt_canonical(char *out, size_t cap, const char *id, const char *nonce, int status, const void *body, size_t body_len,
-                             const char *fp)
-{
-    char hash[65];
-    puddle_sha256_hex(body ? body : "", body ? body_len : 0, hash);
-    return receipt_canonical_hash(out, cap, id, nonce, status, hash, fp);
-}
-
 int puddle_receipt_sign(puddle_identity *me, const char *nonce, int status, const void *body, size_t body_len, const char *tls_fp_hex,
                         char *out, size_t cap)
 {
@@ -345,6 +352,16 @@ int puddle_receipt_sign_hash(puddle_identity *me, const char *nonce, int status,
 puddle_receipt_check puddle_receipt_verify(const char *header, const char *peer_id, const unsigned char peer_pub[32], const char *nonce,
                                            int status, const void *body, size_t body_len, const char *seen_fp_hex)
 {
+    char hash[65];
+    puddle_sha256_hex(body ? body : "", body ? body_len : 0, hash);
+    return puddle_receipt_verify_hash(header, peer_id, peer_pub, nonce, status, hash, seen_fp_hex);
+}
+
+puddle_receipt_check puddle_receipt_verify_hash(const char *header, const char *peer_id, const unsigned char peer_pub[32], const char *nonce,
+                                                int status, const char *body_hash_hex, const char *seen_fp_hex)
+{
+    if (!is_hex64(body_hash_hex))
+        return PUDDLE_RECEIPT_BAD;
     if (!header || !*header)
         return PUDDLE_RECEIPT_MISSING;
     static const char *const seps[] = { "v1 id=", "; kid=", "; fp=", "; sig=" };
@@ -372,7 +389,7 @@ puddle_receipt_check puddle_receipt_verify(const char *header, const char *peer_
     if (strcmp(vals[0], peer_id) != 0 || strcmp(vals[1], want_kid) != 0)
         return PUDDLE_RECEIPT_WRONG_KEY;
     char canon[400];
-    int cl = receipt_canonical(canon, sizeof canon, vals[0], nonce, status, body, body_len, vals[2]);
+    int cl = receipt_canonical_hash(canon, sizeof canon, vals[0], nonce, status, body_hash_hex, vals[2]);
     if (cl < 0 || !puddle_verify_signature(peer_pub, canon, (size_t)cl, sig))
         return PUDDLE_RECEIPT_BAD;
     if (!seen_fp_hex || strcmp(vals[2], seen_fp_hex) != 0)

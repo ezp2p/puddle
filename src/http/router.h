@@ -5,7 +5,12 @@
  * caller proves itself, and the router checks it before the handler runs, so a handler never sees a request
  * that was not authenticated for it. A failed check is answered exactly like a path that does not exist.
  *
- *   OWNER  the request carries the owner token (the app, curl, a paired phone client)
+ *   OWNER  the request carries the owner token (the app, curl), or is signed by an accepted device (a paired phone;
+ *          docs/identity.md, "Devices"), whose answer then carries a receipt
+ *   LOCAL  the owner token and nothing else: what a phone may not do (managing devices)
+ *   DEVICE a request signed by any device on the list, accepted or still waiting
+ *   PAIR   a phone asking to be paired: signed by the key in the body, with the pairing secret (the route's chain_key
+ *          checks both)
  *   PEER   a signed request from a Puddle we already have a stream with (its current key is looked up)
  *   CHAIN  a signed request proven by a key chain carried in the request itself: a stranger asking for a
  *          stream, or a peer pushing its new keys after a roll. The route says how to find the key. */
@@ -33,7 +38,10 @@ extern "C" {
 /* CHAIN_ANON is CHAIN for a route that answers everyone the same whatever it decides, so it never signs its answer;
  * CHAIN_OPEN is that, and also takes a request signed for no recipient in particular (docs/streams.md, "Proving who answers").
  * Answers to PEER, and to CHAIN from someone whose chain we already hold, carry a signed receipt. */
-typedef enum { PUDDLE_AUTH_OWNER, PUDDLE_AUTH_PEER, PUDDLE_AUTH_CHAIN, PUDDLE_AUTH_CHAIN_OPEN, PUDDLE_AUTH_CHAIN_ANON } puddle_auth_kind;
+typedef enum {
+    PUDDLE_AUTH_OWNER, PUDDLE_AUTH_PEER, PUDDLE_AUTH_CHAIN, PUDDLE_AUTH_CHAIN_OPEN, PUDDLE_AUTH_CHAIN_ANON,
+    PUDDLE_AUTH_LOCAL, PUDDLE_AUTH_DEVICE, PUDDLE_AUTH_PAIR
+} puddle_auth_kind;
 
 /* An answer that is a file, not JSON: a handler fills this, with `data` (malloc'd; the router sends and frees it) or with an
  * open file (puddle_answer_file), which is sent as it is read and may be asked for in part (`Range`). */
@@ -57,7 +65,8 @@ typedef struct {
     const unsigned char *body;             /* NUL-terminated past body_len, binary-safe by length */
     size_t body_len;
     puddle_auth_kind auth;
-    const char *sender;                    /* PEER/CHAIN: the authenticated sender's user id; NULL for OWNER */
+    const char *sender;                    /* PEER/CHAIN: the authenticated sender's user id; DEVICE/PAIR: the device id; NULL for OWNER */
+    const char *device;                    /* OWNER, when a paired phone made the call: its device id; NULL for the owner token */
     /* the `{name:type}` segments of the route's path, in order, already checked against their type */
     char param_name[PUDDLE_PATH_PARAMS][16];
     char param[PUDDLE_PATH_PARAMS][PUDDLE_PARAM_MAX];
@@ -88,7 +97,7 @@ typedef struct {
     puddle_auth_kind auth;
     size_t body_max;                       /* 0 = takes no body */
     puddle_handler fn;
-    puddle_chain_key_fn chain_key;         /* CHAIN only */
+    puddle_chain_key_fn chain_key;         /* CHAIN and PAIR only */
 } puddle_route;
 
 typedef struct {

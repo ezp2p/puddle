@@ -13,7 +13,7 @@ signed receipts), the retrying outbox, direct messages with edit and delete, key
 pictures over a stream, and the Qt app (Friends, conversations, chat, delivery state). 32 test suites, including two Puddles
 talking over TLS and the window driven by real clicks and keys.
 
-Group chats (phase 5) are built, and so is proving who answers (phase 6), which replaced certificate pinning for streams. So is joining Ponds' text channels (docs/ponds.md). Not built: the phone client, encryption at rest. See "Later" below and `discuss-later.md`.
+Group chats (phase 5) are built, and so is proving who answers (phase 6), which replaced certificate pinning for streams. So is joining Ponds' text channels (docs/ponds.md). The phone client is built up to its Android package (phase 7). Not built: encryption at rest. See "Later" below and `discuss-later.md`.
 
 ## Order, and why
 
@@ -506,6 +506,41 @@ anything is sent and for every answer. The design is in `streams.md`, "Proving w
   - **Gone:** the recorded certificate, the "held" state, `certificate_changed`, `POST /api/v1/stream/trust`, and
     `tls_fp` in address records (ignored if an older Puddle sends one). Ponds keep their pinned certificate: they don't
     sign receipts yet.
+
+## Phase 7: Phone client
+
+The owner decided: a **thin client** (the phone holds no identity keys and no chats; it uses its Puddle's owner API),
+built from the desktop app's Qt Quick code, **Android first**, with notifications **only while the app is open** for now.
+The connection between phone and Puddle is proven both ways by keys, like a stream: the phone signs every request with a
+key of its own, and the Puddle signs every answer. The design is in `identity.md`, "Devices".
+
+- [x] **7.1 Pairing and device access on the Puddle.** `core/devices.cpp` (the device list in `state/devices.json`, the one-time
+  pairing secret, device keys and ids) and `api/devices.cpp` (the routes).
+  - **Owner token only:** `POST /api/v1/devices/pair` (a pairing link, `409 no_address` without an advertised address),
+    `GET /api/v1/devices`, `POST /api/v1/devices/{device}/accept|decline|revoke`. A new route kind, `LOCAL`, is the owner token
+    and nothing else.
+  - **From the phone:** `POST /device/v1/pair` (signed by the key in the body; a wrong, spent or stale secret is `404`),
+    `GET /device/v1/status` (any device on the list, pending or accepted).
+  - **Everything else of the owner's:** a request signed by an accepted device is taken as the owner's, and its answer
+    carries a receipt. A pending, declined or revoked device gets `404` like a stranger.
+- [x] **7.2 The app's API client signs.** `ApiClient` works with a token (desktop) or a device key (phone). A phone
+  handshakes first (`GET /device/v1/status`, which carries nothing and brings the Puddle's chain), then sends only over a
+  connection pinned to the certificate the Puddle signed for, and believes only answers with its receipt. A new
+  certificate means a new handshake; a key roll is learned from the chain, proven against the Puddle's id. Unpinned
+  requests have a QNetworkAccessManager of their own, since Qt keeps connections with the trust they started with.
+  Uploads go in signed chunks; a download is hashed as it is written and kept only if the receipt covers it.
+  `app/phone.*` keeps the pairing (`device.json`, owner-only) and attaches the Chats as the device. Tested in
+  `phone_test` against two real Puddles: pairing, accepting, using (files too), restarting, a wrong key corrected by the chain,
+  another Puddle at the address, a new certificate, revoking.
+- [x] **7.3 Phone screens.** Phone mode (Android, or `PUDDLE_PHONE=1` with `PUDDLE_PHONE_DIR` on a desktop): no Puddle
+  of its own; `setup/Pair.qml` (paste the link, name the phone, then the check code while waiting); the narrow layout
+  that was already there (the conversations and the side panel as drawers), opening on the list of conversations, with
+  the back button going back to it; the footer says whether the phone reaches its Puddle, and why not. On the desktop,
+  Settings has Phones: "Add a phone" (the link, and a QR code when libqrencode is found), accept or decline with the
+  check code, remove; and a notification when a phone asks. `ui_test` pairs a phone through the window with clicks.
+  - Not yet: scanning the QR code on the phone (needs the camera, Qt Multimedia and a decoder such as zxing-cpp built
+    for Android); pasting the link works meanwhile.
+- [ ] **7.4 Android build.** An APK to install directly. Needs the Android SDK and NDK, a JDK and Qt for Android.
 
 ## Later, not planned in detail
 

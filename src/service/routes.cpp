@@ -27,6 +27,7 @@ const puddle_route *puddle_all_routes(size_t *count)
             { puddle_profile_api_routes, &puddle_profile_api_routes_count },
             { puddle_file_api_routes, &puddle_file_api_routes_count },
             { puddle_pond_api_routes, &puddle_pond_api_routes_count },
+            { puddle_device_routes, &puddle_device_routes_count },
             { puddle_inbound_routes, &puddle_inbound_routes_count },
             { puddle_message_routes, &puddle_message_routes_count },
             { puddle_sync_routes, &puddle_sync_routes_count },

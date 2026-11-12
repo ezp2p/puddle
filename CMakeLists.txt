@@ -96,6 +96,7 @@ add_library(puddle_core STATIC
   src/core/profile.cpp
   src/core/ratelimit.cpp
   src/core/streams.cpp
+  src/core/devices.cpp
   src/core/transfers.cpp
   src/core/yamltree.cpp)
 target_link_libraries(puddle_core PUBLIC puddle_storage)
@@ -140,6 +141,7 @@ target_link_libraries(puddle_http PUBLIC OpenSSL::SSL)
 # api: the owner API: routes that use the objects
 add_library(puddle_api STATIC
   src/api/conversations.cpp
+  src/api/devices.cpp
   src/api/files.cpp
   src/api/groups.cpp
   src/api/ponds.cpp
@@ -199,7 +201,19 @@ if(PUDDLE_BUILD_GUI)
       src/gui/app/ponds.cpp
       src/gui/app/ponds.h
       src/gui/app/composer.cpp
-      src/gui/app/composer.h)
+      src/gui/app/composer.h
+      src/gui/app/phone.cpp
+      src/gui/app/phone.h
+      src/gui/app/qrimage.cpp
+      src/gui/app/qrimage.h)
+    # the QR code of a pairing link; without libqrencode the link is shown as text only
+    find_library(QRENCODE_LIBRARY qrencode)
+    find_path(QRENCODE_INCLUDE qrencode.h)
+    if(QRENCODE_LIBRARY AND QRENCODE_INCLUDE)
+      target_compile_definitions(puddle PRIVATE PUDDLE_HAVE_QRENCODE)
+      target_include_directories(puddle PRIVATE ${QRENCODE_INCLUDE})
+      target_link_libraries(puddle PRIVATE ${QRENCODE_LIBRARY})
+    endif()
     file(GLOB PUDDLE_ICONS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} CONFIGURE_DEPENDS src/gui/assets/icons/tabler/*.svg)
     # Theme is a singleton: the colours and sizes everything else reads
     set_source_files_properties(src/gui/qml/theme/Theme.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
@@ -211,6 +225,7 @@ if(PUDDLE_BUILD_GUI)
       QML_FILES
         src/gui/qml/Main.qml
         src/gui/qml/setup/Setup.qml
+        src/gui/qml/setup/Pair.qml
         src/gui/qml/shell/Shell.qml
         src/gui/qml/shell/Sidebar.qml
         src/gui/qml/shell/SidebarRow.qml
@@ -280,7 +295,8 @@ if(PUDDLE_BUILD_GUI)
 
     # The first-run state machine, against the real core, with no window (needs the offscreen platform).
     add_executable(backend_test tests/backend_test.cpp src/gui/app/backend.cpp src/gui/app/backend.h src/gui/app/chats.cpp src/gui/app/chats.h
-      src/gui/app/apiclient.cpp src/gui/app/apiclient.h src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h)
+      src/gui/app/apiclient.cpp src/gui/app/apiclient.h src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h
+      src/gui/app/phone.cpp src/gui/app/phone.h)
     target_include_directories(backend_test PRIVATE src/gui/app)
     target_link_libraries(backend_test PRIVATE puddle_service Qt6::Gui Qt6::Network)
     if(APPLE)
@@ -296,9 +312,18 @@ if(PUDDLE_BUILD_GUI)
     target_link_libraries(chats_test PRIVATE puddle_service Qt6::Core Qt6::Gui Qt6::Network Qt6::Test)
     add_test(NAME chats COMMAND chats_test)
 
+    # The app as a phone: pairing with a real Puddle, then using it as a thin client (docs/identity.md, "Devices").
+    add_executable(phone_test tests/phone_test.cpp src/gui/app/chats.cpp src/gui/app/chats.h src/gui/app/apiclient.cpp src/gui/app/apiclient.h
+      src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h src/gui/app/phone.cpp src/gui/app/phone.h)
+    set_target_properties(phone_test PROPERTIES AUTOMOC ON)
+    target_link_libraries(phone_test PRIVATE puddle_service Qt6::Core Qt6::Gui Qt6::Network Qt6::Test)
+    add_test(NAME phone COMMAND phone_test)
+    set_tests_properties(phone PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 120)
+
     # The window, driven with real mouse and key events against two real Puddles.
     add_executable(ui_test tests/ui_test.cpp src/gui/app/backend.cpp src/gui/app/backend.h src/gui/app/chats.cpp src/gui/app/chats.h
-      src/gui/app/apiclient.cpp src/gui/app/apiclient.h src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h src/gui/app/composer.cpp src/gui/app/composer.h)
+      src/gui/app/apiclient.cpp src/gui/app/apiclient.h src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h src/gui/app/composer.cpp src/gui/app/composer.h
+      src/gui/app/phone.cpp src/gui/app/phone.h)
     set_target_properties(ui_test PROPERTIES AUTOMOC ON)
     target_include_directories(ui_test PRIVATE src/gui/app)
     target_compile_definitions(ui_test PRIVATE PUDDLE_GUI_DIR="${CMAKE_SOURCE_DIR}/src/gui/qml")
@@ -324,7 +349,7 @@ enable_testing()
 # Each layer of src/ includes only the layers it may (tests/layers.cmake).
 add_test(NAME layers COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_CURRENT_SOURCE_DIR}/src -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/layers.cmake)
 
-foreach(t http json store storage files transfers people conversations config yaml profile encoding identity auth reqsig phrase serve router routes link group groupapi groupowner streams ratelimit access owner_streams client outbox inbound open_request flow message messages keysync wireprofile profiles e2e group_e2e)
+foreach(t http json store storage files transfers people conversations config yaml profile encoding identity auth reqsig phrase serve router routes link group groupapi groupowner streams ratelimit access owner_streams client outbox inbound open_request flow message messages keysync devices wireprofile profiles e2e group_e2e)
   add_executable(${t}_test tests/${t}_test.c)
   target_link_libraries(${t}_test PRIVATE puddle_service)
   add_test(NAME ${t} COMMAND ${t}_test)

@@ -37,6 +37,7 @@ tags:
   - { name: profiles, description: "The owner's profiles: files in the data folder, each shown only where the owner chooses (docs/profiles.md)" }
   - { name: invites, description: Links that are accepted automatically }
   - { name: files, description: "Files sent in chats: uploaded a chunk at a time, then sent in a message (docs/files.md)" }
+  - { name: devices, description: "Phones paired with this Puddle: thin clients that sign every request with a key of their own (docs/identity.md, \"Devices\")" }
   - { name: updates, description: Objects as they change }
 
 paths:
@@ -716,6 +717,60 @@ paths:
         "206": { description: The part asked for, content: { application/octet-stream: {} } }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  # ---- phones (docs/identity.md, "Devices"). The owner token only: a phone may not let other phones in ----
+  /api/v1/devices:
+    get:
+      tags: [devices]
+      summary: Phones paired with this Puddle, and those waiting, newest first
+      responses: { "200": { description: OK, content: { application/json: { schema: { type: object, properties: { devices: { type: array, items: { $ref: "objects/device.yaml" } } } } } } } }
+  /api/v1/devices/pair:
+    post:
+      tags: [devices]
+      summary: A one-time pairing link for a phone
+      description: |
+        `puddle-pair://<address>?id=<this Puddle's user id>&secret=<32 hex>`, good for one use within ten minutes; asking
+        again replaces it. `409 no_address` when the Puddle has no address to give (set `advertise:`).
+      responses:
+        "201": { description: OK, content: { application/json: { schema: { type: object, properties: { link: { type: string }, expires_at: { $ref: "wire/ids.yaml#/$defs/Timestamp" } } } } } }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/devices/{device}/accept:
+    parameters: [{ $ref: "#/components/parameters/Device" }]
+    post: { tags: [devices], summary: "Let a waiting phone in (`409 not_pending` if it is not waiting)", responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "objects/device.yaml" } } } } } }
+  /api/v1/devices/{device}/decline:
+    parameters: [{ $ref: "#/components/parameters/Device" }]
+    post: { tags: [devices], summary: "Turn a waiting phone away; it is forgotten (`409 not_pending` for an accepted one: revoke it)", responses: { "204": { description: Gone } } }
+  /api/v1/devices/{device}/revoke:
+    parameters: [{ $ref: "#/components/parameters/Device" }]
+    post: { tags: [devices], summary: "Cut a phone off: its next request is a 404. Nothing about the identity changes", responses: { "204": { description: Gone } } }
+
+  # ---- what a phone calls itself, signed by its own key (X-Puddle-Signature, its device id as the sender) ----
+  /device/v1/pair:
+    post:
+      tags: [devices]
+      security: []
+      summary: A phone asks to be paired
+      description: |
+        Signed by the key in the body, with the secret from the pairing link; anything else (a wrong, spent or stale secret)
+        is the usual `404`. The answer carries the Puddle's chain, which the phone checks against the id in the link, and an
+        `X-Puddle-Receipt` signed by the chain's current key. The phone then waits as `pending` until the owner accepts it.
+        `409 already_paired`, `409 too_many_devices`.
+      requestBody: { content: { application/json: { schema: { type: object, required: [name, key, secret], properties: { name: { type: string, maxLength: 64 }, key: { type: string, pattern: "^[0-9a-f]{64}$", description: Its Ed25519 public key }, secret: { type: string, pattern: "^[0-9a-f]{32}$" } } } } } }
+      responses:
+        "202": { description: Waiting for the owner, content: { application/json: { schema: { type: object, properties: { device: { type: string }, check: { type: string }, state: { const: pending }, puddle: { type: object, properties: { id: { $ref: "wire/ids.yaml#/$defs/UserId" }, chain: { type: string } } } } } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Error" }
+  /device/v1/status:
+    get:
+      tags: [devices]
+      security: []
+      summary: How a phone stands, and the Puddle's chain
+      description: |
+        For any phone on the list, waiting or accepted. A phone's handshake: it carries nothing, and its receipt proves which
+        certificate is the Puddle's before anything else is sent. After a key roll the chain is how the phone learns the new key.
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { state: { type: string, enum: [pending, active] }, chain: { type: string } } } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   # ---- updates ----
   /api/v1/updates:
     get:
@@ -740,10 +795,11 @@ components:
     owner:
       type: http
       scheme: bearer
-      description: 64 hex characters, made on first run, in <data_dir>/state/owner-token (0600). Phone clients get their own.
+      description: 64 hex characters, made on first run, in <data_dir>/state/owner-token (0600). A paired phone signs its requests instead (docs/identity.md, "Devices").
 
   parameters:
     User: { name: user, in: path, required: true, schema: { $ref: "wire/ids.yaml#/$defs/UserId" } }
+    Device: { name: device, in: path, required: true, description: A paired phone's device id, schema: { type: string, pattern: "^[a-z2-7]{52}$" } }
     Conversation:
       name: conversation
       in: path

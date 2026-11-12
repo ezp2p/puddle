@@ -27,36 +27,58 @@ be passed off as the same identity. With the id covering only the signing key, t
 
 ## Devices (phones)
 
-Phones authenticate to their home Puddle (see openapi.yaml). The home Puddle **transfers the identity
-keys to the phone** after the owner approves it.
+**A phone is a thin client of its own Puddle** (decided). It holds none of the identity's keys and stores no chats:
+it asks its Puddle, over the owner API, for what the desktop app shows, and the Puddle does all the signing,
+encrypting and decrypting. Chats are kept on the Puddle, readable by it, as they already are; giving a phone the keys
+would only make sense once they are stored encrypted (`discuss-later.md`).
 
-Pairing:
+What a phone has instead is **a key of its own**, made on the phone at pairing (Ed25519). Its id is
+`base32(SHA-256("puddle-device-v1\n" ‖ public key))`, the same shape as a user id but never one. With it the
+connection is proven both ways, exactly as between two Puddles (`streams.md`, "Request signatures" and "Proving who
+answers"), and nothing that crosses the wire can be replayed or reused:
 
-1. On the Puddle: "Add a device" shows a QR code with the Puddle's address, its TLS certificate
-   fingerprint and a one-time secret. Scanning it pins the Puddle's self-signed certificate on the
-   phone, so the phone knows it is talking to the right server.
-2. The phone sends a pairing request with its name and a fresh public key.
-3. The Puddle prompts the owner: "New device *Alex's iPhone* wants to log in. Accept?" Both screens
-   show the same short code so the owner knows which request they are approving.
-4. On accept, the Puddle sends the identity keys encrypted to the phone's public key, plus a session
-   token for the API.
+- **every request is signed by the device key** (`X-Puddle-Signature`, its device id where a sender id goes, the
+  Puddle's user id as the recipient); there is no token to steal
+- **every answer carries the Puddle's receipt**, signed by its identity key over the connection's certificate, so the
+  phone knows it reached its own Puddle and nobody in between, and the Puddle's certificate may change at any time
 
-Consequence: any paired device can sign and decrypt as the user, and a lost phone cannot be revoked
-on its own. The answer to a lost or stolen phone is **rotating the identity keys** (below), so
-rotation must be quick. The phone holds the keys, so it verifies and decrypts events itself; the home
-Puddle is its always-on replica.
+The owner token stays for the desktop app and the owner's tools on the same machine, which read it from a file.
 
-*Alternative:* give each device its own key, signed by the identity key, so one device can be revoked
-without rotating. More machinery (device certificates, revocation lists); worth it if lost phones
-turn out to be common.
+**Pairing:**
+
+1. In the desktop app, "Add a device" asks the Puddle for a **pairing link** (`POST /api/v1/devices/pair`), shown as a
+   QR code and as text: `puddle-pair://<address>?id=<Puddle's user id>&secret=<one-time secret>`. The secret is
+   128 random bits, good for one use within ten minutes; asking again replaces it.
+2. The phone makes its key and sends `POST /device/v1/pair` with a name for itself ("Alex's phone"), its public key
+   and the secret, signed by that key. A wrong or spent secret is a `404` like any unknown path.
+3. The answer carries the Puddle's key chain and a receipt. The phone checks the chain belongs to the id in the link
+   (ids are self-certifying), then the receipt against the chain's current key: from here on it knows its Puddle by
+   its keys, as a friend would. The device is now **pending**.
+4. The desktop app shows "*Alex's phone* wants to use your Puddle" with a short **check code** (six digits from the
+   device id), which the phone shows too, and the owner accepts or declines. The phone learns which from
+   `GET /device/v1/status`, signed like everything else.
+
+**What a device may do:** the whole owner API, as the desktop app does, except managing devices: making pairing links,
+accepting, declining and revoking stay with the owner token, so a stolen phone cannot let anything else in.
+
+**A lost phone** is revoked on its own (`POST /api/v1/devices/{device}/revoke`): its next request is a `404`. Nothing about the
+identity changes, nobody else needs telling, and no key roll is needed, since the phone never held the identity's keys.
+
+**Reaching home:** a phone reaches its Puddle at the same advertised address friends use, so away from home that needs
+the same port forward or public address.
+
+**Ponds** come along for free: the app reaches Ponds only through its own Puddle (`docs/ponds.md`), so a phone does too.
+
+Built in `src/core/devices.cpp` (the device list, pairing, the key) with the routes in `src/api/devices.cpp`; the router
+accepts a device's signature wherever the owner token is accepted. The app is a phone when built for Android, or with
+`PUDDLE_PHONE=1` (or `--phone`) to try it on a desktop. Roadmap phase 7.
 
 ### The owner token
 
-Until pairing is built, the owner API has one credential: a random 64-hex **owner token** made on first
+The owner API takes two credentials: a device's signature (above), or a random 64-hex **owner token** made on first
 run in `<data_dir>/state/owner-token` (mode 0600), presented as `Authorization: Bearer <token>`. The
-Puddle's own app and the owner's tools read it from that file. Paired phones will get tokens of
-their own. Without a valid token every route, including `/health`, answers `404` as if it did not exist.
-(`src/core/auth.cpp`.)
+Puddle's own app and the owner's tools read it from that file. Without either, every route, including `/health`,
+answers `404` as if it did not exist. (`src/core/auth.cpp`.)
 
 ## Rotation (in v1, optional, owner-triggered)
 

@@ -40,6 +40,12 @@ class Chats : public QObject {
     Q_PROPERTY(bool hasOlder READ hasOlder NOTIFY hasOlderChanged)                 // more history than is loaded
     Q_PROPERTY(bool attentive READ attentive WRITE setAttentive NOTIFY attentiveChanged) // someone is looking at the window
     Q_PROPERTY(bool connected READ connected NOTIFY connectedChanged)
+    // Phones paired with this Puddle (the desktop app only: a phone may not manage them): id, name, state, check, created_at, last_seen
+    Q_PROPERTY(QObject *devices READ devices CONSTANT)
+    Q_PROPERTY(int pendingDevices READ pendingDevices NOTIFY devicesChanged)    // waiting for the owner to accept them
+    Q_PROPERTY(QString pairingLink READ pairingLink NOTIFY pairingChanged)       // the one-time link for a phone, "" if none is open
+    Q_PROPERTY(qint64 pairingExpires READ pairingExpires NOTIFY pairingChanged)  // UTC ms
+    Q_PROPERTY(QString problem READ problem NOTIFY connectedChanged)             // a phone: why the Puddle's answers are not believed, "" if they are
     Q_PROPERTY(QObject *ponds READ ponds CONSTANT)                  // the Ponds we are in, and the one that is open (ponds.h)
 public:
     explicit Chats(QObject *parent = nullptr);
@@ -61,6 +67,22 @@ public:
     void setTakeFile(TakeFile fn, QThreadPool *pool) { takeFile_ = std::move(fn); takePool_ = pool; }
     QObject *profiles() { return &profiles_; }
     QString myName() const { return myName_; }
+    QString myLink() const { return myLink_; } // where others find this Puddle, as it says ("" until known)
+    QString problem() const { return api_.lastProblem(); }
+    QObject *devices() { return &devices_; }
+    int pendingDevices() const { return pendingDevices_; }
+    QString pairingLink() const { return pairingLink_; }
+    qint64 pairingExpires() const { return pairingExpires_; }
+
+    // A phone: talk to its Puddle as the paired device whose key this is (docs/identity.md, "Devices").
+    bool attachDevice(const QUrl &base, const QString &puddleId, const QByteArray &puddleKey, const QByteArray &deviceSeed);
+
+    // The desktop app: let a phone in.
+    Q_INVOKABLE void startPairing();
+    Q_INVOKABLE void stopPairing();
+    Q_INVOKABLE void acceptDevice(const QString &id);
+    Q_INVOKABLE void declineDevice(const QString &id);
+    Q_INVOKABLE void revokeDevice(const QString &id);
     QString myAvatar() const { return myAvatar_; }
     QString current() const { return current_; }
     int friendCount() const { return friends_; }
@@ -169,6 +191,9 @@ signals:
     void unreadTotalChanged();
     void incomingRequestsChanged();
     void connectedChanged();
+    void devicesChanged();
+    void pairingChanged();
+    void newDevice(const QString &name); // a phone asks to be let in
     void failed(const QString &what);                    // something the owner asked for did not work
     void newIncoming(const QString &userId, int unread); // for notifications: a chat has more unread than before
     void newRequest(const QString &userId);
@@ -195,6 +220,7 @@ private:
     void refreshMessages();
     void updateCurrentInfo();
     void refreshBlocked();
+    void refreshDevices();
     void refreshGroups();
     void refreshProfiles();
     void refreshFileRequests();
@@ -210,7 +236,12 @@ private:
     ApiClient api_;
     Ponds ponds_{ &api_ };
     QTimer timer_;
-    JsonListModel people_, conversations_, messages_, blocked_, profiles_, invites_, members_, sidebar_;
+    JsonListModel people_, conversations_, messages_, blocked_, profiles_, invites_, members_, sidebar_, devices_;
+    int pendingDevices_ = 0;
+    QSet<QString> knownDevices_;
+    bool devicesLoaded_ = false;
+    QString pairingLink_;
+    qint64 pairingExpires_ = 0;
     QHash<QString, QJsonObject> groups_;   // the groups we are in or invited to, by id
     QSet<QString> invitedTo_;
     QString currentKind_ = QStringLiteral("dm"), self_;
@@ -218,7 +249,7 @@ private:
     bool groupsLoaded_ = false;
     QString curName_, curAvatar_, curColor_, curState_;
     bool hasOlder_ = false, attentive_ = true;
-    QString myName_, myAvatar_, cacheDir_, fileCacheDir_;
+    QString myName_, myAvatar_, myLink_, cacheDir_, fileCacheDir_;
     QSet<QString> downloading_;
     QString cachedPath(const QString &id, const QString &name) const;
     QSet<QString> fetching_;
@@ -251,7 +282,7 @@ private:
     int pageSize_ = 100;
     bool connected_ = true; // until a request fails, so the banner does not flash at start-up
     bool marking_ = false, profilesLoaded_ = false;
-    bool busy_[7] = { false, false, false, false, false, false, false };
+    bool busy_[8] = { false, false, false, false, false, false, false, false };
     QSet<QString> fileRequests_;   // "<user> <message> <file>" of each request seen, to notify of new ones
     bool fileRequestsLoaded_ = false;
 };

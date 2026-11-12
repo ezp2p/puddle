@@ -65,6 +65,7 @@ struct puddle_server {
     puddle_profiles *profiles;
     puddle_assignments *assignments;
     puddle_streams *streams;
+    puddle_devices *devices;
     puddle_people *people;
     puddle_conversations *conversations;
     puddle_groups *groups;
@@ -209,6 +210,9 @@ puddle_server *puddle_server_create(const puddle_config *cfg, char *err, size_t 
     s->streams = puddle_streams_open(cfg->data_dir, err, errlen);
     if (!s->streams)
         goto fail;
+    s->devices = puddle_devices_open(cfg->data_dir, err, errlen);
+    if (!s->devices)
+        goto fail;
     s->people = puddle_people_open(cfg->data_dir, err, errlen);
     if (!s->people)
         goto fail;
@@ -267,7 +271,7 @@ puddle_server *puddle_server_create(const puddle_config *cfg, char *err, size_t 
         goto fail;
     }
     s->ctx = (puddle_ctx){ .config = &s->cfg, .identity = s->identity, .store = s->store, .profiles = s->profiles,
-                           .assignments = s->assignments, .streams = s->streams, .people = s->people, .conversations = s->conversations, .groups = s->groups, .outbox = s->outbox, .files = s->files, .transfers = s->transfers, .ponds = s->ponds, .replay = s->replay,
+                           .assignments = s->assignments, .streams = s->streams, .devices = s->devices, .people = s->people, .conversations = s->conversations, .groups = s->groups, .outbox = s->outbox, .files = s->files, .transfers = s->transfers, .ponds = s->ponds, .replay = s->replay,
                            .anon_bucket = s->anon_bucket, .access_limit = s->access_limit, .roll_slot = s->roll_slot,
                            .peer_key = puddle_streams_peer_key, .peer_key_user = s->streams, .courier = &puddle_federation_courier };
     s->router = (puddle_router){ .ctx = &s->ctx };
@@ -376,6 +380,7 @@ void puddle_server_destroy(puddle_server *s)
     puddle_transfers_close(s->transfers); /* stops its worker, which uses the streams and the files */
     puddle_outbox_close(s->outbox); /* stops its worker before what the worker uses goes away */
     puddle_streams_close(s->streams);
+    puddle_devices_close(s->devices);
     puddle_people_close(s->people);
     puddle_files_close(s->files);
     puddle_groups_close(s->groups);

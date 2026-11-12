@@ -120,12 +120,28 @@ const char *puddle_param(const puddle_call *call, const char *name)
     return "";
 }
 
+/* Before the body is read, so nothing is checked yet but who the signature says it is from: a device on the list (an
+ * accepted one, with `active`)? The signature itself is checked once the body is in. */
+static int claims_device(const puddle_ctx *ctx, const puddle_request *req, int active)
+{
+    puddle_reqsig s;
+    puddle_device dv;
+    if (!ctx->devices || !req->signature[0] || puddle_reqsig_parse(req->signature, &s) != 0)
+        return 0;
+    return active ? puddle_devices_is_active(ctx->devices, s.id) : puddle_devices_get(ctx->devices, s.id, &dv) == 0;
+}
+
 size_t puddle_router_body_limit(const puddle_router *r, const puddle_request *req, int owner_ok)
 {
     const puddle_route *rt = find(r, req->method, req->path);
-    if (!rt || (rt->auth == PUDDLE_AUTH_OWNER && !owner_ok))
+    if (!rt)
         return 0;
-    return rt->body_max;
+    switch (rt->auth) {
+    case PUDDLE_AUTH_LOCAL: return owner_ok ? rt->body_max : 0;
+    case PUDDLE_AUTH_OWNER: return owner_ok || claims_device(r->ctx, req, 1) ? rt->body_max : 0;
+    case PUDDLE_AUTH_DEVICE: return claims_device(r->ctx, req, 0) ? rt->body_max : 0;
+    default: return rt->body_max;
+    }
 }
 
 int puddle_query_parse(const char *target, const char *const *keys, size_t nkeys, char (*values)[PUDDLE_QUERY_VALUE_MAX])
@@ -198,9 +214,15 @@ static int chain_lookup(void *u, const char *sender, const char *kid, unsigned c
  * strangers the same whatever they decide never are. docs/streams.md, "Proving who answers". */
 static int may_sign(const puddle_ctx *ctx, const puddle_route *rt, const char *sender)
 {
-    if (rt->auth == PUDDLE_AUTH_CHAIN_ANON || rt->auth == PUDDLE_AUTH_CHAIN_OPEN)
+    switch (rt->auth) {
+    case PUDDLE_AUTH_CHAIN_ANON:
+    case PUDDLE_AUTH_CHAIN_OPEN:
         return 0;
-    return rt->auth == PUDDLE_AUTH_PEER || puddle_streams_knows(ctx->streams, sender);
+    case PUDDLE_AUTH_CHAIN:
+        return puddle_streams_knows(ctx->streams, sender);
+    default: /* a peer, or one of the owner's own devices (one pairing has shown the secret) */
+        return 1;
+    }
 }
 
 /* "X-Puddle-Receipt: ...\r\n" for an answer whose body has the SHA-256 `hash` (hex), or "" when it is not to be signed, or
@@ -327,16 +349,22 @@ size_t puddle_router_handle_big(const puddle_router *r, const puddle_request *re
     char nonce[48] = "";           /* the authenticated request's, which every answer to it signs for; "" for the owner */
     char receipt[PUDDLE_RECEIPT_MAX + 32];
 
-    if (rt->auth == PUDDLE_AUTH_OWNER) {
-        if (!owner_ok)
-            return not_found(out, cap, status);
-    } else {
+    int by_token = (rt->auth == PUDDLE_AUTH_OWNER || rt->auth == PUDDLE_AUTH_LOCAL) && owner_ok;
+    if (rt->auth == PUDDLE_AUTH_LOCAL && !owner_ok)
+        return not_found(out, cap, status);
+    if (!by_token) {
         char me[PUDDLE_USER_ID_LEN + 1];
         puddle_identity_id(ctx->identity, me);
         chain_look cl = { ctx, rt, body, body_len };
-        int chain = rt->auth == PUDDLE_AUTH_CHAIN || rt->auth == PUDDLE_AUTH_CHAIN_OPEN || rt->auth == PUDDLE_AUTH_CHAIN_ANON;
-        puddle_peer_key_fn lookup = chain ? chain_lookup : (ctx->peer_key ? ctx->peer_key : no_peer);
-        void *user = chain ? (void *)&cl : ctx->peer_key_user;
+        int chain = rt->auth == PUDDLE_AUTH_CHAIN || rt->auth == PUDDLE_AUTH_CHAIN_OPEN || rt->auth == PUDDLE_AUTH_CHAIN_ANON ||
+                    rt->auth == PUDDLE_AUTH_PAIR;
+        int device = rt->auth == PUDDLE_AUTH_OWNER || rt->auth == PUDDLE_AUTH_DEVICE;
+        if (device && !ctx->devices)
+            return not_found(out, cap, status);
+        puddle_peer_key_fn lookup = chain ? chain_lookup
+                                    : device ? (rt->auth == PUDDLE_AUTH_OWNER ? puddle_devices_key : puddle_devices_key_any)
+                                    : (ctx->peer_key ? ctx->peer_key : no_peer);
+        void *user = chain ? (void *)&cl : device ? (void *)ctx->devices : ctx->peer_key_user;
         int64_t now = puddle_ctx_now_ms(ctx);
         puddle_reqsig sig;
         puddle_authn a = puddle_reqsig_authenticate(req->signature, req->method, req->target, body, body_len, me,
@@ -362,7 +390,12 @@ size_t puddle_router_handle_big(const puddle_router *r, const puddle_request *re
             *status = puddle_fail(&w, 503, "busy");
         } else {
             memcpy(sender, sig.id, sizeof sender);
-            call.sender = sender;
+            if (rt->auth == PUDDLE_AUTH_OWNER)
+                call.device = sender; /* the owner, on one of their phones */
+            else
+                call.sender = sender;
+            if (device)
+                puddle_devices_seen(ctx->devices, sender, now);
             goto run;
         }
         size_t n = puddle_jw_finish(&w);

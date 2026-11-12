@@ -85,7 +85,8 @@ Chats::Chats(QObject *parent)
       profiles_({ "id", "display_name", "avatar", "default" }),
       invites_({ "id", "name", "invitedBy", "invitedByName" }),
       members_({ "id", "name", "avatar", "color", "state", "isMe", "friend" }),
-      sidebar_({ "key", "kind", "id", "name", "avatar", "color", "preview", "lastTs", "unread", "state", "members", "note", "invitedBy", "section" }, nullptr, "key")
+      sidebar_({ "key", "kind", "id", "name", "avatar", "color", "preview", "lastTs", "unread", "state", "members", "note", "invitedBy", "section" }, nullptr, "key"),
+      devices_({ "id", "name", "state", "check", "created_at", "last_seen" }, nullptr, "id")
 {
     cacheDir_ = QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + "/avatars";
     fileCacheDir_ = QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + "/files";
@@ -125,7 +126,90 @@ void Chats::refresh()
     refreshFileRequests();
     if (!profilesLoaded_)
         refreshProfiles();
+    if (!api_.isDevice())
+        refreshDevices();
+    if (pairingLink_.size() && pairingExpires_ <= QDateTime::currentMSecsSinceEpoch()) {
+        pairingLink_.clear(); /* it has run out: nobody can use it, so it is not shown */
+        emit pairingChanged();
+    }
 }
+
+bool Chats::attachDevice(const QUrl &base, const QString &puddleId, const QByteArray &puddleKey, const QByteArray &deviceSeed)
+{
+    if (!api_.configureDevice(base, puddleId, puddleKey, deviceSeed))
+        return false;
+    setSelf(puddleId);
+    timer_.start();
+    refresh();
+    ponds_.start(); /* through its Puddle, like everything else */
+    return true;
+}
+
+// ---- phones (the desktop app's side) ----
+
+void Chats::refreshDevices()
+{
+    if (busy_[7])
+        return;
+    busy_[7] = true;
+    api_.get(QStringLiteral("/api/v1/devices"), [this](int status, const QJsonDocument &doc) {
+        busy_[7] = false;
+        if (status != 200 || !doc.isObject())
+            return;
+        QList<QJsonObject> rows;
+        int pending = 0;
+        QSet<QString> seen;
+        for (const QJsonValue &v : doc.object().value("devices").toArray()) {
+            const QJsonObject d = v.toObject();
+            rows.append(d);
+            const QString id = d.value("id").toString();
+            seen.insert(id);
+            if (d.value("state").toString() == QLatin1String("pending")) {
+                pending++;
+                if (devicesLoaded_ && !knownDevices_.contains(id))
+                    emit newDevice(d.value("name").toString());
+            }
+        }
+        knownDevices_ = seen;
+        devicesLoaded_ = true;
+        devices_.setItems(rows);
+        if (pending != pendingDevices_) {
+            pendingDevices_ = pending;
+            emit devicesChanged();
+        }
+        if (pending && pairingLink_.size()) { /* the link has been used: no need to keep showing it */
+            pairingLink_.clear();
+            emit pairingChanged();
+        }
+    });
+}
+
+void Chats::startPairing()
+{
+    api_.post(QStringLiteral("/api/v1/devices/pair"), QJsonObject{}, [this](int status, const QJsonDocument &doc) {
+        if (status == 409) {
+            emit failed(tr("Your Puddle has no address to give a phone. Set \"advertise:\" in puddle.yaml to the address it can be reached at."));
+            return;
+        }
+        if (status != 201 || !doc.isObject()) {
+            emit failed(tr("Could not make a pairing link."));
+            return;
+        }
+        pairingLink_ = doc.object().value("link").toString();
+        pairingExpires_ = qint64(doc.object().value("expires_at").toDouble());
+        emit pairingChanged();
+    });
+}
+
+void Chats::stopPairing()
+{
+    pairingLink_.clear();
+    emit pairingChanged();
+}
+
+void Chats::acceptDevice(const QString &id) { post(path("devices", id, "accept"), QJsonObject{}, tr("Could not let that phone in.")); }
+void Chats::declineDevice(const QString &id) { post(path("devices", id, "decline"), QJsonObject{}, tr("Could not turn that phone away.")); }
+void Chats::revokeDevice(const QString &id) { post(path("devices", id, "revoke"), QJsonObject{}, tr("Could not remove that phone.")); }
 
 void Chats::refreshBlocked()
 {
@@ -155,6 +239,16 @@ void Chats::refreshProfiles()
     if (busy_[4])
         return;
     busy_[4] = true;
+    /* where others find us: a phone has no Puddle of its own to ask, so it asks this one */
+    api_.get(QStringLiteral("/api/v1/identity"), [this](int status, const QJsonDocument &doc) {
+        if (status != 200 || !doc.isObject())
+            return;
+        const QString link = doc.object().value("link").toString();
+        if (link != myLink_) {
+            myLink_ = link;
+            emit profilesChanged();
+        }
+    });
     api_.get(QStringLiteral("/api/v1/profiles"), [this](int status, const QJsonDocument &doc) {
         busy_[4] = false;
         if (status != 200 || !doc.isObject())

@@ -65,6 +65,16 @@ Pane {
         else goHome()
     }
     function openLog() { sidebarDrawer.close(); page = "log"; chats.close() }
+    // A phone's back button (drawers close themselves on it): from a conversation or the settings, back to the list of
+    // conversations. False when there is nowhere further back, and the app may go to the background.
+    function back() {
+        if (wide || sidebarDrawer.opened || contextDrawer.opened)
+            return false
+        sidebarDrawer.open()
+        return true
+    }
+    // on a phone the list of conversations is where it starts
+    Component.onCompleted: if (backend.phone && !wide) sidebarDrawer.open()
     function newConversation() { sidebarDrawer.close(); newConv.show(0) }
     function addFriend() { sidebarDrawer.close(); newConv.show(1) }
 

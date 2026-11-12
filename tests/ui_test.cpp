@@ -19,6 +19,7 @@
 
 #include "../src/gui/app/backend.h"
 #include "../src/gui/app/composer.h"
+#include "../src/gui/app/phone.h"
 #include "testnode.h"
 
 static int failures;
@@ -907,6 +908,72 @@ int main(int argc, char **argv)
             CHECK(click(find("confirmOk")));
             CHECK(until([&] { return A.friendCount() == friends - 1; }, 5000));
         }
+    }
+
+    /* ---- a phone, let in from the window (docs/identity.md, "Devices") ---- */
+    {
+        const QString shot = qEnvironmentVariable("PUDDLE_SHOT");
+        CHECK(clickName("settingsButton"));
+        CHECK(until([&] { return find("addPhoneButton") != nullptr; }, 3000));
+        CHECK(clickName("addPhoneButton"));
+        CHECK(until([&] { QQuickItem *f = find("pairingLinkField"); return f && f->property("text").toString().startsWith("puddle-pair://"); }, 5000));
+        const QString link = find("pairingLinkField") ? find("pairingLinkField")->property("text").toString() : QString();
+        CHECK(find("addPhoneButton") == nullptr);                                                  /* one link at a time */
+        settle();
+        if (!shot.isEmpty())
+            win->grabWindow().save(shot + "-phones-link.png");
+
+        /* the phone, shown as it would be on the phone itself */
+        QTemporaryDir pd;
+        Chats P;
+        P.setInterval(100);
+        Phone phone(&P, pd.path());
+        phone.setPollInterval(100);
+        QQmlApplicationEngine pe;
+        pe.rootContext()->setContextProperty("thePhone", &phone);
+        pe.loadData(QString(R"(
+            import QtQuick
+            import QtQuick.Controls
+            import "file://%1/setup" as S
+            ApplicationWindow { width: 390; height: 780; visible: true
+                S.Pair { anchors.fill: parent; link: thePhone } })").arg(PUDDLE_GUI_DIR).toUtf8(), QUrl("file:///pair_test.qml"));
+        CHECK(!pe.rootObjects().isEmpty());
+        auto *pw = pe.rootObjects().isEmpty() ? nullptr : qobject_cast<QQuickWindow *>(pe.rootObjects().at(0));
+        auto pfind = [&](const QString &name) {
+            QQuickItem *hit = nullptr;
+            if (pw)
+                walk(pw->contentItem(), [&](QQuickItem *i) { if (!hit && i->objectName() == name && i->isVisible()) hit = i; return hit != nullptr; });
+            return hit;
+        };
+        CHECK(until([&] { return pfind("pairLink") != nullptr; }, 3000));
+        if (pw && !shot.isEmpty())
+            pw->grabWindow().save(shot + "-phone-pair.png");
+        if (QQuickItem *f = pfind("pairLink"))
+            f->setProperty("text", link);
+        CHECK(pfind("pairButton") && pfind("pairButton")->property("enabled").toBool());
+        if (QQuickItem *b = pfind("pairButton"))
+            QMetaObject::invokeMethod(b, "clicked");
+        CHECK(until([&] { return phone.state() == "waiting"; }, 8000));
+        CHECK(until([&] { QQuickItem *c = pfind("pairCheck"); return c && c->property("text").toString().remove(' ') == phone.check(); }, 3000));
+        if (pw && !shot.isEmpty())
+            pw->grabWindow().save(shot + "-phone-waiting.png");
+
+        /* the window asks the owner, with the same six digits, and the owner lets it in */
+        CHECK(until([&] { return find("acceptPhone") != nullptr; }, 8000));
+        bool digits = false;
+        walk(win->contentItem(), [&](QQuickItem *i) {
+            digits = digits || (i->isVisible() && i->property("text").toString().contains(phone.check().left(3) + " " + phone.check().mid(3)));
+            return false;
+        });
+        CHECK(digits);
+        CHECK(find("pairingLinkField") == nullptr);                                                 /* used: not shown any more */
+        settle();
+        if (!shot.isEmpty())
+            win->grabWindow().save(shot + "-phones-pending.png");
+        CHECK(click(find("acceptPhone")));
+        CHECK(until([&] { return phone.state() == "ready"; }, 8000));
+        CHECK(until([&] { return P.friendCount() == A.friendCount() && P.connected() && P.problem().isEmpty(); }, 8000));
+        CHECK(until([&] { return find("acceptPhone") == nullptr && button(QObject::tr("Remove")) != nullptr; }, 5000));
     }
 
     return failures ? 1 : 0;

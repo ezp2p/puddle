@@ -1,0 +1,20 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: Device
+description: |
+  A phone paired with this Puddle (docs/identity.md, "Devices"). It holds a key of its own, never the identity's; it signs
+  every request with it and is let into the owner API once the owner has accepted it. GET /api/v1/devices.
+type: object
+required: [id, name, state, check, created_at]
+properties:
+  id:
+    type: string
+    description: "base32(SHA-256(\"puddle-device-v1\\n\" || its public key)): the shape of a user id, never one"
+  name: { type: string, maxLength: 64, description: What the phone called itself when it asked }
+  state: { type: string, enum: [pending, active], description: "`pending` until the owner accepts it" }
+  check: { type: string, pattern: "^[0-9]{6}$", description: Six digits the phone shows too, so the owner knows which one they are letting in }
+  created_at: { $ref: "../wire/ids.yaml#/$defs/Timestamp" }
+  last_seen: { $ref: "../wire/ids.yaml#/$defs/Timestamp", description: "Its last request since the Puddle started" }
+x-methods:
+  accept: POST /api/v1/devices/{device}/accept
+  decline: POST /api/v1/devices/{device}/decline
+  revoke: POST /api/v1/devices/{device}/revoke
