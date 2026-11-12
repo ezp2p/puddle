@@ -3,6 +3,7 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QNetworkAccessManager>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <functional>
@@ -407,6 +408,26 @@ int main(int argc, char **argv)
     {
         Chats none;
         CHECK(!none.attach(QUrl("https://127.0.0.1:1"), tmp.path() + "/nope", tmp.path() + "/nope"));
+    }
+
+    /* ---- many requests: the client moves on to a new network manager every few hundred (Qt keeps memory for every TLS
+     * connection a manager opens, and a Puddle closes each one) without losing an answer, and lets the old ones go ---- */
+    {
+        ApiClient *api = A.api();
+        const int n = 3 * ApiClient::UsesPerManager / 2 + 50;
+        int answered = 0, ok = 0;
+        for (int i = 0; i < n; i++)
+            api->get("/api/v1/identity", [&](int st, const QJsonDocument &) { answered++; ok += st == 200; });
+        CHECK(until([&] { return answered == n; }, 60000));
+        CHECK(ok == n);
+        /* deleteLater() needs an event loop, which until() doesn't run: do the deleting it would */
+        auto managers = [&] {
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+            return api->findChildren<QNetworkAccessManager *>(Qt::FindDirectChildrenOnly).size();
+        };
+        CHECK(until([&] { return managers() == 1; }));
+        if (managers() != 1)
+            fprintf(stderr, "network managers left: %d\n", int(managers()));
     }
 
     return failures ? 1 : 0;

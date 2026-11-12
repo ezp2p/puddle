@@ -254,6 +254,12 @@ if(PUDDLE_BUILD_GUI)
         src/gui/qml/theme/Theme.qml
       RESOURCES src/gui/assets/puddle.png ${PUDDLE_ICONS})
     target_link_libraries(puddle PRIVATE puddle_service Qt6::Quick Qt6::QuickControls2 Qt6::Network Qt6::Svg Qt6::Multimedia)
+    # The tray icon (Qt.labs.platform) is drawn with Qt Widgets on Linux and Windows, which needs a QApplication
+    if(NOT ANDROID AND NOT APPLE)
+      find_package(Qt6 COMPONENTS Widgets REQUIRED)
+      target_link_libraries(puddle PRIVATE Qt6::Widgets)
+      target_compile_definitions(puddle PRIVATE PUDDLE_HAVE_WIDGETS)
+    endif()
     if(APPLE)
       enable_language(OBJCXX)
       target_sources(puddle PRIVATE src/gui/app/dock_mac.mm)

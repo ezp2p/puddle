@@ -1,5 +1,11 @@
 // Puddle: desktop app. Qt Quick UI over the same core server that puddled runs.
+#ifdef PUDDLE_HAVE_WIDGETS
+#include <QApplication> // the tray icon is a widget on Linux and Windows
+using App = QApplication;
+#else
 #include <QGuiApplication>
+using App = QGuiApplication;
+#endif
 #include <QIcon>
 #include <QQmlApplicationEngine>
 #include <QQuickStyle>
@@ -9,7 +15,7 @@
 
 int main(int argc, char **argv)
 {
-    QGuiApplication app(argc, argv);
+    App app(argc, argv);
     app.setApplicationName("Puddle");
     app.setOrganizationName("ezp2p");
     app.setWindowIcon(QIcon(":/qt/qml/Puddle/src/gui/assets/puddle.png"));

@@ -6,7 +6,38 @@
 #include <QSslCertificate>
 #include <QSslError>
 
-ApiClient::ApiClient(QObject *parent) : QObject(parent) {}
+ApiClient::ApiClient(QObject *parent) : QObject(parent)
+{
+    renew();
+}
+
+void ApiClient::renew()
+{
+    if (net_) {
+        if (net_->property("inflight").toInt() == 0)
+            net_->deleteLater();
+        else
+            net_->setProperty("retired", true); /* deleted when its last reply finishes; deleting it now would drop answers */
+    }
+    QNetworkAccessManager *fresh = new QNetworkAccessManager(this);
+    connect(fresh, &QNetworkAccessManager::finished, fresh, [fresh] {
+        const int left = fresh->property("inflight").toInt() - 1;
+        fresh->setProperty("inflight", left);
+        if (left == 0 && fresh->property("retired").toBool())
+            fresh->deleteLater();
+    });
+    net_ = fresh;
+    uses_ = 0;
+}
+
+QNetworkAccessManager *ApiClient::manager()
+{
+    if (uses_ >= UsesPerManager)
+        renew();
+    uses_++;
+    net_->setProperty("inflight", net_->property("inflight").toInt() + 1);
+    return net_;
+}
 
 bool ApiClient::configure(const QUrl &base, const QByteArray &token, const QString &certPemPath)
 {
@@ -22,6 +53,7 @@ bool ApiClient::configure(const QUrl &base, const QByteArray &token, const QStri
     ssl_ = QSslConfiguration::defaultConfiguration();
     ssl_.setCaCertificates(certs); // only this one: nobody else's certificate will do
     ssl_.setPeerVerifyMode(QSslSocket::VerifyPeer);
+    renew(); /* a kept connection would go on with what it trusted before */
     ready_ = true;
     return true;
 }
@@ -68,7 +100,7 @@ void ApiClient::get(const QString &path, Reply done)
 {
     if (!ready_)
         return done(0, QJsonDocument());
-    watch(net_.get(request(path)), std::move(done));
+    watch(manager()->get(request(path)), std::move(done));
 }
 
 void ApiClient::post(const QString &path, const QJsonObject &body, Reply done)
@@ -77,7 +109,7 @@ void ApiClient::post(const QString &path, const QJsonObject &body, Reply done)
         return done(0, QJsonDocument());
     QNetworkRequest req = request(path);
     req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
-    watch(net_.post(req, QJsonDocument(body).toJson(QJsonDocument::Compact)), std::move(done));
+    watch(manager()->post(req, QJsonDocument(body).toJson(QJsonDocument::Compact)), std::move(done));
 }
 
 void ApiClient::postBytes(const QString &path, const QByteArray &bytes, Reply done)
@@ -87,7 +119,7 @@ void ApiClient::postBytes(const QString &path, const QByteArray &bytes, Reply do
     QNetworkRequest req = request(path);
     req.setHeader(QNetworkRequest::ContentTypeHeader, "application/octet-stream");
     req.setTransferTimeout(60000); // a chunk is 1 MiB: room for a slow link to a Puddle elsewhere
-    watch(net_.post(req, bytes), std::move(done));
+    watch(manager()->post(req, bytes), std::move(done));
 }
 
 void ApiClient::download(const QString &path, const QString &dest, std::function<void(qint64, qint64)> progress, std::function<void(bool)> done)
@@ -101,7 +133,7 @@ void ApiClient::download(const QString &path, const QString &dest, std::function
     }
     QNetworkRequest req = request(path);
     req.setTransferTimeout(60000); // without a byte for a minute: given up
-    QNetworkReply *r = net_.get(req);
+    QNetworkReply *r = manager()->get(req);
     allowHostMismatch(r);
     connect(r, &QNetworkReply::readyRead, this, [r, file] { file->write(r->readAll()); });
     connect(r, &QNetworkReply::downloadProgress, this, [progress](qint64 got, qint64 total) { if (progress) progress(got, total); });
@@ -126,7 +158,7 @@ void ApiClient::getBytes(const QString &path, std::function<void(int, const QByt
 {
     if (!ready_)
         return done(0, QByteArray());
-    QNetworkReply *r = net_.get(request(path));
+    QNetworkReply *r = manager()->get(request(path));
     allowHostMismatch(r);
     connect(r, &QNetworkReply::finished, this, [r, done = std::move(done)] {
         const int status = r->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
