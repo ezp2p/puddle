@@ -206,6 +206,8 @@ if(PUDDLE_BUILD_GUI)
     qt_add_qml_module(puddle
       URI Puddle
       VERSION 1.0
+      # The module's qmldir would otherwise land in build/Puddle/, the path the Linux binary needs
+      OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/qml/Puddle
       QML_FILES
         src/gui/qml/Main.qml
         src/gui/qml/setup/Setup.qml
