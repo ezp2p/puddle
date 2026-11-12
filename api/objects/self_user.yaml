@@ -1,0 +1,13 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: SelfUser
+description: The owner. GET /api/v1/users/me.
+type: object
+required: [id, link]
+properties:
+  id: { $ref: "../wire/ids.yaml#/$defs/UserId" }
+  profile:
+    $ref: "own_profile.yaml"
+    description: How the app shows the owner to themselves (their first profile, by id); absent if they have none. Others see only what was chosen for them.
+  link:
+    type: [string, "null"]
+    description: The address to give people so they can ask for a stream; null when it isn't known (no `advertise:` in the config)

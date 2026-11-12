@@ -1,0 +1,1 @@
+The engine: no HTTP, no objects. Each part (chats, blocks, streams, groups, outbox, identity, ...) knows what its data means, turns it into bytes and deposits it with storage/. None of them knows how it is kept.

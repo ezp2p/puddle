@@ -1,0 +1,30 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: Profile
+description: |
+  How a person appears in one place: directly to someone, in a group, or in a Pond. The owner keeps several, each a
+  file in the data folder (docs/profiles.md), and chooses one per place; it is sent only there (federation
+  POST /stream/v1/profile, and with a request for a stream and its answer). A receiver rebuilds it from the fields it
+  understands, leaves out what is wrong with a note, and shows it to its owner as is (objects/received_profile.yaml).
+  One with no display_name is shown by the user id.
+type: object
+properties:
+  display_name: { type: string, minLength: 1, maxLength: 64 }
+  avatar: { $ref: "media_ref.yaml" }
+  blurb: { type: string, maxLength: 160, description: The short bio }
+  about: { type: string, maxLength: 2000, description: The long bio }
+  pronouns: { type: string, maxLength: 32 }
+  color: { $ref: "color.yaml", description: The colour of their name }
+  banner: { $ref: "media_ref.yaml" }
+  background: { $ref: "media_ref.yaml" }
+  links:
+    type: array
+    maxItems: 10
+    description: Where else to find them, such as a game tag
+    items: { $ref: "#/$defs/Link" }
+$defs:
+  Link:
+    type: object
+    required: [text]
+    properties:
+      text: { type: string, minLength: 1, maxLength: 64, description: "What is shown: \"Battle.net: Ali#1234\"" }
+      url: { type: string, maxLength: 512, pattern: "^[Hh][Tt][Tt][Pp][Ss]?://", description: Where it leads, if anywhere }

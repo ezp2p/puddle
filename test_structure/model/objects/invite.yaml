@@ -1,0 +1,17 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: Invite
+description: A link that is accepted automatically when someone asks for a stream with it
+type: object
+required: [link, token, expires_at, uses]
+properties:
+  link: { type: string }
+  token: { type: string, description: What is revoked }
+  expires_at: { $ref: "../wire/ids.yaml#/$defs/Timestamp" }
+  uses: { type: integer, description: Uses remaining }
+x-methods:
+  revoke: POST /api/v1/invites/{token}/revoke
+x-source:
+  struct: "src/core/streams.h puddle_invite (token, created_ms, expires_ms, uses)"
+  writer: "src/core/owner_streams.c invite_json"
+  stored: "state/invites.tsv"
+  today: "The same. created_ms is kept but not shown."

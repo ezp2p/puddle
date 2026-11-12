@@ -1,0 +1,1 @@
+What crosses between Puddles: signed events, one file per kind, plus the rules that fold them into a chat or a group. Every Puddle must agree on these, so they change rarely and carefully. model/events/ is the design.

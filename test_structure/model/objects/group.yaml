@@ -1,0 +1,33 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: Group
+description: |
+  A group chat the owner is in or invited to. Who is in it comes from folding its group events (../events/chat.*,
+  member.*); `my` and `invited_by` are this Puddle's own. GET /api/v1/groups/{group}.
+type: object
+required: [id, name, my, creator, members, created_at, updated_at]
+properties:
+  id: { $ref: "../wire/ids.yaml#/$defs/ChatId" }
+  name: { type: string, maxLength: 100 }
+  my: { type: string, enum: [invited, in, left, declined], description: "`invited`: waiting for the owner's answer" }
+  creator: { $ref: "partial_user.yaml" }
+  invited_by: { $ref: "partial_user.yaml", description: "With `my: invited`" }
+  members: { type: array, maxItems: 50, items: { $ref: "member.yaml" }, description: "Everyone in it or invited, the owner included" }
+  created_at: { $ref: "../wire/ids.yaml#/$defs/Timestamp" }
+  updated_at: { $ref: "../wire/ids.yaml#/$defs/Timestamp" }
+x-source:
+  struct: "src/core/group.h puddle_group"
+  writer: "src/core/groupapi.c write_group"
+  stored: "the group's record (groups) and its events in chats/<group id>/"
+  today: "`creator` and `invited_by` are bare ids, and members are {id, state, by}. `gm/create` also adds `not_invited` (friends who could not be asked, with why), which belongs to that route's answer, not to the Group."
+x-internal:
+  name_ts: The time of the rename that set the name; the newer rename wins.
+  create_event: The signed chat.create, handed to whoever we invite.
+  join_event: Our own signed member.join, shown to members we connect to.
+  member.address: Where whoever invited us said to reach a member. Kept only to connect once.
+  member.told: We have sent them our member.join.
+x-methods:
+  invite: POST /api/v1/groups/{group}/invite
+  accept: POST /api/v1/groups/{group}/accept
+  decline: POST /api/v1/groups/{group}/decline
+  leave: POST /api/v1/groups/{group}/leave
+  rename: POST /api/v1/groups/{group}/rename

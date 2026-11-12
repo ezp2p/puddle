@@ -1,0 +1,14 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: Identity
+description: This Puddle's keys. GET /api/v1/identity.
+type: object
+required: [id, link, seq, key_id]
+properties:
+  id: { $ref: "../wire/ids.yaml#/$defs/UserId" }
+  link: { type: [string, "null"] }
+  seq: { type: integer, minimum: 0, description: How many times the keys have rolled }
+  key_id: { type: string, description: Hex SHA-256 of the current signing key }
+x-methods:
+  roll: POST /api/v1/identity/roll
+  confirm: POST /api/v1/identity/roll/confirm
+  cancel: POST /api/v1/identity/roll/cancel

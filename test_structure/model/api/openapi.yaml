@@ -1,0 +1,336 @@
+openapi: 3.1.0
+info:
+  title: Puddle owner API
+  version: 0.2.0
+  description: |
+    The owner's apps (the desktop window, phone clients) talking to their own Puddle. Every response is one of the
+    objects in ../objects, or a list of them. Code: api/.
+
+    Conventions:
+    - Only GET and POST. GET reads; POST acts, with the verb last in the path (`.../block`, `.../messages/send`).
+    - Paths name an object, then an action: `/users/{user}/block`. An id of the wrong form is a 404, before any handler.
+    - Every POST answers with the object it changed, so an app never has to read it again.
+    - Nothing is public. Every route needs `Authorization: Bearer <owner token>`; without it the answer is 404,
+      like a path that does not exist.
+    - Errors are ../objects/error.yaml.
+    - Lists come in pages (page.yaml): `items` and `next`, asked for with `limit` + `offset`. Messages come newest
+      page first, each page oldest first; other lists newest first.
+    - This API changes as the apps need it. The stream API (../federation) is the one that has to stay put.
+
+servers:
+  - url: https://localhost:8443
+
+security:
+  - owner: []
+
+tags:
+  - { name: users, description: People this Puddle knows, and the owner }
+  - { name: streams, description: Connections to other Puddles }
+  - { name: conversations, description: DMs and groups alike, and their messages }
+  - { name: groups, description: Group chats }
+  - { name: identity, description: This Puddle's keys }
+  - { name: profiles, description: The owner's profiles (defined in profiles.yaml) }
+  - { name: invites, description: Links that are accepted automatically }
+  - { name: updates, description: Objects as they change }
+
+paths:
+  /health:
+    get:
+      summary: Liveness
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { status: { const: ok }, version: { type: string } } } } } }
+
+  # ---- users ----
+  /api/v1/users/me:
+    get:
+      tags: [users]
+      summary: The owner
+      responses:
+        "200": { $ref: "#/components/responses/SelfUser" }
+  /api/v1/users/{user}:
+    parameters: [{ $ref: "#/components/parameters/User" }]
+    get:
+      tags: [users]
+      summary: A person this Puddle knows
+      responses:
+        "200": { $ref: "#/components/responses/User" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/users/{user}/block:
+    parameters: [{ $ref: "#/components/parameters/User" }]
+    post:
+      tags: [users]
+      summary: Block them. Nothing more is sent to them or taken from them, and they are never told.
+      responses:
+        "200": { $ref: "#/components/responses/User" }
+  /api/v1/users/{user}/unblock:
+    parameters: [{ $ref: "#/components/parameters/User" }]
+    post:
+      tags: [users]
+      summary: Unblock them
+      responses:
+        "200": { $ref: "#/components/responses/User" }
+  /api/v1/blocks:
+    get:
+      tags: [users]
+      summary: Everyone blocked
+      parameters: [{ $ref: "#/components/parameters/Limit" }, { $ref: "#/components/parameters/Offset" }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { allOf: [{ $ref: "page.yaml" }, { properties: { items: { items: { $ref: "../objects/block.yaml" } } } }] } } } }
+
+  # ---- streams ----
+  /api/v1/streams:
+    get:
+      tags: [streams]
+      summary: Every stream, newest change first
+      parameters: [{ $ref: "#/components/parameters/Limit" }, { $ref: "#/components/parameters/Offset" }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { allOf: [{ $ref: "page.yaml" }, { properties: { items: { items: { $ref: "../objects/stream.yaml" } } } }] } } } }
+  /api/v1/streams/request:
+    post:
+      tags: [streams]
+      summary: Ask someone for a stream, by address
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [target]
+              properties:
+                target: { type: string, description: "An address, optionally puddle://, optionally with ?invite=" }
+                message: { type: string, maxLength: 500 }
+                profile: { type: string, description: Which profile to introduce yourself with }
+      responses:
+        "200": { $ref: "#/components/responses/Stream" }
+  /api/v1/streams/{user}:
+    parameters: [{ $ref: "#/components/parameters/User" }]
+    get:
+      tags: [streams]
+      summary: One stream
+      responses:
+        "200": { $ref: "#/components/responses/Stream" }
+  /api/v1/streams/{user}/accept:
+    parameters: [{ $ref: "#/components/parameters/User" }]
+    post: { tags: [streams], summary: Say yes to their request, responses: { "200": { $ref: "#/components/responses/Stream" } } }
+  /api/v1/streams/{user}/decline:
+    parameters: [{ $ref: "#/components/parameters/User" }]
+    post: { tags: [streams], summary: Say no to their request, responses: { "200": { $ref: "#/components/responses/Stream" } } }
+  /api/v1/streams/{user}/delete:
+    parameters: [{ $ref: "#/components/parameters/User" }]
+    post: { tags: [streams], summary: Withdraw a request, or end a stream, responses: { "200": { $ref: "#/components/responses/Stream" } } }
+  /api/v1/streams/{user}/trust:
+    parameters: [{ $ref: "#/components/parameters/User" }]
+    post: { tags: [streams], summary: Accept their changed certificate, responses: { "200": { $ref: "#/components/responses/Stream" } } }
+  /api/v1/streams/{user}/profile:
+    parameters: [{ $ref: "#/components/parameters/User" }]
+    post:
+      tags: [streams]
+      summary: Choose which of the owner's profiles they see
+      requestBody: { content: { application/json: { schema: { type: object, required: [profile], properties: { profile: { type: string } } } } } }
+      responses: { "200": { $ref: "#/components/responses/Stream" } }
+  /api/v1/streams/policy:
+    get:
+      tags: [streams]
+      summary: Who may ask
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "../objects/access_policy.yaml" } } } } }
+  /api/v1/streams/policy/set:
+    post:
+      tags: [streams]
+      summary: Change who may ask
+      requestBody: { content: { application/json: { schema: { $ref: "../objects/access_policy.yaml" } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "../objects/access_policy.yaml" } } } } }
+
+  # ---- conversations ----
+  /api/v1/conversations:
+    get:
+      tags: [conversations]
+      summary: Every DM and group, newest first
+      parameters: [{ $ref: "#/components/parameters/Limit" }, { $ref: "#/components/parameters/Offset" }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { allOf: [{ $ref: "page.yaml" }, { properties: { items: { items: { $ref: "../objects/conversation.yaml" } } } }] } } } }
+  /api/v1/conversations/{conversation}:
+    parameters: [{ $ref: "#/components/parameters/Conversation" }]
+    get:
+      tags: [conversations]
+      summary: One conversation
+      responses: { "200": { $ref: "#/components/responses/Conversation" } }
+  /api/v1/conversations/{conversation}/messages:
+    parameters: [{ $ref: "#/components/parameters/Conversation" }]
+    get:
+      tags: [conversations]
+      summary: Its history, oldest first, a page at a time. Group notices are messages too (`type`).
+      parameters: [{ $ref: "#/components/parameters/Limit" }, { $ref: "#/components/parameters/Offset" }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { allOf: [{ $ref: "page.yaml" }, { properties: { items: { items: { $ref: "../objects/message.yaml" } } } }] } } } }
+  /api/v1/conversations/{conversation}/messages/send:
+    parameters: [{ $ref: "#/components/parameters/Conversation" }]
+    post:
+      tags: [conversations]
+      summary: Send a message. A DM needs an active stream (`no_stream` otherwise).
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body: { type: string, minLength: 1, maxLength: 4000 }
+                reply_to: { $ref: "../wire/ids.yaml#/$defs/EventId" }
+      responses:
+        "200": { $ref: "#/components/responses/Message" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/conversations/{conversation}/messages/{message}/edit:
+    parameters: [{ $ref: "#/components/parameters/Conversation" }, { $ref: "#/components/parameters/Message" }]
+    post:
+      tags: [conversations]
+      summary: Change the text of one of the owner's own messages
+      requestBody: { content: { application/json: { schema: { type: object, required: [body], properties: { body: { type: string, minLength: 1, maxLength: 4000 } } } } } }
+      responses: { "200": { $ref: "#/components/responses/Message" } }
+  /api/v1/conversations/{conversation}/messages/{message}/delete:
+    parameters: [{ $ref: "#/components/parameters/Conversation" }, { $ref: "#/components/parameters/Message" }]
+    post:
+      tags: [conversations]
+      summary: Take back one of the owner's own messages (a request to hide, not a guarantee)
+      responses: { "200": { $ref: "#/components/responses/Message" } }
+  /api/v1/conversations/{conversation}/read:
+    parameters: [{ $ref: "#/components/parameters/Conversation" }]
+    post: { tags: [conversations], summary: Mark everything read, responses: { "200": { $ref: "#/components/responses/Conversation" } } }
+  /api/v1/conversations/{conversation}/retry:
+    parameters: [{ $ref: "#/components/parameters/Conversation" }]
+    post: { tags: [conversations], summary: Try again to deliver what is stuck, responses: { "200": { $ref: "#/components/responses/Conversation" } } }
+
+  # ---- groups ----
+  /api/v1/groups:
+    get:
+      tags: [groups]
+      summary: Groups the owner is in or invited to
+      parameters: [{ $ref: "#/components/parameters/Limit" }, { $ref: "#/components/parameters/Offset" }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { allOf: [{ $ref: "page.yaml" }, { properties: { items: { items: { $ref: "../objects/group.yaml" } } } }] } } } }
+  /api/v1/groups/create:
+    post:
+      tags: [groups]
+      summary: Start a group, inviting friends
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 100 }
+                members: { type: array, items: { $ref: "../wire/ids.yaml#/$defs/UserId" } }
+      responses: { "200": { $ref: "#/components/responses/Group" } }
+  /api/v1/groups/{group}:
+    parameters: [{ $ref: "#/components/parameters/Group" }]
+    get: { tags: [groups], summary: One group, responses: { "200": { $ref: "#/components/responses/Group" } } }
+  /api/v1/groups/{group}/invite:
+    parameters: [{ $ref: "#/components/parameters/Group" }]
+    post:
+      tags: [groups]
+      summary: Invite a friend
+      requestBody: { content: { application/json: { schema: { type: object, required: [user], properties: { user: { $ref: "../wire/ids.yaml#/$defs/UserId" } } } } } }
+      responses: { "200": { $ref: "#/components/responses/Group" } }
+  /api/v1/groups/{group}/accept:
+    parameters: [{ $ref: "#/components/parameters/Group" }]
+    post: { tags: [groups], summary: Say yes to an invitation, responses: { "200": { $ref: "#/components/responses/Group" } } }
+  /api/v1/groups/{group}/decline:
+    parameters: [{ $ref: "#/components/parameters/Group" }]
+    post: { tags: [groups], summary: Say no to an invitation, responses: { "200": { $ref: "#/components/responses/Group" } } }
+  /api/v1/groups/{group}/leave:
+    parameters: [{ $ref: "#/components/parameters/Group" }]
+    post: { tags: [groups], summary: Leave, responses: { "200": { $ref: "#/components/responses/Group" } } }
+  /api/v1/groups/{group}/rename:
+    parameters: [{ $ref: "#/components/parameters/Group" }]
+    post:
+      tags: [groups]
+      summary: Rename
+      requestBody: { content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string, minLength: 1, maxLength: 100 } } } } } }
+      responses: { "200": { $ref: "#/components/responses/Group" } }
+
+  # ---- identity, profiles, invites, media ----
+  /api/v1/identity:
+    get: { tags: [identity], summary: This Puddle's keys, responses: { "200": { $ref: "#/components/responses/Identity" } } }
+  /api/v1/identity/roll:
+    post:
+      tags: [identity]
+      summary: Start changing keys; checks the current phrase and hands back a new one. Nothing changes until confirm.
+      requestBody: { content: { application/json: { schema: { type: object, required: [phrase], properties: { phrase: { type: string } } } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { type: object, properties: { new_phrase: { type: string }, expires_in: { type: integer } } } } } } }
+  /api/v1/identity/roll/confirm:
+    post: { tags: [identity], summary: The new phrase is written down, responses: { "200": { $ref: "#/components/responses/Identity" } } }
+  /api/v1/identity/roll/cancel:
+    post: { tags: [identity], summary: Abandon the roll, responses: { "200": { $ref: "#/components/responses/Identity" } } }
+  /api/v1/profiles:
+    get:
+      tags: [profiles]
+      summary: The owner's profiles
+      responses: { "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "../objects/own_profile.yaml" } } } } } }
+  /api/v1/profiles/reload:
+    post:
+      tags: [profiles]
+      summary: Read profiles.yaml again
+      responses: { "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "../objects/own_profile.yaml" } } } } } }
+  /api/v1/invites:
+    get:
+      tags: [invites]
+      summary: Links still valid
+      responses: { "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "../objects/invite.yaml" } } } } } }
+  /api/v1/invites/create:
+    post: { tags: [invites], summary: A new link, responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "../objects/invite.yaml" } } } } } }
+  /api/v1/invites/{token}/revoke:
+    parameters: [{ name: token, in: path, required: true, schema: { type: string } }]
+    post: { tags: [invites], summary: Stop a link working, responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "../objects/invite.yaml" } } } } } }
+  /api/v1/media:
+    get:
+      summary: An image by hash
+      parameters: [{ name: hash, in: query, required: true, schema: { type: string, pattern: "^[0-9a-f]{64}$" } }]
+      responses: { "200": { description: The file, content: { image/*: {} } } }
+
+  # ---- updates ----
+  /api/v1/updates:
+    get:
+      tags: [updates]
+      summary: Objects as they change (Server-Sent Events)
+      description: |
+        Each event's `event:` is one of the types below and `data:` is that object, written by the same code as the
+        routes, so an app applies an update exactly as it applies a reply. Reconnect with `Last-Event-ID`.
+        (Was /api/v1/events; renamed so "event" only means a signed event.)
+
+        - `message.created`, `message.updated`: a Message
+        - `conversation.updated`: a Conversation (unread counts, last message)
+        - `user.updated`: a User (profile, stream state, blocked, keys rolled)
+        - `stream.updated`: a Stream
+        - `group.updated`: a Group
+      responses:
+        "200": { description: The stream, content: { text/event-stream: { schema: { type: string } } } }
+
+components:
+  securitySchemes:
+    owner:
+      type: http
+      scheme: bearer
+      description: 64 hex characters, made on first run, in <data_dir>/state/owner-token (0600). Phone clients get their own.
+
+  parameters:
+    User: { name: user, in: path, required: true, schema: { $ref: "../wire/ids.yaml#/$defs/UserId" } }
+    Conversation:
+      name: conversation
+      in: path
+      required: true
+      description: A UserId for a DM, a ChatId for a group
+      schema: { $ref: "../wire/ids.yaml#/$defs/ChatId" }
+    Group: { name: group, in: path, required: true, schema: { $ref: "../wire/ids.yaml#/$defs/ChatId" } }
+    Message: { name: message, in: path, required: true, schema: { $ref: "../wire/ids.yaml#/$defs/EventId" } }
+    Limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+    Offset: { name: offset, in: query, description: "Where to start: a page's `next`", schema: { type: integer, minimum: 0, default: 0 } }
+
+  responses:
+    User: { description: OK, content: { application/json: { schema: { $ref: "../objects/user.yaml" } } } }
+    SelfUser: { description: OK, content: { application/json: { schema: { $ref: "../objects/self_user.yaml" } } } }
+    Stream: { description: OK, content: { application/json: { schema: { $ref: "../objects/stream.yaml" } } } }
+    Conversation: { description: OK, content: { application/json: { schema: { $ref: "../objects/conversation.yaml" } } } }
+    Message: { description: OK, content: { application/json: { schema: { $ref: "../objects/message.yaml" } } } }
+    Group: { description: OK, content: { application/json: { schema: { $ref: "../objects/group.yaml" } } } }
+    Identity: { description: OK, content: { application/json: { schema: { $ref: "../objects/identity.yaml" } } } }
+    Error: { description: Not possible now, content: { application/json: { schema: { $ref: "../objects/error.yaml" } } } }
+    NotFound: { description: No such thing, or not allowed (the same answer), content: { application/json: { schema: { $ref: "../objects/error.yaml" } } } }

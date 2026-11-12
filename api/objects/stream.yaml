@@ -1,0 +1,32 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: Stream
+description: The connection to another Puddle, as the owner manages it. GET /api/v1/streams/{user}.
+type: object
+required: [id, user, state, created_at, updated_at]
+properties:
+  id:
+    type: string
+    description: The peer's user id; a stand-in id for a request to an address nobody has answered yet (`provisional`)
+  provisional: { type: boolean, description: "Present, true, until the address we asked answers and says who it is" }
+  user: { $ref: "user.yaml" }
+  state: { $ref: "#/$defs/StreamState" }
+  address: { type: string, description: "Where we reach them, host:port: the best of the addresses we hold" }
+  error: { type: string, description: Why a request of ours, or an answer we owed, did not get through }
+  certificate_changed: { type: boolean, description: "Present, true: their certificate is not the one first seen, and nothing goes to them until the owner trusts it" }
+  message: { type: string, maxLength: 500, description: The note sent with the request }
+  profile: { type: string, description: "The id of the owner's profile this person sees directly; absent: none, they see only the id" }
+  created_at: { $ref: "../wire/ids.yaml#/$defs/Timestamp" }
+  updated_at: { $ref: "../wire/ids.yaml#/$defs/Timestamp" }
+$defs:
+  StreamState:
+    type: string
+    enum: [pending_out, pending_in, active, closed, scoped]
+    description: |
+      `pending_out` we asked, `pending_in` they asked and wait on the owner, `active` trusted both ways, `closed` dried
+      up (either side may ask again), `scoped` group-only: group events and nothing else.
+x-methods:
+  accept: POST /api/v1/streams/{user}/accept
+  decline: POST /api/v1/streams/{user}/decline
+  remove: POST /api/v1/streams/{user}/delete
+  trust: POST /api/v1/streams/{user}/trust
+  show_profile: POST /api/v1/streams/{user}/profile

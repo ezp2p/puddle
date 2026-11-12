@@ -1,0 +1,18 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: SignedEvent
+description: |
+  How every event travels and is stored. `event` is the exact JSON text that was signed, carried as a string so it
+  is never re-serialized; `id` is the SHA-256 of those bytes. Code: events/event.hpp.
+type: object
+required: [id, event, sig]
+properties:
+  id: { $ref: "../wire/ids.yaml#/$defs/EventId" }
+  event: { type: string, maxLength: 16384, description: "One of the events in this folder, as text" }
+  sig:
+    type: string
+    description: |
+      `<key id>:<base64>`. Ed25519 over `puddle-event-v1\n` followed by the event's bytes. The key id is outside the
+      signed bytes, so a Puddle that changed keys can sign the same event again without changing its id.
+x-rules:
+  - The signature must verify with the sender's key for the key id named (their current one, or one their chain still accepts)
+  - The event's `sender` must be the Puddle that signed it

@@ -1,0 +1,24 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: Ids
+description: The ids every shape uses. Their form is checked before anything else looks at them.
+$defs:
+  UserId:
+    type: string
+    description: Hash of the user's first signing key and first roll-key commitment, base32, lowercase. Survives address changes and key rolls.
+    pattern: "^[a-z2-7]{52}$"
+  EventId:
+    type: string
+    description: SHA-256 of the event's exact bytes, hex
+    pattern: "^[0-9a-f]{64}$"
+  ChatId:
+    type: string
+    description: A DM's id is derived from the two user ids; a group's is made from its creator, a time and a nonce (events/chat.create.yaml)
+    pattern: "^[A-Za-z0-9_-]{1,128}$"
+  Hex:
+    type: string
+    description: A colour, lowercase "#rrggbb"
+    pattern: "^#[0-9a-f]{6}$"
+  Timestamp:
+    type: integer
+    format: int64
+    description: UTC milliseconds

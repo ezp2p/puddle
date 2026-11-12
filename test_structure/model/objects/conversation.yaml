@@ -1,0 +1,30 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: Conversation
+description: |
+  A DM or a group chat. GET /api/v1/conversations/{conversation}. There is a conversation for every friend and every
+  group the owner is in, whether or not anything has been said yet. They are listed newest activity first.
+type: object
+required: [id, kind, name, unread, sort_ts]
+properties:
+  id: { type: string, description: "The other person's UserId for a DM, the ChatId for a group" }
+  kind: { type: string, enum: [dm, group] }
+  name: { type: string, description: "The other person's display name for a DM, the group's name for a group" }
+  unread: { type: integer, minimum: 0, description: Messages that arrived after the owner last read it }
+  sort_ts: { $ref: "../wire/ids.yaml#/$defs/Timestamp", description: "What the list is ordered by: the last message, or when a group was made if nothing has been said" }
+  last_message: { $ref: "message_preview.yaml" }
+  recipient: { $ref: "partial_user.yaml", description: "dm only: the other person" }
+  stream: { $ref: "stream.yaml#/$defs/StreamState", description: "dm only: whether a message can be sent now" }
+  group: { $ref: "group.yaml", description: "group only" }
+x-source:
+  struct: "src/core/messages.c conversation (user, group, name, nmembers, state, last_*, preview, deleted, unread)"
+  writer: "src/core/messages.c list_conversations"
+  stored: "records conversations (../records/conversation.yaml), kept current by core/conversations.hpp as events arrive"
+  stored-today: "Nothing of its own. Built per request from stream records, groups, the chat logs' tails, and the read markers (puddle_streams_read_marker)"
+  today: |
+    No `id`: a DM has `user`, a group has `group`. A DM has no `name` (the app looks it up), and a group has
+    `members` as a count rather than the group. The latest message is `last`. There is no route for one conversation.
+x-methods:
+  messages: GET /api/v1/conversations/{conversation}/messages
+  send: POST /api/v1/conversations/{conversation}/messages/send
+  mark_read: POST /api/v1/conversations/{conversation}/read
+  retry: POST /api/v1/conversations/{conversation}/retry

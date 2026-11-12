@@ -1,0 +1,18 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: Upload
+description: |
+  A file the owner is sending their Puddle, a chunk at a time, before it has an id (docs/files.md). Each chunk is
+  `chunk_size` bytes but the last; send chunk n to `.../chunks/{n}` as the request body, in any order, again if it
+  failed. `finish` when all have arrived gives the File. An upload left unfinished for a day is thrown away.
+type: object
+required: [upload, size, chunk_size, chunks, received]
+properties:
+  upload: { type: string, pattern: "^[0-9a-f]{32}$" }
+  size: { type: integer, minimum: 1, description: "Bytes: at most files.max_size" }
+  chunk_size: { type: integer, const: 1048576 }
+  chunks: { type: integer, minimum: 1 }
+  received: { type: integer, minimum: 0, description: Chunks that have arrived }
+x-methods:
+  chunk: POST /api/v1/files/uploads/{upload}/chunks/{n}
+  finish: POST /api/v1/files/uploads/{upload}/finish
+  cancel: POST /api/v1/files/uploads/{upload}/cancel

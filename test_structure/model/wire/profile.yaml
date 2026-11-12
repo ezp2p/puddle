@@ -1,0 +1,17 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: Profile
+description: |
+  How a person appears to someone they share a stream with. Defined by the owner in profiles.yaml (docs/profiles.md);
+  sent to peers as is (federation POST /stream/v1/profile) and shown to the owner's apps as is (objects/user.yaml).
+type: object
+required: [display_name]
+additionalProperties: false
+properties:
+  display_name: { type: string, minLength: 1, maxLength: 64 }
+  avatar: { $ref: "media_ref.yaml" }
+  blurb: { type: string, maxLength: 160, description: A short line }
+  about: { type: string, maxLength: 2000, description: The longer description }
+  pronouns: { type: string, maxLength: 32 }
+  color: { $ref: "color.yaml" }
+  banner: { $ref: "media_ref.yaml" }
+  background: { $ref: "media_ref.yaml" }

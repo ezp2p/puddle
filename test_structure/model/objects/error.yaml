@@ -1,0 +1,11 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: Error
+description: What an owner route answers when it can't do something. Never sent to a caller that failed authentication; they get a bare 404.
+type: object
+required: [error]
+properties:
+  error: { type: string, description: "Stable code: no_stream, blocked, not_found, bad_request, ..." }
+  message: { type: string, description: For a person to read }
+x-source:
+  writer: "src/core/router.c puddle_fail ({error: code}); some handlers add `message`"
+  today: "What the code sends. (The old spec described `error` as a message and `code` as the code, which the code never did.)"

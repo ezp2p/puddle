@@ -1,0 +1,1 @@
+The stream API, /stream/v1 (model/federation/). Speaks in signed events (events/) and its own protocol messages (delivery.hpp, access.hpp, peer.hpp). Versioned and kept compatible with older Puddles. Never includes api/ or objects/.
