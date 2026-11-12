@@ -914,6 +914,33 @@ int puddle_pond_fetch(puddle_ctx *ctx, const char *pond, int64_t channel, int64_
     return 0;
 }
 
+int puddle_pond_admin(puddle_ctx *ctx, const char *pond, const char *method, const char *target, const char *body, size_t len,
+                      int *status, char **reply, size_t *reply_len, const char **code)
+{
+    if (strncmp(target, "/pond/v1/admin/", 15) != 0 && strcmp(target, "/pond/v1/roles/answer") != 0) {
+        *code = "failed";
+        return -1;
+    }
+    puddle_net_reply r;
+    if (!owner_call(ctx, pond, method, target, body ? std::string(body, len) : std::string(), 4u << 20, &r, code)) {
+        puddle_net_reply_free(&r);
+        return -1;
+    }
+    *status = r.status;
+    *reply = (char *)malloc(r.body_len + 1);
+    if (!*reply) {
+        puddle_net_reply_free(&r);
+        *code = "failed";
+        return -1;
+    }
+    if (r.body_len)
+        memcpy(*reply, r.body, r.body_len);
+    (*reply)[r.body_len] = '\0';
+    *reply_len = r.body_len;
+    puddle_net_reply_free(&r);
+    return 0;
+}
+
 int puddle_pond_leave(puddle_ctx *ctx, const char *pond, const char **code)
 {
     if (!ctx->ponds || puddle_ponds_conn(ctx->ponds, pond, NULL) != 0) {

@@ -216,6 +216,8 @@ if(PUDDLE_BUILD_GUI)
         src/gui/qml/shell/ContextBar.qml
         src/gui/qml/shell/PondSidebar.qml
         src/gui/qml/shell/PondMembers.qml
+        src/gui/qml/shell/PondMenuRow.qml
+        src/gui/qml/shell/PondSettings.qml
         src/gui/qml/dialogs/NewConversationDialog.qml
         src/gui/qml/dialogs/JoinPondDialog.qml
         src/gui/qml/chat/ChatPage.qml
@@ -229,6 +231,8 @@ if(PUDDLE_BUILD_GUI)
         src/gui/qml/components/Avatar.qml
         src/gui/qml/components/Button.qml
         src/gui/qml/components/Card.qml
+        src/gui/qml/components/SettingsGroup.qml
+        src/gui/qml/components/RoleBadge.qml
         src/gui/qml/components/Dialog.qml
         src/gui/qml/components/DialogButtonBox.qml
         src/gui/qml/components/PrimaryButton.qml

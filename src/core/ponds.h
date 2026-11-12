@@ -111,6 +111,13 @@ typedef struct {
     void *user;
 } puddle_pond_file_writer;
 
+/* ---- roles (the Pond's docs/design.md, "Roles") ---- */
+
+/* The open offer of a role the Pond made us (its id), or 0. */
+int64_t puddle_ponds_offer(puddle_ponds *p, const char *id);
+/* The owner answered it: the offer is gone, and our role is `role` (NULL: unchanged). */
+void puddle_ponds_answered(puddle_ponds *p, const char *id, const char *role);
+
 /* ---- for the owner's routes (openapi.yaml, "ponds") ---- */
 
 /* [{id, name, description, address, status, channels: [...]}] */

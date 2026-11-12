@@ -199,6 +199,94 @@ static int fetch_file(const puddle_call *c, puddle_jw *)
     return 204;
 }
 
+/* Ask the Pond, as an operator or administrator, and answer the owner with what it said (the Pond's docs/design.md, "Roles").
+ * A Pond that does not know the route for us (we hold no role) is `409 no_role`. */
+static int relay(const puddle_call *c, const char *method, const std::string &target, const std::string &body, std::string *answer = nullptr)
+{
+    const char *pond = puddle_param(c, "pond"), *code = "internal";
+    if (puddle_ponds_conn(pondsOf(c), pond, nullptr) != 0)
+        throw Error::notFound("no_pond");
+    int status = 0;
+    char *reply = nullptr;
+    size_t len = 0;
+    if (!c->ctx->courier || !c->ctx->courier->pond_admin ||
+        c->ctx->courier->pond_admin(c->ctx, pond, method, target.c_str(), body.empty() ? nullptr : body.data(), body.size(), &status, &reply,
+                                    &len, &code) != 0)
+        throw failure(code);
+    std::string text(reply, len);
+    free(reply);
+    if (status == 404 && text.find("\"not_found\"") != std::string::npos)
+        throw Error(409, "no_role");
+    if (status >= 500)
+        throw Error(502, "failed");
+    if (answer)
+        *answer = text;
+    if (status == 204 || text.empty())
+        return 204;
+    c->blob->data = (unsigned char *)malloc(text.size());
+    if (!c->blob->data)
+        throw Error::internal();
+    memcpy(c->blob->data, text.data(), text.size());
+    c->blob->len = text.size();
+    snprintf(c->blob->mime, sizeof c->blob->mime, "application/json");
+    return status;
+}
+
+/* The body as sent, if it is a JSON object (the Pond checks what is in it); "{}" for none. */
+static std::string objectBody(const puddle_call *c)
+{
+    if (!c->body || c->body_len == 0)
+        return "{}";
+    if (!puddle_json_valid_object((const char *)c->body, c->body_len))
+        throw Error::badRequest();
+    return std::string((const char *)c->body, c->body_len);
+}
+
+/* Accept or decline the role the Pond offers us. */
+static int answer_offer(const puddle_call *c, bool accept)
+{
+    const char *pond = puddle_param(c, "pond");
+    int64_t offer = puddle_ponds_offer(pondsOf(c), pond);
+    if (!offer)
+        throw Error::notFound("no_offer");
+    std::string said;
+    int status = relay(c, "POST", "/pond/v1/roles/answer",
+                       "{\"offer\":" + std::to_string(offer) + ",\"accept\":" + (accept ? "true" : "false") + "}", &said);
+    std::string role;
+    size_t at = said.find("\"role\":\"");
+    if (status == 200 && at != std::string::npos)
+        role = said.substr(at + 8, said.find('"', at + 8) - at - 8);
+    if (status == 200 || status == 404) /* answered, or it lapsed: either way it is gone */
+        puddle_ponds_answered(pondsOf(c), pond, role.empty() ? nullptr : role.c_str());
+    return status;
+}
+static int accept_offer(const puddle_call *c, puddle_jw *) { return answer_offer(c, true); }
+static int decline_offer(const puddle_call *c, puddle_jw *) { return answer_offer(c, false); }
+
+static int admin_pond(const puddle_call *c, puddle_jw *) { return relay(c, "POST", "/pond/v1/admin/pond", objectBody(c)); }
+static int admin_channel_create(const puddle_call *c, puddle_jw *) { return relay(c, "POST", "/pond/v1/admin/channels/create", objectBody(c)); }
+static int admin_channel_edit(const puddle_call *c, puddle_jw *)
+{
+    return relay(c, "POST", std::string("/pond/v1/admin/channels/") + puddle_param(c, "channel") + "/edit", objectBody(c));
+}
+static int admin_channel_delete(const puddle_call *c, puddle_jw *)
+{
+    return relay(c, "POST", std::string("/pond/v1/admin/channels/") + puddle_param(c, "channel") + "/delete", "");
+}
+static int admin_remove(const puddle_call *c, puddle_jw *)
+{
+    return relay(c, "POST", std::string("/pond/v1/admin/members/") + puddle_param(c, "member") + "/remove", "");
+}
+static int admin_ban(const puddle_call *c, puddle_jw *)
+{
+    return relay(c, "POST", std::string("/pond/v1/admin/members/") + puddle_param(c, "member") + "/ban", objectBody(c));
+}
+static int admin_bans(const puddle_call *c, puddle_jw *) { return relay(c, "GET", "/pond/v1/admin/bans", ""); }
+static int admin_unban(const puddle_call *c, puddle_jw *)
+{
+    return relay(c, "POST", std::string("/pond/v1/admin/bans/") + puddle_param(c, "member") + "/unban", "");
+}
+
 static int leave_pond(const puddle_call *c, puddle_jw *)
 {
     const char *code = "internal";
@@ -249,5 +337,15 @@ const puddle_route puddle_pond_api_routes[] = {
     { "POST", POND "/channels/{channel:num}/messages/{message:num}/files/{file:event}/download", PUDDLE_AUTH_OWNER, 64, fetch_file, NULL },
     { "POST", POND "/profile",                                    PUDDLE_AUTH_OWNER, 128,   pond_profile,     NULL },
     { "POST", POND "/leave",                                      PUDDLE_AUTH_OWNER, 64,    leave_pond,       NULL },
+    { "POST", POND "/offer/accept",                               PUDDLE_AUTH_OWNER, 64,    accept_offer,     NULL },
+    { "POST", POND "/offer/decline",                              PUDDLE_AUTH_OWNER, 64,    decline_offer,    NULL },
+    { "POST", POND "/admin/pond",                                 PUDDLE_AUTH_OWNER, 8192,  admin_pond,       NULL },
+    { "POST", POND "/admin/channels/create",                      PUDDLE_AUTH_OWNER, 4096,  admin_channel_create, NULL },
+    { "POST", POND "/admin/channels/{channel:num}/edit",          PUDDLE_AUTH_OWNER, 4096,  admin_channel_edit,   NULL },
+    { "POST", POND "/admin/channels/{channel:num}/delete",        PUDDLE_AUTH_OWNER, 64,    admin_channel_delete, NULL },
+    { "POST", POND "/admin/members/{member:id}/remove",           PUDDLE_AUTH_OWNER, 64,    admin_remove,     NULL },
+    { "POST", POND "/admin/members/{member:id}/ban",              PUDDLE_AUTH_OWNER, 2048,  admin_ban,        NULL },
+    { "GET",  POND "/admin/bans",                                 PUDDLE_AUTH_OWNER, 0,     admin_bans,       NULL },
+    { "POST", POND "/admin/bans/{member:id}/unban",               PUDDLE_AUTH_OWNER, 64,    admin_unban,      NULL },
 };
 const size_t puddle_pond_api_routes_count = sizeof puddle_pond_api_routes / sizeof puddle_pond_api_routes[0];

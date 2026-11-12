@@ -20,6 +20,12 @@ properties:
     description: What the Pond takes, if it said (it has the `files` feature); left out if it takes none
     properties:
       max_size: { type: integer, description: "The largest file it takes; 0 if its admin turned files off" }
+  role: { enum: [operator, administrator, member], description: "Ours there (docs/ponds.md, \"Roles\")" }
+  offer:
+    description: A role the Pond offers us, waiting for the owner's answer
+    oneOf:
+      - { type: object, properties: { id: { type: integer }, role: { enum: [operator, administrator] } } }
+      - { type: "null" }
   channels: { type: array, items: { $ref: "#/$defs/Channel" } }
   me: { $ref: "../wire/ids.yaml#/$defs/UserId", description: The owner's member id (their user id) }
   members: { type: array, items: { $ref: "#/$defs/Member" } }
@@ -43,6 +49,7 @@ $defs:
       id: { $ref: "../wire/ids.yaml#/$defs/UserId" }
       profile: { oneOf: [{ $ref: "../wire/profile.yaml" }, { type: "null" }], description: What they chose to show in this Pond, cleaned }
       joined: { type: integer, description: ms }
+      role: { enum: [operator, administrator, member] }
   Message:
     type: object
     properties:

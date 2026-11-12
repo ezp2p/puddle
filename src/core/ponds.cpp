@@ -45,6 +45,7 @@ struct Channel {
 struct Member {
     std::string profile; /* cleaned JSON, or "" for none */
     int64_t joined = 0;
+    std::string role = "member"; /* operator, administrator or member (the Pond's docs/design.md, "Roles") */
 };
 
 struct Pond {
@@ -52,6 +53,8 @@ struct Pond {
     int64_t cursor = 0, joined = 0;
     int64_t protocol = 1;              /* what /info says it speaks (the Pond's docs/design.md, "Versions") */
     int64_t files_max = -1;            /* the largest file it takes; 0 turned off, -1 it does not say (a Pond without files) */
+    int64_t offer = 0;                 /* a role it offers us, waiting for the owner's answer; 0 for none */
+    std::string offer_role;
     std::vector<std::string> features;
     std::string me;
     std::vector<Channel> channels;
@@ -180,6 +183,19 @@ static bool parse_message(puddle_span v, Msg &m, int64_t *channel)
     return true;
 }
 
+/* "offer": {id, role} or null: a role the Pond offers us (sent to us alone, as a role_offer event too). */
+static void parse_offer(puddle_span v, Pond &pd)
+{
+    puddle_span o;
+    std::string role;
+    pd.offer = 0, pd.offer_role.clear();
+    if (member(v, "offer", &o) && *o.p == '{' && get_int(o, "id", &pd.offer) && pd.offer > 0 && get_text(o, "role", 16, 0, role) &&
+        (role == "operator" || role == "administrator"))
+        pd.offer_role = role;
+    else
+        pd.offer = 0;
+}
+
 /* The pond's "files": {max_size} (a Pond that says nothing of files takes none). */
 static void parse_files_max(puddle_span pond, Pond &pd)
 {
@@ -194,6 +210,8 @@ static bool parse_member(puddle_ponds *p, puddle_span v, std::string &id, Member
     puddle_span prof;
     if (!get_text(v, "id", PUDDLE_USER_ID_LEN, 0, id) || !puddle_id_valid(id.c_str()) || !get_int(v, "joined", &m.joined))
         return false;
+    std::string role;
+    m.role = get_text(v, "role", 16, 0, role) && (role == "operator" || role == "administrator") ? role : "member";
     m.profile.clear();
     if (p->clean && member(v, "profile", &prof) && *prof.p == '{') {
         std::string out(PUDDLE_PROFILE_JSON_MAX, '\0');
@@ -238,6 +256,7 @@ static bool parse_info(puddle_ponds *p, const char *json, size_t len, Pond &pd, 
     pd.id = id;
     parse_protocol(all, pd);
     parse_files_max(pond, pd);
+    parse_offer(all, pd);
     size_t cur = 0;
     int r;
     while ((r = puddle_json_array_next(chans, &cur, &item)) == 1) {
@@ -295,6 +314,7 @@ static void write_member(puddle_jw *w, const std::string &id, const Member &m)
     puddle_jw_key(w, "profile");
     write_profile(w, m.profile);
     puddle_jw_num(w, "joined", m.joined);
+    puddle_jw_str(w, "role", m.role.c_str());
     puddle_jw_end_object(w);
 }
 
@@ -390,6 +410,19 @@ static void write_protocol(puddle_jw *w, const Pond &pd)
     puddle_jw_end_array(w);
 }
 
+static void write_offer(puddle_jw *w, const Pond &pd)
+{
+    puddle_jw_key(w, "offer");
+    if (!pd.offer) {
+        puddle_jw_null(w);
+        return;
+    }
+    puddle_jw_object(w);
+    puddle_jw_num(w, "id", pd.offer);
+    puddle_jw_str(w, "role", pd.offer_role.c_str());
+    puddle_jw_end_object(w);
+}
+
 static void write_files_max(puddle_jw *w, const Pond &pd)
 {
     if (pd.files_max < 0)
@@ -422,6 +455,7 @@ static void save_pond(puddle_ponds *p, const Pond &pd)
         puddle_jw_end_array(w);
         puddle_jw_num(w, "cursor", pd.cursor);
         write_protocol(w, pd);
+        write_offer(w, pd);
         puddle_jw_str(w, "address", pd.address.c_str());
         puddle_jw_str(w, "tls_fp", pd.tls_fp.c_str());
         puddle_jw_num(w, "joined", pd.joined);
@@ -641,6 +675,7 @@ int puddle_ponds_info(puddle_ponds *p, const char *id, const char *info, size_t 
     pd.protocol = fresh.protocol;
     pd.features = std::move(fresh.features);
     pd.files_max = fresh.files_max;
+    pd.offer = fresh.offer, pd.offer_role = fresh.offer_role;
     if (reset) /* otherwise the events since our cursor are still to come, and say what changed */
         pd.cursor = fresh.cursor;
     pd.channels = std::move(channels);
@@ -812,6 +847,15 @@ int puddle_ponds_events(puddle_ponds *p, const char *id, const char *json, size_
                 pd.members.erase(mid);
                 members_changed = true;
             }
+        } else if (kind == "role_offer") { /* only ever sent to us */
+            puddle_span wrap = data;
+            Pond o;
+            std::string text = "{\"offer\":" + std::string(wrap.p, wrap.len) + "}";
+            parse_offer(puddle_span{text.data(), text.size()}, o);
+            if (o.offer) {
+                pd.offer = o.offer, pd.offer_role = o.offer_role;
+                pond_changed = true;
+            }
         } else if (kind == "pond") {
             get_text(data, "name", NAME_MAX_CHARS, 0, pd.name);
             get_text(data, "description", DESCRIPTION_MAX_CHARS, 1, pd.description);
@@ -902,6 +946,9 @@ static void write_summary(puddle_jw *w, const Pond &pd)
     puddle_jw_str(w, "status", pd.status.c_str());
     write_protocol(w, pd);
     write_files_max(w, pd);
+    auto me = pd.members.find(pd.me);
+    puddle_jw_str(w, "role", me != pd.members.end() ? me->second.role.c_str() : "member");
+    write_offer(w, pd);
     puddle_jw_key(w, "channels");
     puddle_jw_array(w);
     for (auto &c : pd.channels) {
@@ -1081,4 +1128,27 @@ void puddle_ponds_touch(puddle_ponds *p, const char *id)
     std::lock_guard<std::mutex> g(p->mu);
     if (p->ponds.count(id))
         p->version++;
+}
+
+int64_t puddle_ponds_offer(puddle_ponds *p, const char *id)
+{
+    std::lock_guard<std::mutex> g(p->mu);
+    auto it = p->ponds.find(id);
+    return it == p->ponds.end() ? 0 : it->second.offer;
+}
+
+void puddle_ponds_answered(puddle_ponds *p, const char *id, const char *role)
+{
+    std::lock_guard<std::mutex> g(p->mu);
+    auto it = p->ponds.find(id);
+    if (it == p->ponds.end())
+        return;
+    Pond &pd = it->second;
+    pd.offer = 0, pd.offer_role.clear();
+    auto me = pd.members.find(pd.me);
+    if (role && me != pd.members.end())
+        me->second.role = role;
+    save_pond(p, pd);
+    save_members(p, pd);
+    p->version++;
 }
