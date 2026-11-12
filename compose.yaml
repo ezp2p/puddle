@@ -1,0 +1,47 @@
+# FOR TESTING ONLY. Not a way to run your own Puddle: for that, see docs/docker.md.
+#
+# Two Puddles, Alice and Bob, built from this checkout, on a network of their own, so you can try streams between
+# them (a friend request, messages, pictures) without two computers. They reach each other by their service names
+# (alice:8443, bob:8443), which is what their links say; from this machine they are on 127.0.0.1:18443 and :28443.
+#
+# From scratch (docs/docker.md, "Testing with two Puddles"):
+#   docker compose up -d --build              # both start, and wait to be set up
+#   docker compose exec alice puddled --init  # each makes its identity once (the phrase is a throwaway here),
+#   docker compose exec bob puddled --init    # and then starts by itself
+#   docker compose logs -f
+# Start over: docker compose down -v   (deletes both Puddles: their keys, chats and everything else)
+
+name: puddle-test
+
+x-puddle: &puddle
+  image: puddle:test
+  networks: [puddles]
+
+services:
+  alice:
+    <<: *puddle
+    build: .            # the one image both use, built once (two builds of one tag at a time collide)
+    hostname: alice
+    environment:
+      PUDDLE_ADVERTISE: alice:8443
+      PUDDLE_NAME: Alice
+    ports: ["127.0.0.1:18443:8443"]
+    volumes: ["alice:/data"]
+
+  bob:
+    <<: *puddle
+    pull_policy: never  # alice's build
+    depends_on: [alice]
+    hostname: bob
+    environment:
+      PUDDLE_ADVERTISE: bob:8443
+      PUDDLE_NAME: Bob
+    ports: ["127.0.0.1:28443:8443"]
+    volumes: ["bob:/data"]
+
+networks:
+  puddles: {}
+
+volumes:
+  alice: {}
+  bob: {}

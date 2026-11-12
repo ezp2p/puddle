@@ -6,21 +6,49 @@
 #include "service/server.h"
 #include "storage/store.h"
 
+#include <atomic>
+#include <chrono>
 #include <stdio.h>
 #include <string.h>
+#include <thread>
 
 static puddle_server *volatile g_server;
+static std::atomic<bool> g_stop{ false };
 
 static void on_stop(void)
 {
-    puddle_server_stop(g_server); /* only wakes the server: safe in a signal handler */
+    g_stop = true;
+    if (g_server)
+        puddle_server_stop(g_server); /* only wakes the server: safe in a signal handler */
+}
+
+/* --wait: no identity yet, and no terminal to make one in (a container, a service). Say how, then look again every couple
+ * of seconds until `puddled --init` has made one and its phrase has been shown, and carry on. 0 when set up, -1 if told to
+ * stop first. */
+static int wait_for_setup(const puddle_config *cfg)
+{
+    puddle_on_stop_signal(on_stop);
+    puddle_log(PUDDLE_LOG_INFO, "waiting to be set up: run `puddled --init` in a terminal where this Puddle runs. It makes the "
+                                "identity and shows the recovery phrase; this Puddle starts by itself once that is done.");
+    while (!g_stop) {
+        if (puddle_identity_exists(cfg->data_dir) && !puddle_identity_unconfirmed(cfg->data_dir)) {
+            puddle_log(PUDDLE_LOG_INFO, "set up; starting");
+            return 0;
+        }
+        for (int i = 0; i < 10 && !g_stop; i++) /* two seconds, a little at a time, so a stop is quick */
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
+    return -1;
 }
 
 static void usage(FILE *out)
 {
     fprintf(out,
-            "usage: puddled [-c|--config FILE] [--init | --roll | --restore --chain FILE]\n"
+            "usage: puddled [-c|--config FILE] [--wait | --init | --roll | --restore --chain FILE]\n"
             "\n"
+            "  -c FILE  the config file (default: $PUDDLE_CONFIG, or ~/.config/puddle/puddle.yaml)\n"
+            "  --wait   with no identity yet and no terminal, wait for `puddled --init` to be run (in a\n"
+            "           container, say) and then start, instead of stopping\n"
             "  --init   make this Puddle's identity and show its recovery phrase, then exit\n"
             "           (a first run from a terminal does this by itself and carries on)\n"
             "  --roll   change your keys: asks for your current recovery phrase, gives you a new one, and\n"
@@ -191,13 +219,15 @@ static int restore_identity(const puddle_config *cfg, const char *chain_path)
 int main(int argc, char **argv)
 {
     const char *path = NULL;
-    int init = 0, roll = 0, restore = 0;
+    int init = 0, roll = 0, restore = 0, wait = 0;
     const char *chain_path = NULL;
     for (int i = 1; i < argc; i++) {
         if ((!strcmp(argv[i], "-c") || !strcmp(argv[i], "--config")) && i + 1 < argc) {
             path = argv[++i];
         } else if (!strcmp(argv[i], "--init")) {
             init = 1;
+        } else if (!strcmp(argv[i], "--wait")) {
+            wait = 1;
         } else if (!strcmp(argv[i], "--roll")) {
             roll = 1;
         } else if (!strcmp(argv[i], "--restore")) {
@@ -220,7 +250,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    if (init + roll + restore > 1) {
+    if (init + roll + restore + wait > 1) {
         usage(stderr);
         return 2;
     }
@@ -232,6 +262,11 @@ int main(int argc, char **argv)
     int unfinished = puddle_identity_unconfirmed(cfg.data_dir);
     if (!puddle_identity_exists(cfg.data_dir) || unfinished) {
         int interactive = puddle_console_interactive();
+        if (wait && !interactive) {
+            if (wait_for_setup(&cfg) != 0)
+                return 0; /* stopped before anyone set it up */
+            goto serve;
+        }
         if (!init && !interactive) {
             fprintf(stderr,
                     "puddled: this Puddle has no usable identity yet. Run `puddled --init` in a terminal once: "
@@ -263,14 +298,16 @@ int main(int argc, char **argv)
     if (init)
         return 0;
 
+serve:;
     puddle_server *srv = puddle_server_create(&cfg, err, sizeof err);
     if (!srv) {
         fprintf(stderr, "puddled: %s\n", err);
         return 1;
     }
     g_server = srv;
-
     puddle_on_stop_signal(on_stop);
+    if (g_stop) /* told to stop while setting up */
+        puddle_server_stop(srv);
 
     int rc = puddle_server_run(srv);
     puddle_server_destroy(srv);

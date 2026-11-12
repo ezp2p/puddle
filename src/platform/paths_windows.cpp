@@ -14,6 +14,11 @@ char puddle_path_sep(void)
 int puddle_config_default_path(char *out, size_t n)
 {
     int w;
+    const char *env = getenv("PUDDLE_CONFIG"); /* a container says where its config is once, for every command */
+    if (env && *env) {
+        w = snprintf(out, n, "%s", env);
+        return (w < 0 || (size_t)w >= n) ? -1 : 0;
+    }
     const char *base = getenv("APPDATA");
     if (!base || !*base)
         return -1;
