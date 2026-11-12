@@ -13,7 +13,9 @@ namespace puddle {
 namespace {
 
 // what the group flow says went wrong, as an Error
-void check(int status, const char *code)
+/* `code` by reference: it is set by the call that is the other argument, and C++ leaves the order in which arguments are
+ * worked out to the compiler (GCC goes right to left), so taking it by value could read it before the call has set it. */
+void check(int status, const char *const &code)
 {
     if (status)
         throw Error(status, code ? code : "internal");
