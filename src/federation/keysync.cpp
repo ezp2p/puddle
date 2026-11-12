@@ -645,6 +645,9 @@ static int address_post(const puddle_call *c, puddle_jw *w)
         puddle_log(PUDDLE_LOG_INFO, "%.12s… has a new address%s", c->sender, m.tls_fp[0] ? " or certificate" : "");
         if (m.tls_fp[0] && c->ctx->outbox)
             puddle_outbox_release(c->ctx->outbox, c->sender); /* whatever was held for their certificate may go now */
+        /* they have just reached us, so they are up: what waited for them goes to the new address now, not at the next scheduled try */
+        if (c->ctx->outbox)
+            puddle_outbox_retry_now(c->ctx->outbox, c->sender);
     }
     return 204;
 }

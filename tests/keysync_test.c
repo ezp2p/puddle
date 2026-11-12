@@ -183,7 +183,17 @@ static void clear_outbox(void)
     ctx.outbox = ob;
 }
 
+static void write_outbox_item_at(unsigned long long seq, const char *peer, const char *kind, const char *path, const char *body, const char *state,
+                                 int64_t next);
+
 static void write_outbox_item(unsigned long long seq, const char *peer, const char *kind, const char *path, const char *body, const char *state)
+{
+    write_outbox_item_at(seq, peer, kind, path, body, state, T0);
+}
+
+/* the same, with the time it is next due to be tried */
+static void write_outbox_item_at(unsigned long long seq, const char *peer, const char *kind, const char *path, const char *body, const char *state,
+                                 int64_t next)
 {
     char file[900], esc[2000], text[4000];
     size_t j = 0;
@@ -193,7 +203,7 @@ static void write_outbox_item(unsigned long long seq, const char *peer, const ch
     }
     esc[j] = 0;
     snprintf(text, sizeof text, "{\"v\":1,\"seq\":%llu,\"peer\":\"%s\",\"kind\":\"%s\",\"path\":\"%s\",\"body\":\"%s\",\"created\":%lld,\"next\":%lld,"
-             "\"first_offline\":0,\"attempts\":1,\"state\":\"%s\",\"status\":0,\"reason\":\"x\"}", seq, peer, kind, path, esc, (long long)T0, (long long)T0, state);
+             "\"first_offline\":0,\"attempts\":1,\"state\":\"%s\",\"status\":0,\"reason\":\"x\"}", seq, peer, kind, path, esc, (long long)T0, (long long)next, state);
     snprintf(file, sizeof file, "%s/state/outbox", data);
     puddle_mkdir_p(file); /* the folder is made with the first item the outbox keeps itself */
     snprintf(file, sizeof file, "%s/state/outbox/%012llu.json", data, seq);
@@ -368,9 +378,23 @@ int main(void)
         /* a certificate we had noted as different, and a note that something is held */
         CHECK(puddle_streams_check_fingerprint(ss, alice.uid, "3333333333333333333333333333333333333333333333333333333333333333") == 1);
         CHECK(puddle_streams_check_fingerprint(ss, alice.uid, fp) == 0);                         /* now it is "seen", waiting for the owner */
+        /* a message has been waiting for her, its next try half an hour off: news of where she is now sends it at once */
+        write_outbox_item_at(900000, alice.uid, "events", "/stream/v1/events", "{\"chat\":\"x\",\"events\":[]}", "queued", clock_now + 1800000);
+        reopen_outbox();
         b = address_body(&alice, alice.uid, "address", "[\"198.51.100.4:9000\",\"[2001:db8::7]:9000\"]", extra, 1, T0 + 500);
         r = post_as(&alice, "/stream/v1/address", b, 1);
         CHECK(r.status == 204 && !strstr(r.out, "Content-Length"));
+        {
+            puddle_ob_item *l;
+            size_t n;
+            int due = 0;
+            CHECK(puddle_outbox_list(ctx.outbox, &l, &n) == 0);
+            for (size_t i = 0; i < n; i++)
+                if (l[i].seq == 900000)
+                    due = l[i].state == PUDDLE_OB_QUEUED && l[i].next_ms <= clock_now && l[i].first_offline_ms == 0;
+            puddle_outbox_list_free(l, n);
+            CHECK(due);
+        }
         CHECK(puddle_streams_get(ss, alice.uid, &rec) == 0 && rec.addr_seq == 1 && rec.naddr == 2 && !strcmp(rec.addresses[0], "198.51.100.4:9000") &&
               !strcmp(rec.addresses[1], "[2001:db8::7]:9000") && !strcmp(rec.tls_fp, fp) && !rec.tls_fp_seen[0]);   /* the new certificate is accepted quietly */
         puddle_stream_free(&rec);

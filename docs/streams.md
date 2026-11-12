@@ -113,7 +113,8 @@ A Puddle's address can change, and so can its certificate. It publishes an **add
 active stream with `POST /stream/v1/address`. The highest `seq` wins. It notices a change at start (the address in its
 config, the certificate's fingerprint, compared with what it last announced, kept in `state/address.json`), and what
 each peer is known to hold is kept on its stream record (`addr_sent`), so one who was away is told when it returns.
-Peers try all known addresses, newest first. A `tls_fp` in a record is accepted without asking, because it is signed by
+Peers try all known addresses, newest first, and a peer that takes a record sends whatever it was holding for the
+sender straight away rather than at its next scheduled try. A `tls_fp` in a record is accepted without asking, because it is signed by
 a key the peer already trusts, which is how a Puddle that regenerates its certificate stays on speaking terms. If both
 sides move while offline they cannot find each other; that is the accepted limit for now (no middleman servers).
 
