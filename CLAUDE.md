@@ -58,5 +58,6 @@ or looks like it conflicts with this list, ask rather than guess.
 - `docs/roadmap.md`: the step-by-step plan for keys and streams; work through it in order, one step at a time
 - `docs/discuss-later.md`: open questions parked on purpose; don't raise them unprompted
 - `docs/hardening.md`: what junk and floods cost a Puddle (and a Pond), and the gaps still open
+- `docs/protocol.md`: which parts of the Puddle Protocol (`ezp2p/protocol`, checked out beside this repository as `../protocol`) Puddle implements. The protocol is what Pond, Levee and phone clients rely on: change the wire there first, then here
 - Build and test: `scripts/build.sh`
 - `Dockerfile`, `dist/docker-entrypoint.sh`: the `puddled` image, published to ghcr by `.github/workflows/docker.yml` on a release tag; see `docs/docker.md`. `compose.yaml` is two Puddles for testing only
