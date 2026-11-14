@@ -3,6 +3,7 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QNetworkAccessManager>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <functional>
@@ -54,6 +55,7 @@ int main(int argc, char **argv)
     auto *msgs_b = static_cast<JsonListModel *>(B.messages());
 
     CHECK(until([&] { return A.connected() && B.connected(); }));
+    CHECK(until([&] { return B.peopleLoaded(); })); /* a request already there at the first look is not news */
     CHECK(people_a->rowCount() == 0 && conv_a->rowCount() == 0);
 
     /* Alice asks Bob; Bob sees a request from "Alice" and is told about it */
@@ -65,10 +67,16 @@ int main(int argc, char **argv)
     CHECK(req.value("name").toString() == "Alice" || req.value("name").toString() == alice.uid.left(8)); /* the name arrives with the profile */
     CHECK(newRequest.count() == 1 && newRequest.at(0).at(0).toString() == alice.uid);
     {
+        /* Alice's list is refreshed on a timer, so wait for her outgoing request to show instead of looking once */
         QJsonObject out;
-        for (const QJsonObject &o : people_a->items())
-            if (o.value("state").toString() == "pending_out")
-                out = o;
+        auto find_out = [&] {
+            out = QJsonObject();
+            for (const QJsonObject &o : people_a->items())
+                if (o.value("state").toString() == "pending_out")
+                    out = o;
+            return !out.isEmpty();
+        };
+        CHECK(until(find_out));
         CHECK(!out.isEmpty() && out.value("provisional").toBool() && out.value("name").toString() == bob.link && out.value("id").toString() != bob.uid);
     }
 
@@ -149,7 +157,7 @@ int main(int argc, char **argv)
     CHECK(until([&] { return msgs_b->at(0).value("deleted").toBool() && msgs_b->at(0).value("body").toString().isEmpty(); }));
 
     /* what the chat page needs: who it is with, grouping, replies, and "away" */
-    CHECK(B.currentName() == "Alice" && B.currentState() == "active" && !B.currentCertChanged() && !B.hasOlder());
+    CHECK(B.currentName() == "Alice" && B.currentState() == "active" && !B.hasOlder());
     CHECK(msgs_b->at(0).value("dayStart").toBool() && !msgs_b->at(1).value("dayStart").toBool() && !msgs_b->at(0).value("grouped").toBool());
     B.send("two");
     CHECK(until([&] { return msgs_b->rowCount() == 3; }));
@@ -270,7 +278,7 @@ int main(int argc, char **argv)
                 if (m.value("body").toString() == "carol here")
                     return true;
             return false;
-        }) || true);
+        }));
         /* finding someone to talk to: the most recent first when nothing is typed, then by what was typed (names that start with it before names that have it inside) */
         {
             QVariantList all = A.findFriends("", 30);
@@ -400,6 +408,26 @@ int main(int argc, char **argv)
     {
         Chats none;
         CHECK(!none.attach(QUrl("https://127.0.0.1:1"), tmp.path() + "/nope", tmp.path() + "/nope"));
+    }
+
+    /* ---- many requests: the client moves on to a new network manager every few hundred (Qt keeps memory for every TLS
+     * connection a manager opens, and a Puddle closes each one) without losing an answer, and lets the old ones go ---- */
+    {
+        ApiClient *api = A.api();
+        const int n = 3 * ApiClient::UsesPerManager / 2 + 50;
+        int answered = 0, ok = 0;
+        for (int i = 0; i < n; i++)
+            api->get("/api/v1/identity", [&](int st, const QJsonDocument &) { answered++; ok += st == 200; });
+        CHECK(until([&] { return answered == n; }, 60000));
+        CHECK(ok == n);
+        /* deleteLater() needs an event loop, which until() doesn't run: do the deleting it would */
+        auto managers = [&] {
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+            return api->findChildren<QNetworkAccessManager *>(Qt::FindDirectChildrenOnly).size();
+        };
+        CHECK(until([&] { return managers() == 2; }));   /* the one in use, and the one a phone's handshake would use */
+        if (managers() != 2)
+            fprintf(stderr, "network managers left: %d\n", int(managers()));
     }
 
     return failures ? 1 : 0;

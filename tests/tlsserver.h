@@ -9,6 +9,7 @@
 #include "platform/fsutil.h"
 #include "http/tls.h"
 #include "http/client.h"
+#include "http/reqsig.h"
 
 #include <netinet/in.h>
 #include <openssl/pem.h>
@@ -44,8 +45,13 @@ typedef struct {
     char reply[256];
     int delay_ms;
     int first_n, first_status; /* the first `first_n` requests are answered with `first_status` instead */
+    /* receipts (docs/streams.md, "Proving who answers"): with `signer` set, every answer is signed for as that identity, over
+     * `sign_fp` if it is set (a Puddle somewhere else, its answer passed on by someone in the middle) or our own certificate */
+    puddle_identity *signer;
+    char sign_fp[65];
+    int sign_status_off;       /* sign for a status other than the one sent (a receipt that doesn't cover this answer) */
     /* what it saw */
-    int connections, requests;
+    int connections, requests, hellos;
     char method[8], target[256], signature[1100];
     unsigned char body[200000];
     size_t body_len;
@@ -60,6 +66,7 @@ static size_t ts_route(void *u, const puddle_request *r, int o, const unsigned c
     (void)o;
     pthread_mutex_lock(&s->mu);
     s->requests++;
+    s->hellos += !strcmp(r->target, "/stream/v1/hello");
     snprintf(s->method, sizeof s->method, "%s", r->method);
     snprintf(s->target, sizeof s->target, "%s", r->target);
     snprintf(s->signature, sizeof s->signature, "%s", r->signature);
@@ -69,13 +76,22 @@ static size_t ts_route(void *u, const puddle_request *r, int o, const unsigned c
     ts_mode m = s->mode;
     char reply[256];
     snprintf(reply, sizeof reply, "%s", s->reply);
+    if (!strcmp(r->target, "/stream/v1/hello") && st >= 200 && st < 300) {
+        st = 204; /* what a Puddle answers it */
+        reply[0] = '\0';
+    }
+    char receipt[PUDDLE_RECEIPT_MAX + 40] = "";
+    puddle_reqsig rs;
+    if (s->signer && puddle_reqsig_parse(r->signature, &rs) == 0) {
+        char rv[PUDDLE_RECEIPT_MAX];
+        if (puddle_receipt_sign(s->signer, rs.nonce, st + s->sign_status_off, reply, strlen(reply), s->sign_fp[0] ? s->sign_fp : s->fingerprint,
+                                rv, sizeof rv) == 0)
+            snprintf(receipt, sizeof receipt, "X-Puddle-Receipt: %s\r\n", rv);
+    }
     pthread_mutex_unlock(&s->mu);
     *status = st;
-    if (m == TS_BIG) {
-        static char big[PUDDLE_NET_BODY_MAX + 5000];
-        (void)big;
-    }
-    return puddle_http_response(st, "", reply, strlen(reply), out, cap);
+    (void)m;
+    return puddle_http_response(st, receipt, reply, strlen(reply), out, cap);
 }
 
 static int ts_read(void *io, void *buf, size_t cap)

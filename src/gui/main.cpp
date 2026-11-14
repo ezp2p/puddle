@@ -1,15 +1,22 @@
 // Puddle: desktop app. Qt Quick UI over the same core server that puddled runs.
+#ifdef PUDDLE_HAVE_WIDGETS
+#include <QApplication> // the tray icon is a widget on Linux and Windows
+using App = QApplication;
+#else
 #include <QGuiApplication>
+using App = QGuiApplication;
+#endif
 #include <QIcon>
 #include <QQmlApplicationEngine>
 #include <QQuickStyle>
 
 #include "app/backend.h"
 #include "app/composer.h"
+#include "app/qrimage.h"
 
 int main(int argc, char **argv)
 {
-    QGuiApplication app(argc, argv);
+    App app(argc, argv);
     app.setApplicationName("Puddle");
     app.setOrganizationName("ezp2p");
     app.setWindowIcon(QIcon(":/qt/qml/Puddle/src/gui/assets/puddle.png"));
@@ -23,6 +30,7 @@ int main(int argc, char **argv)
 
     Backend backend; // declared before the engine so it outlives the QML objects using it
     QQmlApplicationEngine engine;
+    engine.addImageProvider(QStringLiteral("qr"), new QrImageProvider); // the engine owns it
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app,
                      [] { QCoreApplication::exit(1); }, Qt::QueuedConnection);
     engine.setInitialProperties({ { "backend", QVariant::fromValue(&backend) } });

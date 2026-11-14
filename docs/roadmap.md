@@ -9,11 +9,11 @@ Items marked **needs you** are decisions I should not make alone.
 
 Built and tested (phases 1 to 4): the identity (keys from a recovery phrase, the signed key chain, rolling), the owner token and
 the uniform `404`, the HTTPS listener and request signing, streams between Puddles (request, accept, close, block, invites,
-certificate pinning), the retrying outbox, direct messages with edit and delete, key and address announcements, profiles and
+signed receipts), the retrying outbox, direct messages with edit and delete, key and address announcements, profiles and
 pictures over a stream, and the Qt app (Friends, conversations, chat, delivery state). 32 test suites, including two Puddles
 talking over TLS and the window driven by real clicks and keys.
 
-Group chats (phase 5) are built, and joining Ponds' text channels (docs/ponds.md). Not built: the phone client, encryption at rest. See "Later" below and `discuss-later.md`.
+Group chats (phase 5) are built, and so is proving who answers (phase 6), which replaced certificate pinning for streams. So is joining Ponds' text channels (docs/ponds.md). The phone client is built up to its Android package (phase 7). Not built: encryption at rest. See "Later" below and `discuss-later.md`.
 
 ## Order, and why
 
@@ -484,6 +484,63 @@ Found while doing it, and fixed: a made-up stream id was being sent key pushes (
 now travels directly (`told`); events about the group go to the invited too, or they cannot tell who else is coming.
 
 *Commit point.*
+
+## Phase 6: Proving who answers
+
+Certificate pinning (3.4, 4.2) proved the far end by its TLS certificate, so a regenerated certificate stopped
+everything until the owner approved it, and anything that answered at a peer's old address was handed the message.
+The owner decided the certificate should only encrypt, and the far end should prove itself by its keys, before
+anything is sent and for every answer. The design is in `streams.md`, "Proving who answers".
+
+- [x] **6.1 Receipts and the handshake.**
+  - **Receipts:** the router signs every answer (one sent straight from a file on disk is hashed as it is read) to an authenticated request from someone it holds a record of
+    (`X-Puddle-Receipt`), over the request's nonce, the status, the body's hash and its own certificate's fingerprint.
+    `access` and `access/status` are never signed (they answer strangers alike), nor is anything to a stranger. `GET /stream/v1/hello` answers
+    `204` to a peer and exists to be signed for.
+  - **Client:** given the key it holds for the peer, `puddle_net_request` checks the receipt against the connection it
+    came on; given a fingerprint already proven, it sends nothing on a connection that shows another.
+  - **Outbox and sender:** (`federation/sender.cpp`) for a peer it holds a key for, a `hello` comes before any request on a route that needs a stream, and
+    the proof is kept in memory for ten minutes, renewed by each good receipt. Only a signed answer settles an item;
+    anything else leaves it waiting on the offline schedule with a reason, and every address is tried. A peer with no
+    key held (first contact) is sent to as before.
+  - **Gone:** the recorded certificate, the "held" state, `certificate_changed`, `POST /api/v1/stream/trust`, and
+    `tls_fp` in address records (ignored if an older Puddle sends one). Ponds keep their pinned certificate: they don't
+    sign receipts yet.
+
+## Phase 7: Phone client
+
+The owner decided: a **thin client** (the phone holds no identity keys and no chats; it uses its Puddle's owner API),
+built from the desktop app's Qt Quick code, **Android first**, with notifications **only while the app is open** for now.
+The connection between phone and Puddle is proven both ways by keys, like a stream: the phone signs every request with a
+key of its own, and the Puddle signs every answer. The design is in `identity.md`, "Devices".
+
+- [x] **7.1 Pairing and device access on the Puddle.** `core/devices.cpp` (the device list in `state/devices.json`, the one-time
+  pairing secret, device keys and ids) and `api/devices.cpp` (the routes).
+  - **Owner token only:** `POST /api/v1/devices/pair` (a pairing link, `409 no_address` without an advertised address),
+    `GET /api/v1/devices`, `POST /api/v1/devices/{device}/accept|decline|revoke`. A new route kind, `LOCAL`, is the owner token
+    and nothing else.
+  - **From the phone:** `POST /device/v1/pair` (signed by the key in the body; a wrong, spent or stale secret is `404`),
+    `GET /device/v1/status` (any device on the list, pending or accepted).
+  - **Everything else of the owner's:** a request signed by an accepted device is taken as the owner's, and its answer
+    carries a receipt. A pending, declined or revoked device gets `404` like a stranger.
+- [x] **7.2 The app's API client signs.** `ApiClient` works with a token (desktop) or a device key (phone). A phone
+  handshakes first (`GET /device/v1/status`, which carries nothing and brings the Puddle's chain), then sends only over a
+  connection pinned to the certificate the Puddle signed for, and believes only answers with its receipt. A new
+  certificate means a new handshake; a key roll is learned from the chain, proven against the Puddle's id. Unpinned
+  requests have a QNetworkAccessManager of their own, since Qt keeps connections with the trust they started with.
+  Uploads go in signed chunks; a download is hashed as it is written and kept only if the receipt covers it.
+  `app/phone.*` keeps the pairing (`device.json`, owner-only) and attaches the Chats as the device. Tested in
+  `phone_test` against two real Puddles: pairing, accepting, using (files too), restarting, a wrong key corrected by the chain,
+  another Puddle at the address, a new certificate, revoking.
+- [x] **7.3 Phone screens.** Phone mode (Android, or `PUDDLE_PHONE=1` with `PUDDLE_PHONE_DIR` on a desktop): no Puddle
+  of its own; `setup/Pair.qml` (paste the link, name the phone, then the check code while waiting); the narrow layout
+  that was already there (the conversations and the side panel as drawers), opening on the list of conversations, with
+  the back button going back to it; the footer says whether the phone reaches its Puddle, and why not. On the desktop,
+  Settings has Phones: "Add a phone" (the link, and a QR code when libqrencode is found), accept or decline with the
+  check code, remove; and a notification when a phone asks. `ui_test` pairs a phone through the window with clicks.
+  - Not yet: scanning the QR code on the phone (needs the camera, Qt Multimedia and a decoder such as zxing-cpp built
+    for Android); pasting the link works meanwhile.
+- [ ] **7.4 Android build.** An APK to install directly. Needs the Android SDK and NDK, a JDK and Qt for Android.
 
 ## Later, not planned in detail
 

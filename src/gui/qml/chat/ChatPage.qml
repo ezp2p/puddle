@@ -354,13 +354,14 @@ Pane {
                                     Layout.fillWidth: true
                                     wrapMode: Text.Wrap
                                     font.pixelSize: 11
-                                    color: msg.model.deliveryState === "failed" ? Theme.danger : msg.model.deliveryState === "held" ? Theme.warning : palette.text
-                                    opacity: msg.model.deliveryState === "failed" || msg.model.deliveryState === "held" ? 1 : 0.6
+                                    // a reason on a message still waiting means something answered that wasn't them (docs/streams.md)
+                                    readonly property bool troubled: msg.model.deliveryState === "retrying" && !!msg.model.deliveryReason
+                                    color: msg.model.deliveryState === "failed" ? Theme.danger : troubled ? Theme.warning : palette.text
+                                    opacity: msg.model.deliveryState === "failed" || troubled ? 1 : 0.6
                                     text: page.waitingOnGroup(msg.model) ? qsTr("Waiting for group members to come online. It will be delivered when they do.")
                                           : msg.model.deliveryState === "queued" ? qsTr("Sending…")
-                                          : msg.model.deliveryState === "retrying" ? qsTr("%1 can't be reached right now. Trying again at %2.").arg(page.chats.currentName).arg(page.clock(new Date(msg.model.deliveryNext)))
+                                          : msg.model.deliveryState === "retrying" ? qsTr("Not delivered to %1 yet: %2. Trying again at %3.").arg(page.chats.currentName).arg(msg.model.deliveryReason || qsTr("they can't be reached right now")).arg(page.clock(new Date(msg.model.deliveryNext)))
                                           : msg.model.deliveryState === "failed" ? qsTr("Not delivered: %1").arg(msg.model.deliveryReason || qsTr("unknown reason"))
-                                          : msg.model.deliveryState === "held" ? qsTr("Not sent: %1's certificate changed.").arg(page.chats.currentName)
                                           : ""
                                 }
                                 Button {
@@ -451,21 +452,6 @@ Pane {
                 icon.width: 16
                 icon.height: 16
                 onClicked: { list.stickToEnd = true; list.positionViewAtEnd() }
-            }
-        }
-
-        // their certificate changed: nothing can be sent until the owner decides
-        Rectangle {
-            visible: page.chats.currentCertChanged
-            Layout.fillWidth: true
-            implicitHeight: certRow.implicitHeight + 16
-            color: Qt.rgba(0.85, 0.63, 0, 0.15)
-            RowLayout {
-                id: certRow
-                anchors.fill: parent
-                anchors.margins: 8
-                Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: qsTr("%1's certificate changed. Nothing is sent until you trust it.").arg(page.chats.currentName) }
-                Button { text: qsTr("Trust"); onClicked: page.chats.trust(page.chats.current) }
             }
         }
 

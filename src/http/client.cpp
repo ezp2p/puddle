@@ -129,10 +129,13 @@ void puddle_net_request(const puddle_address *addr, const char *method, const ch
     int64_t deadline = mono_ms() + total_s * 1000LL;
 
     char sig[800];
-    if (puddle_reqsig_sign(me, method, target, body, body_len, peer_id, 0, sig, sizeof sig) != 0) {
+    puddle_reqsig mine;
+    if (puddle_reqsig_sign(me, method, target, body, body_len, peer_id, 0, sig, sizeof sig) != 0 || puddle_reqsig_parse(sig, &mine) != 0) {
         why(out, PUDDLE_NET_FAILED, "cannot sign the request");
         return;
     }
+    char receipt[PUDDLE_RECEIPT_MAX];
+    receipt[0] = '\0';
 
     puddle_sock sock = dial(addr, connect_s, io_s, deadline, out);
     if (sock == PUDDLE_SOCK_NONE)
@@ -159,7 +162,7 @@ void puddle_net_request(const puddle_address *addr, const char *method, const ch
         char eb[120] = "";
         if (e)
             ERR_error_string_n(e, eb, sizeof eb);
-        why(out, PUDDLE_NET_FAILED, "%s did not complete a TLS handshake%s%s", addr->address, e ? ": " : "", eb);
+        why(out, PUDDLE_NET_FAILED, "something at %s answered, but it isn't a Puddle (no TLS handshake%s%s)", addr->address, e ? ": " : "", eb);
         goto done;
     }
 
@@ -179,6 +182,10 @@ void puddle_net_request(const puddle_address *addr, const char *method, const ch
     puddle_hex_encode(md, 32, out->fingerprint);
     if (o.fingerprint_ok && !o.fingerprint_ok(o.user, out->fingerprint)) {
         why(out, PUDDLE_NET_CERT_CHANGED, "%s has a different certificate from before", addr->address);
+        goto done;
+    }
+    if (o.expect_fp && o.expect_fp[0] && strcmp(o.expect_fp, out->fingerprint) != 0) {
+        why(out, PUDDLE_NET_OTHER_CERT, "%s showed a certificate it has not proven is theirs", addr->address);
         goto done;
     }
 
@@ -235,6 +242,16 @@ void puddle_net_request(const puddle_address *addr, const char *method, const ch
                     if (!puddle_ascii_ncasecmp(l + 1, "content-length:", 15))
                         cl = l + 16;
                 for (const char *l = strchr(raw, '\n'); l && l < raw + hend; l = strchr(l + 1, '\n'))
+                    if (!puddle_ascii_ncasecmp(l + 1, "x-puddle-receipt:", 17)) {
+                        const char *v = l + 18;
+                        while (*v == ' ' || *v == '\t')
+                            v++;
+                        size_t k = 0;
+                        while (v < raw + hend && *v != '\r' && *v != '\n' && k + 1 < sizeof receipt)
+                            receipt[k++] = *v++;
+                        receipt[k] = '\0';
+                    }
+                for (const char *l = strchr(raw, '\n'); l && l < raw + hend; l = strchr(l + 1, '\n'))
                     if (!puddle_ascii_ncasecmp(l + 1, "content-type:", 13)) {
                         const char *v = l + 14;
                         while (*v == ' ' || *v == '\t')
@@ -261,7 +278,7 @@ void puddle_net_request(const puddle_address *addr, const char *method, const ch
     raw[len] = '\0';
     int status; status = 0;
     if (!hend || sscanf(raw, "HTTP/1.%*d %d", &status) != 1 || status < 100 || status > 599) {
-        why(out, PUDDLE_NET_FAILED, "%s did not answer with HTTP", addr->address);
+        why(out, PUDDLE_NET_FAILED, "something at %s answered, but it isn't a Puddle (no HTTP)", addr->address);
         goto done;
     }
     out->result = PUDDLE_NET_OK;
@@ -278,6 +295,33 @@ void puddle_net_request(const puddle_address *addr, const char *method, const ch
         memcpy(out->body, raw + hend, bl);
         out->body[bl] = '\0';
         out->body_len = bl;
+    }
+    if (o.peer_pub) { /* only their signature makes this an answer from them */
+        out->checked = 1;
+        out->proof = puddle_receipt_verify(receipt, peer_id, o.peer_pub, mine.nonce, status, raw + hend, bl, out->fingerprint);
+        if (out->proof != PUDDLE_RECEIPT_OK) {
+            out->result = PUDDLE_NET_NOT_PROVEN;
+            switch (out->proof) {
+            case PUDDLE_RECEIPT_MISSING:
+                if (status == 404)
+                    why(out, PUDDLE_NET_NOT_PROVEN, "the Puddle at %s didn't recognise us: it isn't them, or they no longer have a stream with us",
+                        addr->address);
+                else
+                    why(out, PUDDLE_NET_NOT_PROVEN, "something at %s answered (HTTP %d) without signing for it, so it isn't them", addr->address,
+                        status);
+                break;
+            case PUDDLE_RECEIPT_WRONG_KEY:
+                why(out, PUDDLE_NET_NOT_PROVEN, "the Puddle at %s couldn't prove it's them: it signed with a key we don't hold for them",
+                    addr->address);
+                break;
+            case PUDDLE_RECEIPT_OTHER_CERT:
+                why(out, PUDDLE_NET_NOT_PROVEN, "the connection to %s was intercepted: what answered isn't the Puddle that signed", addr->address);
+                break;
+            default:
+                why(out, PUDDLE_NET_NOT_PROVEN, "the Puddle at %s couldn't prove it's them: its signature doesn't check out", addr->address);
+                break;
+            }
+        }
     }
 done:
     if (ssl) {

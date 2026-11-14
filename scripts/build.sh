@@ -26,10 +26,15 @@ if [ "$(uname)" = Darwin ] && command -v brew >/dev/null; then
   args+=(-DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)")
 fi
 
+# A job count, always: with Makefiles, a bare --parallel means no limit, and a full rebuild then starts dozens of
+# compilers at once (enough to run a 32 GB machine out of memory). At most 8 unless CMAKE_BUILD_PARALLEL_LEVEL says.
+cores=$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+jobs=${CMAKE_BUILD_PARALLEL_LEVEL:-$(( cores < 8 ? cores : 8 ))}
+
 cmake -S . -B build "${args[@]}"
-cmake --build build --parallel
+cmake --build build --parallel "$jobs"
 ctest --test-dir build --output-on-failure
 
 echo
 echo "Built:"
-ls -d build/puddled build/Puddle build/Puddle.app 2>/dev/null | sed 's/^/  /'
+ls -d build/puddled build/Puddle build/Puddle.app 2>/dev/null | sed 's/^/  /'  || true  # one of the app paths is always missing

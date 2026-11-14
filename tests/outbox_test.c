@@ -30,7 +30,7 @@ static struct {
     char id[64];
     char addr[2][64];
     int naddr;
-    char fp[65];       /* recorded fingerprint, "" until first contact */
+    puddle_identity *key; /* whose key we hold for them: their answers must be signed by it. NULL = none (as for a first contact) */
 } peers[MAXP];
 static int npeers;
 
@@ -50,13 +50,13 @@ static int h_addresses(void *u, const char *peer, puddle_address *out, int max)
     return n;
 }
 
-static int h_fingerprint(void *u, const char *peer, const char *fp)
+static int h_peer_key(void *u, const char *peer, unsigned char pub[32])
 {
     (void)u;
     int i = find_peer(peer);
-    if (i < 0) return 1;
-    if (!peers[i].fp[0]) { snprintf(peers[i].fp, 65, "%s", fp); return 1; }
-    return !strcmp(peers[i].fp, fp);
+    if (i < 0 || !peers[i].key) return 0;
+    puddle_identity_public(peers[i].key, pub, NULL, NULL);
+    return 1;
 }
 
 #define MAXLOG 128
@@ -114,7 +114,7 @@ static int add_peer(int i, unsigned port)
     fake_id(i, peers[npeers].id);
     snprintf(peers[npeers].addr[0], 64, "127.0.0.1:%u", port);
     peers[npeers].naddr = 1;
-    peers[npeers].fp[0] = '\0';
+    peers[npeers].key = NULL;
     return npeers++;
 }
 
@@ -189,7 +189,7 @@ int main(void)
     snprintf(dir, sizeof dir, "%s/srv2", root);
     if (ts_start(&srv2, dir, 0) != 0) return 2;
 
-    hooks = (puddle_outbox_hooks){ .send = puddle_federation_send, .identity = me, .addresses = h_addresses, .fingerprint = h_fingerprint, .done = h_done,
+    hooks = (puddle_outbox_hooks){ .send = puddle_federation_send, .identity = me, .addresses = h_addresses, .peer_key = h_peer_key, .done = h_done,
                                    .now_ms = now_cb, .net = { .connect_timeout_s = 2, .io_timeout_s = 2, .total_timeout_s = 5 } };
     puddle_outbox *ob = open_ob(data);
     CHECK(ob != NULL);
@@ -263,7 +263,6 @@ int main(void)
         CHECK(ndone == 3 && one >= 0 && two > one && three >= 0);
     }
     CHECK(count(ob, PUDDLE_OB_QUEUED) == 0 && files_in(data) == 0);
-    CHECK(!strcmp(peers[a].fp, srv.fingerprint) && !strcmp(peers[b].fp, srv2.fingerprint));        /* recorded at first contact */
     puddle_outbox_poll(ob);
     CHECK(srv.requests == before + 2);                                                             /* nothing is sent twice */
 
@@ -431,30 +430,125 @@ int main(void)
     }
     ts_set(&srv, TS_NORMAL, 200, "{}", 0);
 
-    /* ---- the certificate changes: hold everything, send nothing, until the owner says so ---- */
+    /* ---- proving who answers (docs/streams.md): for a peer whose key we hold, only their signature counts ---- */
     {
-        char old_fp[65];
-        snprintf(old_fp, 65, "%s", peers[a].fp);
-        snprintf(peers[a].fp, 65, "%s", "0000000000000000000000000000000000000000000000000000000000000000");
+        char bdir[700], pz[PUDDLE_PHRASE_LEN + 1];
+        snprintf(bdir, sizeof bdir, "%s/bob", root);
+        puddle_identity *bob = puddle_identity_create(bdir, pz, err, sizeof err);
+        CHECK(bob != NULL);
+        testsrv real;                                                                              /* Bob's Puddle, with its own certificate */
+        snprintf(bdir, sizeof bdir, "%s/srv3", root);
+        CHECK(ts_start(&real, bdir, 0) == 0);
+        ts_set(&real, TS_NORMAL, 200, "{}", 0);
+        real.signer = bob;
+        char bob_id[PUDDLE_USER_ID_LEN + 1];
+        puddle_identity_id(bob, bob_id);
+        snprintf(peers[npeers].id, 64, "%s", bob_id);                                              /* the ids must be real: receipts name them */
+        snprintf(peers[npeers].addr[0], 64, "127.0.0.1:%u", srv.port);                            /* his old address: someone else is there now */
+        peers[npeers].naddr = 1;
+        peers[npeers].key = bob;
+        int pb = npeers++;
+        ts_set(&srv, TS_NORMAL, 200, "{}", 0);
+        srv.signer = NULL;
+
+        /* the squatter answers, but can't sign as Bob: the message is never handed over, and waits, saying why */
         ndone = 0;
-        CHECK(puddle_outbox_enqueue(ob, A, "h1", "/stream/v1/x", "{\"n\":1}", 7, err, sizeof err) == 0);
-        CHECK(puddle_outbox_enqueue(ob, A, "h2", "/stream/v1/x", "{\"n\":2}", 7, err, sizeof err) == 0);
-        before = srv.requests;
+        int req0 = srv.requests, hel0 = srv.hellos;
+        CHECK(puddle_outbox_enqueue(ob, bob_id, "msg1", "/stream/v1/events", "{\"n\":1}", 7, err, sizeof err) == 0);
+        CHECK(puddle_outbox_enqueue(ob, bob_id, "msg2", "/stream/v1/events", "{\"n\":2}", 7, err, sizeof err) == 0);
         puddle_outbox_poll(ob);
-        CHECK(srv.requests == before);                                                             /* nothing reached it */
-        CHECK(count(ob, PUDDLE_OB_HELD) == 2 && count(ob, PUDDLE_OB_QUEUED) == 0);
-        CHECK(ndone == 1 && done_log[0].outcome == PUDDLE_OB_HOLD && strstr(done_log[0].reason, "different certificate"));
+        CHECK(srv.hellos == hel0 + 1 && srv.requests == req0 + 1);                                 /* the handshake, and nothing after it */
+        CHECK(ndone == 0 && count(ob, PUDDLE_OB_QUEUED) == 2 && count(ob, PUDDLE_OB_FAILED) == 0);
+        {
+            puddle_ob_item i0, i1;
+            CHECK(get_item(ob, 0, &i0) && get_item(ob, 1, &i1));
+            CHECK(strstr(i0.reason, "without signing") && i0.attempts == 1 && i0.next_ms > clock_now);  /* on the schedule, like an absence */
+            CHECK(!strcmp(i1.reason, i0.reason));                                                  /* everything waiting for him says so */
+            free(i0.body);
+            free(i1.body);
+        }
+        /* ...and a plain 404, as a Puddle that doesn't know us gives */
+        ts_set(&srv, TS_NORMAL, 404, "", 0);
+        clock_now += 6 * MIN;
         puddle_outbox_poll(ob);
-        CHECK(ndone == 1 && srv.connections >= 1);                                                 /* and it is not tried again */
-        puddle_outbox_close(ob);
-        ob = open_ob(data);
-        CHECK(count(ob, PUDDLE_OB_HELD) == 2);                                                     /* still held after a restart */
-        CHECK(puddle_outbox_release(ob, B) == 0);                                                  /* another peer's: not ours to release */
-        CHECK(puddle_outbox_release(ob, A) == 2 && count(ob, PUDDLE_OB_QUEUED) == 2);
-        snprintf(peers[a].fp, 65, "%s", old_fp);                                                   /* the owner trusted the new one: here, the old */
+        {
+            puddle_ob_item i0;
+            CHECK(get_item(ob, 0, &i0) && strstr(i0.reason, "didn't recognise us") && i0.state == PUDDLE_OB_QUEUED);
+            free(i0.body);
+        }
+        /* someone in the middle passing on Bob's signed answers: Bob signs for his own certificate, we see theirs */
+        ts_set(&srv, TS_NORMAL, 200, "{}", 0);
+        srv.signer = bob;
+        snprintf(srv.sign_fp, sizeof srv.sign_fp, "%s", real.fingerprint);
+        clock_now += 6 * MIN;
+        req0 = srv.requests;
         puddle_outbox_poll(ob);
-        CHECK(srv.requests == before + 2 && count(ob, PUDDLE_OB_QUEUED) == 0 && ndone == 3);
-        CHECK(puddle_outbox_release(ob, A) == 0);
+        CHECK(srv.requests == req0 + 1 && ndone == 0);                                            /* still only ever the handshake */
+        {
+            puddle_ob_item i0;
+            CHECK(get_item(ob, 0, &i0) && strstr(i0.reason, "intercepted"));
+            free(i0.body);
+        }
+        srv.signer = NULL;
+        srv.sign_fp[0] = '\0';
+
+        /* he tells us where he is now: the old address and the new are both tried, and the real one answers */
+        snprintf(peers[pb].addr[0], 64, "127.0.0.1:%u", real.port);
+        snprintf(peers[pb].addr[1], 64, "127.0.0.1:%u", srv.port);
+        peers[pb].naddr = 2;
+        CHECK(puddle_outbox_retry_now(ob, bob_id) == 2);
+        puddle_outbox_poll(ob);
+        CHECK(real.hellos == 1 && real.requests == 3);                                            /* one handshake, then both messages */
+        CHECK(ndone == 2 && done_log[0].outcome == PUDDLE_OB_DELIVERED && done_log[1].outcome == PUDDLE_OB_DELIVERED);
+        CHECK(count(ob, PUDDLE_OB_QUEUED) == 0);
+        /* a proven certificate is good for a while: the next message needs no handshake */
+        CHECK(puddle_outbox_enqueue(ob, bob_id, "msg3", "/stream/v1/events", "{\"n\":3}", 7, err, sizeof err) == 0);
+        puddle_outbox_poll(ob);
+        CHECK(real.hellos == 1 && real.requests == 4 && ndone == 3);
+        /* ...but not for ever */
+        clock_now += 11 * MIN;
+        CHECK(puddle_outbox_enqueue(ob, bob_id, "msg4", "/stream/v1/events", "{\"n\":4}", 7, err, sizeof err) == 0);
+        puddle_outbox_poll(ob);
+        CHECK(real.hellos == 2 && real.requests == 6 && ndone == 4);
+        /* a route that sets a stream up (they may not know our key yet) has no handshake: its receipt is the proof */
+        CHECK(puddle_outbox_enqueue(ob, bob_id, "result", "/stream/v1/access/result", "{}", 2, err, sizeof err) == 0);
+        clock_now += 11 * MIN;
+        puddle_outbox_poll(ob);
+        CHECK(real.hellos == 2 && real.requests == 7 && ndone == 5 && done_log[4].outcome == PUDDLE_OB_DELIVERED);
+        /* Bob's certificate changes (he made a new one): nothing goes to it until it is proven, then all is well, nobody asked */
+        {
+            int port = (int)real.port;
+            ts_stop(&real);
+            snprintf(bdir, sizeof bdir, "%s/srv3-new", root);
+            CHECK(ts_start(&real, bdir, (unsigned)port) == 0);
+            ts_set(&real, TS_NORMAL, 200, "{}", 0);
+            real.signer = bob;
+            CHECK(puddle_outbox_enqueue(ob, bob_id, "msg5", "/stream/v1/events", "{\"n\":5}", 7, err, sizeof err) == 0);
+            CHECK(puddle_outbox_enqueue(ob, bob_id, "msg6", "/stream/v1/events", "{\"n\":6}", 7, err, sizeof err) == 0);
+            puddle_outbox_poll(ob);
+            CHECK(real.hellos == 1 && real.requests == 3 && ndone == 7 && count(ob, PUDDLE_OB_QUEUED) == 0);
+        }
+        /* Bob refuses, in his own name: that is an answer, and it is final */
+        ts_set(&real, TS_NORMAL, 403, "{\"error\":\"no_stream\"}", 0);
+        CHECK(puddle_outbox_enqueue(ob, bob_id, "msg7", "/stream/v1/events", "{\"n\":7}", 7, err, sizeof err) == 0);
+        puddle_outbox_poll(ob);
+        CHECK(ndone == 8 && done_log[7].outcome == PUDDLE_OB_REJECTED && strstr(done_log[7].reason, "closed the stream"));
+        CHECK(count(ob, PUDDLE_OB_FAILED) == 1);
+        /* nothing at any address: the plain absence it always was */
+        ts_stop(&real);
+        peers[pb].naddr = 1;
+        ts_set(&srv, TS_NORMAL, 200, "{}", 0);
+        {
+            puddle_ob_item *l;
+            size_t n;
+            puddle_outbox_list(ob, &l, &n);
+            for (size_t i = 0; i < n; i++) puddle_outbox_dismiss(ob, l[i].seq);
+            puddle_outbox_list_free(l, n);
+        }
+        peers[pb].key = NULL;
+        peers[pb].naddr = 0;
+        puddle_identity_close(bob);
+        ndone = 0;
     }
 
     /* ---- several addresses: the first that answers ---- */

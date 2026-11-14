@@ -37,10 +37,15 @@ class Chats : public QObject {
     Q_PROPERTY(QString currentAvatar READ currentAvatar NOTIFY currentInfoChanged)
     Q_PROPERTY(QString currentColor READ currentColor NOTIFY currentInfoChanged)
     Q_PROPERTY(QString currentState READ currentState NOTIFY currentInfoChanged)   // stream state of the open chat
-    Q_PROPERTY(bool currentCertChanged READ currentCertChanged NOTIFY currentInfoChanged)
     Q_PROPERTY(bool hasOlder READ hasOlder NOTIFY hasOlderChanged)                 // more history than is loaded
     Q_PROPERTY(bool attentive READ attentive WRITE setAttentive NOTIFY attentiveChanged) // someone is looking at the window
     Q_PROPERTY(bool connected READ connected NOTIFY connectedChanged)
+    // Phones paired with this Puddle (the desktop app only: a phone may not manage them): id, name, state, check, created_at, last_seen
+    Q_PROPERTY(QObject *devices READ devices CONSTANT)
+    Q_PROPERTY(int pendingDevices READ pendingDevices NOTIFY devicesChanged)    // waiting for the owner to accept them
+    Q_PROPERTY(QString pairingLink READ pairingLink NOTIFY pairingChanged)       // the one-time link for a phone, "" if none is open
+    Q_PROPERTY(qint64 pairingExpires READ pairingExpires NOTIFY pairingChanged)  // UTC ms
+    Q_PROPERTY(QString problem READ problem NOTIFY connectedChanged)             // a phone: why the Puddle's answers are not believed, "" if they are
     Q_PROPERTY(QObject *ponds READ ponds CONSTANT)                  // the Ponds we are in, and the one that is open (ponds.h)
 public:
     explicit Chats(QObject *parent = nullptr);
@@ -62,6 +67,22 @@ public:
     void setTakeFile(TakeFile fn, QThreadPool *pool) { takeFile_ = std::move(fn); takePool_ = pool; }
     QObject *profiles() { return &profiles_; }
     QString myName() const { return myName_; }
+    QString myLink() const { return myLink_; } // where others find this Puddle, as it says ("" until known)
+    QString problem() const { return api_.lastProblem(); }
+    QObject *devices() { return &devices_; }
+    int pendingDevices() const { return pendingDevices_; }
+    QString pairingLink() const { return pairingLink_; }
+    qint64 pairingExpires() const { return pairingExpires_; }
+
+    // A phone: talk to its Puddle as the paired device whose key this is (docs/identity.md, "Devices").
+    bool attachDevice(const QUrl &base, const QString &puddleId, const QByteArray &puddleKey, const QByteArray &deviceSeed);
+
+    // The desktop app: let a phone in.
+    Q_INVOKABLE void startPairing();
+    Q_INVOKABLE void stopPairing();
+    Q_INVOKABLE void acceptDevice(const QString &id);
+    Q_INVOKABLE void declineDevice(const QString &id);
+    Q_INVOKABLE void revokeDevice(const QString &id);
     QString myAvatar() const { return myAvatar_; }
     QString current() const { return current_; }
     int friendCount() const { return friends_; }
@@ -70,7 +91,6 @@ public:
     QString currentAvatar() const { return curAvatar_; }
     QString currentColor() const { return curColor_; }
     QString currentState() const { return curState_; }
-    bool currentCertChanged() const { return curCert_; }
     bool hasOlder() const { return hasOlder_; }
     bool attentive() const { return attentive_; }
     void setAttentive(bool a);
@@ -84,6 +104,7 @@ public:
     // Start talking to the Puddle at `base`, reading its token and certificate from the files.
     bool attach(const QUrl &base, const QString &tokenFile, const QString &certFile);
     void setInterval(int ms) { timer_.setInterval(ms); }
+    bool peopleLoaded() const { return peopleLoaded_; } // the first list has come: requests after this are new
     void setPageSize(int n) { pageSize_ = n; } // how many of a list to ask for at a time (for tests; the Puddle caps it at 100 or 200)
 
     // Fetch everything now (also runs on a timer).
@@ -113,7 +134,7 @@ public:
     // starts with it first, then the rest, each in order of recent activity. At most `limit`. Each is { id, name, avatar, color }.
     Q_INVOKABLE QVariantList findFriends(const QString &text, int limit) const;
     Q_INVOKABLE int friendMatches(const QString &filter) const;
-    // What we know of a person we have a stream with, for their profile in the side panel: { name, blurb, about, pronouns, state, since, address, certChanged }.
+    // What we know of a person we have a stream with, for their profile in the side panel: { name, blurb, about, pronouns, state, since, address }.
     // Empty if there is no such stream.
     Q_INVOKABLE QVariantMap person(const QString &userId) const; // how many friends have `filter` (any case) in their name; all of them if empty
     Q_INVOKABLE bool isGroupMember(const QString &userId) const { for (const QJsonObject &m : members_.items()) if (m.value("id").toString() == userId) return true; return false; }
@@ -132,7 +153,6 @@ public:
     Q_INVOKABLE void cancel(const QString &userId);      // withdraw our own request, or end a stream we no longer want
     Q_INVOKABLE void block(const QString &userId);
     Q_INVOKABLE void unblock(const QString &userId);
-    Q_INVOKABLE void trust(const QString &userId);       // accept their changed certificate
     Q_INVOKABLE void request(const QString &link, const QString &note, const QString &profile = QString());
 
     // ---- files in messages (docs/files.md) ----
@@ -171,6 +191,9 @@ signals:
     void unreadTotalChanged();
     void incomingRequestsChanged();
     void connectedChanged();
+    void devicesChanged();
+    void pairingChanged();
+    void newDevice(const QString &name); // a phone asks to be let in
     void failed(const QString &what);                    // something the owner asked for did not work
     void newIncoming(const QString &userId, int unread); // for notifications: a chat has more unread than before
     void newRequest(const QString &userId);
@@ -197,6 +220,7 @@ private:
     void refreshMessages();
     void updateCurrentInfo();
     void refreshBlocked();
+    void refreshDevices();
     void refreshGroups();
     void refreshProfiles();
     void refreshFileRequests();
@@ -212,15 +236,20 @@ private:
     ApiClient api_;
     Ponds ponds_{ &api_ };
     QTimer timer_;
-    JsonListModel people_, conversations_, messages_, blocked_, profiles_, invites_, members_, sidebar_;
+    JsonListModel people_, conversations_, messages_, blocked_, profiles_, invites_, members_, sidebar_, devices_;
+    int pendingDevices_ = 0;
+    QSet<QString> knownDevices_;
+    bool devicesLoaded_ = false;
+    QString pairingLink_;
+    qint64 pairingExpires_ = 0;
     QHash<QString, QJsonObject> groups_;   // the groups we are in or invited to, by id
     QSet<QString> invitedTo_;
     QString currentKind_ = QStringLiteral("dm"), self_;
     int groupInviteCount_ = 0;
     bool groupsLoaded_ = false;
     QString curName_, curAvatar_, curColor_, curState_;
-    bool curCert_ = false, hasOlder_ = false, attentive_ = true;
-    QString myName_, myAvatar_, cacheDir_, fileCacheDir_;
+    bool hasOlder_ = false, attentive_ = true;
+    QString myName_, myAvatar_, myLink_, cacheDir_, fileCacheDir_;
     QSet<QString> downloading_;
     QString cachedPath(const QString &id, const QString &name) const;
     QSet<QString> fetching_;
@@ -253,7 +282,7 @@ private:
     int pageSize_ = 100;
     bool connected_ = true; // until a request fails, so the banner does not flash at start-up
     bool marking_ = false, profilesLoaded_ = false;
-    bool busy_[7] = { false, false, false, false, false, false, false };
+    bool busy_[8] = { false, false, false, false, false, false, false, false };
     QSet<QString> fileRequests_;   // "<user> <message> <file>" of each request seen, to notify of new ones
     bool fileRequestsLoaded_ = false;
 };

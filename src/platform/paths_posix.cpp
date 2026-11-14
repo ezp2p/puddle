@@ -25,6 +25,11 @@ static const char *home_dir(void)
 int puddle_config_default_path(char *out, size_t n)
 {
     int w;
+    const char *env = getenv("PUDDLE_CONFIG"); /* a container says where its config is once, for every command */
+    if (env && *env) {
+        w = snprintf(out, n, "%s", env);
+        return (w < 0 || (size_t)w >= n) ? -1 : 0;
+    }
     const char *home = home_dir();
     if (!home)
         return -1;

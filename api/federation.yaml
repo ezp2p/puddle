@@ -15,6 +15,12 @@ info:
     someone it doesn't know is `POST /stream/v1/access`, and it answers that identically whatever it
     decides.
 
+    **Every authenticated answer is signed back** (`X-Puddle-Receipt`, see the `Receipt` header below), so the sender
+    knows it reached who it meant, by their keys and not by their TLS certificate, which only encrypts and may change
+    at any time. A sender that holds the recipient's key treats an answer without a good receipt as not delivered,
+    and calls `GET /stream/v1/hello` before sending anything that needs a stream. Full rules in docs/streams.md,
+    "Proving who answers".
+
     Conventions:
     - JSON over HTTPS, versioned under `/stream/v1`. Peers are found by an address, typed once to ask for a stream; ids are learned from the answer.
     - Bodies are limited per route (4 MiB at most), decided before they are read. A request over its limit is
@@ -48,6 +54,23 @@ tags:
     description: Files sent in messages, fetched a checked chunk at a time (docs/files.md)
 
 paths:
+  /stream/v1/hello:
+    get:
+      tags: [access]
+      operationId: hello
+      summary: Prove who you are before anything is sent
+      description: |
+        Does nothing but answer, to a peer whose key we hold (`404` to anyone else, like any unknown path). Its
+        point is the `X-Puddle-Receipt` on the answer: the caller checks it is signed by the key it holds for us and
+        names the certificate it sees on this connection, and only then sends what it has for us, over a connection
+        showing that same certificate.
+      responses:
+        "204":
+          description: Here
+          headers:
+            X-Puddle-Receipt: { $ref: "#/components/headers/Receipt" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
   /stream/v1/identity:
     get:
       tags: [access]
@@ -90,12 +113,10 @@ paths:
       operationId: pushAddress
       summary: Tell a peer where to reach you now
       description: |
-        Where the sender is now, signed by its current key. Sent to every active stream when its address or its
-        TLS certificate changes (it notices at start). The highest `seq` wins; one that is not newer, or that
-        carries no addresses, leaves what we hold alone. A `tls_fp` in it is the fingerprint of the sender's new
-        certificate: since the record is signed by a key we already trust, it is accepted without asking, and anything
-        held back for the owner on account of that certificate is released. (A certificate that changes **without**
-        being announced still holds sending until the owner says it is fine.) Addresses we would never connect to
+        Where the sender is now, signed by its current key. Sent to every active stream when its address changes
+        (it notices at start). The highest `seq` wins; one that is not newer, or that carries no addresses, leaves
+        what we hold alone. Taking one sends whatever was waiting for the sender at once. A `tls_fp` member, which
+        older Puddles include, is ignored: certificates are not tracked (see `hello`). Addresses we would never connect to
         (unspecified, multicast, link-local) are refused. Answered `400 bad_record` for a record that does not check
         out, `204` otherwise.
       requestBody:
@@ -416,6 +437,18 @@ components:
         five minutes of its clock, the nonce is new, `kid` is the sender's current key, and the
         signature. Full rules in docs/streams.md.
 
+  headers:
+    Receipt:
+      description: |
+        `v1 id=<responder id>; kid=<key id>; fp=<hex>; sig=<base64>` on every answer to a request that authenticated, from
+        someone the responder already holds a record of. None on the plain `404` a stranger gets, none to a stranger who
+        proved a request with a chain of their own, and none ever on `access` or `access/status`, which answer everyone alike. `sig` is an Ed25519 signature by the responder's current key over the lines
+        `puddle-receipt-v1`, the responder's user id, the request's `nonce`, the HTTP status, hex SHA-256 of the answer's
+        body (of nothing for an empty one), and `fp`, the hex SHA-256 of the responder's own TLS certificate. The caller checks
+        the id and key are the ones it holds for the responder and the certificate is the one it saw on this
+        connection; anything else is not an answer from them. Full rules in docs/streams.md.
+      schema: { type: string }
+
   schemas:
     UserId:
       type: string
@@ -503,7 +536,7 @@ components:
       type: object
       description: |
         `record` is the exact JSON text
-        `{"type":"address","id":..,"addresses":[..],"tls_fp":"<64 hex>","seq":N,"ts":..}` (`tls_fp` optional), and `sig`
+        `{"type":"address","id":..,"addresses":[..],"seq":N,"ts":..}` (a `tls_fp` from an older Puddle is ignored), and `sig`
         is `<key id>:<base64>` over `puddle-address-v1\n` followed by those bytes, made with the sender's current key.
       required: [record, sig]
       properties:

@@ -65,6 +65,7 @@ struct puddle_server {
     puddle_profiles *profiles;
     puddle_assignments *assignments;
     puddle_streams *streams;
+    puddle_devices *devices;
     puddle_people *people;
     puddle_conversations *conversations;
     puddle_groups *groups;
@@ -144,19 +145,16 @@ static int ob_addresses(void *user, const char *peer, puddle_address *out, int m
     return n;
 }
 
-static int ob_fingerprint(void *user, const char *peer, const char *fp)
+static int ob_peer_key(void *user, const char *peer, unsigned char pub[32])
 {
-    int ok = puddle_streams_check_fingerprint(((puddle_server *)user)->streams, peer, fp);
-    if (!ok)
-        puddle_log(PUDDLE_LOG_WARN, "%.12s… has a different certificate from before; nothing is sent until you say it is fine", peer);
-    return ok;
+    return puddle_streams_current_key(((puddle_server *)user)->streams, peer, pub);
 }
 
 static void ob_done(void *user, const puddle_ob_item *it, puddle_ob_outcome outcome, const puddle_net_reply *reply)
 {
     puddle_flow_done(&((puddle_server *)user)->ctx, it, outcome, reply);
     puddle_log(outcome == PUDDLE_OB_DELIVERED ? PUDDLE_LOG_INFO : PUDDLE_LOG_WARN, "outbox: %s to %.12s… %s%s%s", it->kind, it->peer,
-               outcome == PUDDLE_OB_DELIVERED ? "delivered" : outcome == PUDDLE_OB_HOLD ? "held" : "failed",
+               outcome == PUDDLE_OB_DELIVERED ? "delivered" : "failed",
                outcome == PUDDLE_OB_DELIVERED ? "" : ": ", outcome == PUDDLE_OB_DELIVERED ? "" : it->reason);
 }
 
@@ -212,6 +210,9 @@ puddle_server *puddle_server_create(const puddle_config *cfg, char *err, size_t 
     s->streams = puddle_streams_open(cfg->data_dir, err, errlen);
     if (!s->streams)
         goto fail;
+    s->devices = puddle_devices_open(cfg->data_dir, err, errlen);
+    if (!s->devices)
+        goto fail;
     s->people = puddle_people_open(cfg->data_dir, err, errlen);
     if (!s->people)
         goto fail;
@@ -240,7 +241,7 @@ puddle_server *puddle_server_create(const puddle_config *cfg, char *err, size_t 
         goto fail;
     }
     {
-        puddle_outbox_hooks hooks = { .send = puddle_federation_send, .identity = s->identity, .addresses = ob_addresses, .fingerprint = ob_fingerprint,
+        puddle_outbox_hooks hooks = { .send = puddle_federation_send, .identity = s->identity, .addresses = ob_addresses, .peer_key = ob_peer_key,
                                       .done = ob_done, .user = s };
         s->outbox = puddle_outbox_open(cfg->data_dir, &hooks, err, errlen);
         if (!s->outbox)
@@ -270,7 +271,7 @@ puddle_server *puddle_server_create(const puddle_config *cfg, char *err, size_t 
         goto fail;
     }
     s->ctx = (puddle_ctx){ .config = &s->cfg, .identity = s->identity, .store = s->store, .profiles = s->profiles,
-                           .assignments = s->assignments, .streams = s->streams, .people = s->people, .conversations = s->conversations, .groups = s->groups, .outbox = s->outbox, .files = s->files, .transfers = s->transfers, .ponds = s->ponds, .replay = s->replay,
+                           .assignments = s->assignments, .streams = s->streams, .devices = s->devices, .people = s->people, .conversations = s->conversations, .groups = s->groups, .outbox = s->outbox, .files = s->files, .transfers = s->transfers, .ponds = s->ponds, .replay = s->replay,
                            .anon_bucket = s->anon_bucket, .access_limit = s->access_limit, .roll_slot = s->roll_slot,
                            .peer_key = puddle_streams_peer_key, .peer_key_user = s->streams, .courier = &puddle_federation_courier };
     s->router = (puddle_router){ .ctx = &s->ctx };
@@ -379,6 +380,7 @@ void puddle_server_destroy(puddle_server *s)
     puddle_transfers_close(s->transfers); /* stops its worker, which uses the streams and the files */
     puddle_outbox_close(s->outbox); /* stops its worker before what the worker uses goes away */
     puddle_streams_close(s->streams);
+    puddle_devices_close(s->devices);
     puddle_people_close(s->people);
     puddle_files_close(s->files);
     puddle_groups_close(s->groups);

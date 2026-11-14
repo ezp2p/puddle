@@ -13,7 +13,7 @@ extern "C" {
 /* The separator between a directory and a name: '/' or '\\'. */
 char puddle_path_sep(void);
 
-/* ~/.config/puddle/puddle.yaml on macOS/Linux, %APPDATA%\puddle\puddle.yaml on Windows. */
+/* $PUDDLE_CONFIG if it is set; else ~/.config/puddle/puddle.yaml on macOS/Linux, %APPDATA%\puddle\puddle.yaml on Windows. */
 int puddle_config_default_path(char *out, size_t n);
 
 /* ~/Library/Application Support/Puddle (macOS), $XDG_DATA_HOME/puddle or ~/.local/share/puddle (Linux),

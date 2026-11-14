@@ -29,6 +29,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #define HISTORY_PAGE 50
 #define EVENTS_MAX_BODY (16u << 20)  /* 200 events, each up to a message or a member with a profile */

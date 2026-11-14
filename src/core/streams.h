@@ -56,8 +56,6 @@ typedef struct {
     char addresses[PUDDLE_STREAM_MAX_ADDRS][PUDDLE_ADDR_MAX]; /* where to reach them, best first */
     int naddr;
     int64_t addr_seq;  /* of the signed address record these came from; the highest wins */
-    char tls_fp[65];       /* SHA-256 of their certificate as first seen, hex; "" until we have connected to them */
-    char tls_fp_seen[65];  /* a different certificate we met since, waiting for the owner to say it is fine; else "" */
     int64_t chain_sent;    /* the highest seq of OUR key chain this peer is known to hold; -1 = not known */
     int64_t addr_sent;     /* the highest seq of OUR address record this peer is known to hold; -1 = not known */
     char ticket[33];       /* 32 hex characters: a request we sent to an address, until its answer names who they are (and the
@@ -153,13 +151,15 @@ size_t puddle_streams_size(puddle_streams *s);
  * `streams` is the puddle_streams. Which states may do what is the endpoints' business, not this one's. */
 int puddle_streams_peer_key(void *streams, const char *sender_id, const char *kid, unsigned char sign_pub[32]);
 
-/* Is `fingerprint_hex` the certificate we know for this peer? The first one seen is recorded and trusted (their
- * address can change; the certificate does not). 1 yes (or a peer we hold no record of, which is no one's to
- * judge), 0 it differs: it is remembered as `tls_fp_seen` for the owner to see, and nothing is sent to it.
- * The outbox calls this once the certificate is known and before anything is sent. */
-int puddle_streams_check_fingerprint(puddle_streams *s, const char *id, const char *fingerprint_hex);
-/* The owner trusts the certificate we met (`tls_fp_seen`): it becomes the known one. 0 done, 1 none was waiting, -1. */
-int puddle_streams_trust_fingerprint(puddle_streams *s, const char *id, char *err, size_t errlen);
+/* The current signing key of a peer we hold a chain for, whichever it is: 1 and `sign_pub`, or 0 for a stranger, a peer with
+ * no chain yet, or a blocked id. Their answers must be signed by it (the outbox's `peer_key`; docs/streams.md, "Proving who
+ * answers"). `streams` is the puddle_streams. Their TLS certificate is not recorded: it only encrypts. */
+int puddle_streams_current_key(void *streams, const char *id, unsigned char sign_pub[32]);
+
+/* Do we hold any record of `id` (in any state, with or without their chain; blocked or not)? Whether to sign for an answer to
+ * them: a stranger, who could have proven a request with a chain of their own, is told nothing, and a blocked peer is told
+ * nothing different from before. */
+int puddle_streams_knows(puddle_streams *s, const char *id);
 
 /* ---- blocks: by user id, local only, and they override everything ---- */
 

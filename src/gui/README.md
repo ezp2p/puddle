@@ -8,7 +8,10 @@ src/gui/
   app/              the C++ behind the window
     backend.*         starts the embedded Puddle, first-run setup, the tray and Dock, clipboard
     chats.*           what the window shows, kept fresh from the owner API: people, conversations, messages, groups
-    apiclient.*       the HTTPS calls to the owner API
+    apiclient.*       the HTTPS calls to the owner API: with the owner token (this computer), or signed by a phone's own key,
+                      believing only answers its Puddle signed (docs/identity.md, "Devices")
+    phone.*           the app on a phone: pairing with the owner's Puddle, kept in device.json; on Android, or PUDDLE_PHONE=1
+    qrimage.*         "image://qr/<text>": the pairing link as a QR code (only where libqrencode is found)
     jsonlistmodel.*   the list model every ListView reads
     ponds.*           the Ponds for the rail, and the open one's channels, members and messages (chats.ponds)
     composer.*        the files waiting to go with a message (QML: import Puddle.Files): their type, size and tiny preview,
@@ -16,7 +19,7 @@ src/gui/
     dock*             macOS Dock visibility
   qml/              the screens, by what they are about
     Main.qml          the window itself: first-run, errors, the tray, notifications
-    setup/            first-run screen (recovery phrase)
+    setup/            first-run screen (recovery phrase); Pair: a phone connecting to its Puddle
     shell/            Shell: a canvas with the page on it and two floating cards: the rail and sidebar at the left, the context panel at the right.
                       A little circle at the top of the page folds each card away (Ctrl/Cmd+B, Ctrl/Cmd+U)
                       Sidebar, SidebarRow: the one list of friends and groups, with what waits for an answer pinned at the top
@@ -27,7 +30,7 @@ src/gui/
     chat/             ChatPage: one conversation. PondPage: a Pond's text channel. MessageFiles: a message's photos and videos as a grid (the sender's blurred preview until
                       each is here) and other files as cards. MediaViewer: a photo or a video over the whole window
     dialogs/          JoinPondDialog: the + under the Ponds on the rail. NewConversationDialog: the "+": message one friend or start a group, or add a friend by address; also asks more friends into a group
-    settings/         the settings page (activity log, developer mode, who is blocked) and PersonRow, the blocked-person row
+    settings/         the settings page (activity log, developer mode, phones, who is blocked) and PersonRow, the blocked-person row
     components/       small things used everywhere: Card (a floating panel), PanelToggle (the fold-away circle), Avatar, Icon, ContextTrigger (right-click), FieldMenu (text box menu),
                       ConfirmDialog, ConversationMenu, ScrollList and ScrollArea (see below)
     theme/            Theme: every colour, size and gap, in one file
@@ -65,4 +68,7 @@ are there. Colours that follow light or dark mode come from `palette` where they
 - `tests/chats_test.cpp` and `tests/backend_test.cpp` test `app/` without a window.
 - Videos play only on the system's own platform (on macOS, AVFoundation answers through its event loop), not the offscreen one the
   tests use. `PUDDLE_TEST_VIDEO=<a short clip> ./build/ui_test` runs the video part too, with the window showing.
-- Run all of them with `scripts/build.sh`; to try the window by hand use `scripts/dev.sh alice` (and `bob`, … for more).
+- `tests/phone_test.cpp` tests the app as a phone against real Puddles, without a window.
+- Run all of them with `scripts/build.sh`; to try the window by hand use `scripts/dev.sh alice` (and `bob`, … for more). To try
+  the phone app on a desktop, run the app with `PUDDLE_PHONE=1 PUDDLE_PHONE_DIR=/some/empty/folder` and pair it with a link
+  from another copy's Settings.

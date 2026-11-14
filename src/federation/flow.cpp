@@ -327,8 +327,6 @@ void puddle_flow_done(void *user, const puddle_ob_item *item, puddle_ob_outcome 
     puddle_ctx *ctx = (puddle_ctx *)user;
     puddle_sync_done(ctx, item, outcome);
     puddle_profiles_done(ctx, item, outcome, reply);
-    if (outcome == PUDDLE_OB_HOLD)
-        return; /* waiting for the owner to trust the new certificate; the stream says so */
     char err[300], why[200];
     outcome_note o = { PUDDLE_OWED_NONE, "", 0, 0 };
     if (!strcmp(item->kind, "access") || !strcmp(item->kind, PUDDLE_OB_KIND_OPEN_ACCESS)) {

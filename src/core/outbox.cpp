@@ -76,7 +76,7 @@ int64_t puddle_outbox_retry_delay_ms(int64_t first_offline_ms, int64_t now_ms)
 
 /* ---- files ---- */
 
-static const char *const STATE[] = { "queued", "failed", "held" };
+static const char *const STATE[] = { "queued", "failed" };
 
 #define COLLECTION "outbox"
 
@@ -189,9 +189,11 @@ static int read_item(const char *text, size_t n, puddle_ob_item *it)
         goto out;
     if (puddle_json_member(text, n, "state", &v) != 0 || puddle_json_string(v, tmp, sizeof tmp) != 0)
         goto out;
-    for (state = 0; state < 3 && strcmp(tmp, STATE[state]) != 0; state++)
+    for (state = 0; state < 2 && strcmp(tmp, STATE[state]) != 0; state++)
         ;
-    if (state == 3)
+    if (state == 2 && strcmp(tmp, "held") == 0)
+        state = PUDDLE_OB_QUEUED; /* from before certificates stopped mattering: it is simply waiting */
+    else if (state == 2)
         goto out;
     it->state = (puddle_ob_state)state;
     if (puddle_json_member(text, n, "body", &v) != 0 || v.len < 2 || v.p[0] != '"')
@@ -448,6 +450,23 @@ static void remove_seq(puddle_outbox *ob, uint64_t seq)
         }
 }
 
+/* "they refused it: <why>", from the error code a signed refusal carries */
+static void refusal(const puddle_net_reply *r, char *out, size_t cap)
+{
+    puddle_span v;
+    char code[64] = "";
+    if (r->body && puddle_json_valid_object(r->body, r->body_len) && puddle_json_member(r->body, r->body_len, "error", &v) == 0)
+        puddle_json_string(v, code, sizeof code);
+    if (!strcmp(code, "no_stream"))
+        snprintf(out, cap, "they refused it: they have closed the stream with us");
+    else if (!strcmp(code, "clock_skew"))
+        snprintf(out, cap, "they refused it: our clocks disagree by more than five minutes");
+    else if (code[0])
+        snprintf(out, cap, "they refused it (HTTP %d, %s)", r->status, code);
+    else
+        snprintf(out, cap, "they answered HTTP %d", r->status);
+}
+
 /* Deliver what is waiting for one peer, oldest first, until it is all gone, or the peer is away, or its
  * certificate has changed. This is the only thing that ever runs for a peer, and only one runs at a time, so
  * a peer's items go out in order; different peers run side by side. */
@@ -487,12 +506,9 @@ static void deliver_peer(puddle_outbox *ob, const char *peer)
         if (reply.result == PUDDLE_NET_OK && reply.status >= 200 && reply.status < 300) {
             outcome = PUDDLE_OB_DELIVERED;
         } else if (reply.result == PUDDLE_NET_OK) {
-            snprintf(reason, sizeof reason, "they answered HTTP %d", reply.status);
-        } else if (reply.result == PUDDLE_NET_CERT_CHANGED) {
-            outcome = PUDDLE_OB_HOLD;
-            reached = 0;
-            snprintf(reason, sizeof reason, "%s", reply.reason);
-        } else if (reply.result == PUDDLE_NET_OFFLINE) {
+            refusal(&reply, reason, sizeof reason);
+        } else if (reply.result == PUDDLE_NET_OFFLINE || reply.checked) {
+            /* not them, or nobody: nothing was delivered, so it waits and is tried again (docs/streams.md, "Proving who answers") */
             offline = 1;
             reached = 0;
             snprintf(reason, sizeof reason, "%s", reply.reason);
@@ -515,20 +531,12 @@ static void deliver_peer(puddle_outbox *ob, const char *peer)
                         if (!o->first_offline_ms)
                             o->first_offline_ms = fo;
                         o->next_ms = next;
+                        snprintf(o->reason, sizeof o->reason, "%s", reason); /* what stops the first stops them all, and each says so */
                         save_item(ob, o);
                     }
                 }
             } else if (outcome == PUDDLE_OB_DELIVERED) {
                 remove_seq(ob, it.seq);
-            } else if (outcome == PUDDLE_OB_HOLD) {
-                for (size_t i = 0; i < ob->n; i++) {
-                    puddle_ob_item *o = &ob->items[i];
-                    if (o->state == PUDDLE_OB_QUEUED && !strcmp(o->peer, it.peer)) {
-                        o->state = PUDDLE_OB_HELD;
-                        snprintf(o->reason, sizeof o->reason, "%s", reason);
-                        save_item(ob, o);
-                    }
-                }
             } else {
                 live->state = PUDDLE_OB_FAILED;
                 snprintf(live->reason, sizeof live->reason, "%s", reason);
@@ -538,9 +546,10 @@ static void deliver_peer(puddle_outbox *ob, const char *peer)
             if (reached) { /* they answered, so whatever was counting their absence starts over */
                 for (size_t i = 0; i < ob->n; i++) {
                     puddle_ob_item *o = &ob->items[i];
-                    if (o->state == PUDDLE_OB_QUEUED && !strcmp(o->peer, it.peer) && o->first_offline_ms) {
+                    if (o->state == PUDDLE_OB_QUEUED && !strcmp(o->peer, it.peer) && (o->first_offline_ms || o->reason[0])) {
                         o->first_offline_ms = 0;
                         o->next_ms = now;
+                        o->reason[0] = '\0';
                         save_item(ob, o);
                     }
                 }
@@ -555,7 +564,7 @@ static void deliver_peer(puddle_outbox *ob, const char *peer)
         }
         puddle_net_reply_free(&reply);
         item_free(&it);
-        if (offline || outcome == PUDDLE_OB_HOLD)
+        if (offline)
             return;
         online = 1;
     }
@@ -680,28 +689,6 @@ int puddle_outbox_start(puddle_outbox *ob)
 }
 
 /* ---- the owner's view ---- */
-
-int puddle_outbox_release(puddle_outbox *ob, const char *peer)
-{
-    int n = 0;
-    int64_t now = now_of(ob);
-    ob->mu.lock();
-    for (size_t i = 0; i < ob->n; i++) {
-        puddle_ob_item *o = &ob->items[i];
-        if (o->state == PUDDLE_OB_HELD && !strcmp(o->peer, peer)) {
-            o->state = PUDDLE_OB_QUEUED;
-            o->next_ms = now;
-            o->first_offline_ms = 0;
-            o->reason[0] = '\0';
-            save_item(ob, o);
-            n++;
-        }
-    }
-    if (n)
-        ob->wake.notify_all();
-    ob->mu.unlock();
-    return n;
-}
 
 int puddle_outbox_rewrite(puddle_outbox *ob, uint64_t seq, const char *body, size_t body_len)
 {

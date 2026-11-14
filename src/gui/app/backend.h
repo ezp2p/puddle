@@ -8,6 +8,7 @@
 #include <thread>
 
 #include "chats.h"
+#include "phone.h"
 
 extern "C" {
 #include "core/config.h"
@@ -38,17 +39,28 @@ class Backend : public QObject {
     Q_PROPERTY(bool quitting READ quitting NOTIFY quittingChanged)
     // The owner's restyling: the `key: value` lines of theme.yaml beside puddle.yaml (empty if there is none). Read again when the file changes.
     Q_PROPERTY(QVariantMap themeValues READ themeValues NOTIFY themeChanged)
+    // The app on a phone (Android, or PUDDLE_PHONE=1 to try it on a desktop): no Puddle of its own, a thin client of the owner's
+    // (docs/identity.md, "Devices"). `phoneLink` is the pairing; `running` means paired and let in.
+    Q_PROPERTY(bool phone READ phone CONSTANT)
+    Q_PROPERTY(QObject *phoneLink READ phoneLink CONSTANT)
+    Q_PROPERTY(bool canDrawQr READ canDrawQr CONSTANT) // "image://qr/..." works (libqrencode was found)
 public:
     explicit Backend(QObject *parent = nullptr);
     ~Backend() override;
 
     QString listenUrl() const { return listenUrl_; }
-    bool running() const { return srv_ != nullptr; }
+    bool running() const { return phone_ ? phone_->state() == QLatin1String("ready") : srv_ != nullptr; }
+    bool phone() const { return phone_ != nullptr; }
+    bool canDrawQr() const;
+    QObject *phoneLink() { return phone_; }
+    // Whether the app runs as a phone, and where a phone keeps what it knows.
+    static bool phoneMode();
+    static QString phoneDir();
     QString error() const { return error_; }
     QObject *log() { return &log_; }
     Chats *chats() { return &chats_; }
-    QString myLink() const { return myLink_; }
-    QString myId() const { return myId_; }
+    QString myLink() const { return phone_ ? chats_.myLink() : myLink_; }
+    QString myId() const { return phone_ ? phone_->puddleId() : myId_; }
     bool developerMode() const { return developerMode_; }
     void setDeveloperMode(bool on);
     bool needsSetup() const { return needsSetup_; }
@@ -96,6 +108,7 @@ protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
+    Phone *phone_ = nullptr;
     void startServer();
     void setError(const QString &message);
     void loadTheme();

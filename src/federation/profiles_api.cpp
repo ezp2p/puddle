@@ -310,7 +310,7 @@ static int apply_note(void *user, puddle_stream *st, int exists)
 void puddle_profiles_done(puddle_ctx *ctx, const puddle_ob_item *item, puddle_ob_outcome outcome, const puddle_net_reply *reply)
 {
     int is_media = !strcmp(item->kind, "media"), is_profile = !strcmp(item->kind, "profile");
-    if ((!is_media && !is_profile) || outcome == PUDDLE_OB_HOLD)
+    if (!is_media && !is_profile)
         return;
     fetched f;
     memset(&f, 0, sizeof f);

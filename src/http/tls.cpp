@@ -97,13 +97,16 @@ static int generate(const char *certpath, const char *keypath, char *err, size_t
         goto out;
     }
 
-    X509_NAME *name; name = X509_get_subject_name(x);
-    if (!X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
-                                    (const unsigned char *)"puddle", -1, -1, 0) ||
-        !X509_set_issuer_name(x, name)) {
+    /* built apart and copied in as both subject and issuer: OpenSSL 4 hands back the certificate's own name as const */
+    X509_NAME *name; name = X509_NAME_new();
+    if (!name ||
+        !X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC, (const unsigned char *)"puddle", -1, -1, 0) ||
+        !X509_set_subject_name(x, name) || !X509_set_issuer_name(x, name)) {
+        X509_NAME_free(name);
         ssl_err(err, n, "certificate name");
         goto out;
     }
+    X509_NAME_free(name);
 
     if (add_ext(x, NID_basic_constraints, "critical,CA:FALSE") ||
         add_ext(x, NID_key_usage, "critical,digitalSignature") ||

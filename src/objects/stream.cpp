@@ -157,22 +157,6 @@ Stream Stream::remove()
     return transition(bit(PUDDLE_STREAM_ACTIVE) | bit(PUDDLE_STREAM_PENDING_OUT), PUDDLE_STREAM_CLOSED, PUDDLE_OWED_CLOSED, "not_open");
 }
 
-Stream Stream::trust()
-{
-    char err[300];
-    int rc = puddle_streams_trust_fingerprint(ctx_->streams, rec_.id, err, sizeof err);
-    if (rc == 1)
-        throw Error::conflict("nothing_to_trust");
-    if (rc != 0)
-        throw Error::internal(err);
-    if (ctx_->outbox)
-        puddle_outbox_release(ctx_->outbox, rec_.id);
-    auto s = get(ctx_, rec_.id);
-    if (!s)
-        throw Error::internal();
-    return std::move(*s);
-}
-
 Stream Stream::showProfile(const std::optional<std::string> &profileId)
 {
     Profile::showAt(ctx_, std::string("dm:") + rec_.id, profileId); // an open stream hears at once; a request carries it
@@ -195,8 +179,6 @@ void Stream::write(puddle_jw *w) const
         puddle_jw_str(w, "address", rec_.addresses[0]);
     if (rec_.error[0])
         puddle_jw_str(w, "error", rec_.error);
-    if (rec_.tls_fp_seen[0])
-        puddle_jw_flag(w, "certificate_changed", 1);
     if (rec_.note[0])
         puddle_jw_str(w, "message", rec_.note);
     if (auto mine = Profile::shownAt(ctx_, std::string("dm:") + rec_.id))

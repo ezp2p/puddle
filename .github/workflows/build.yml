@@ -48,7 +48,7 @@ jobs:
             "${EXTRA[@]}"
 
       - name: Build
-        run: cmake --build build --parallel
+        run: cmake --build build --parallel 4   # a bare --parallel is unlimited with Makefiles
 
       - name: Test
         run: ctest --test-dir build --output-on-failure

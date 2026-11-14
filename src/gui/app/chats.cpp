@@ -77,7 +77,7 @@ QList<QJsonObject> noticesOf(const QJsonDocument &doc)
 
 Chats::Chats(QObject *parent)
     : QObject(parent),
-      people_({ "id", "name", "state", "note", "error", "certificate_changed", "avatar", "color", "updated_at", "address", "provisional" }),
+      people_({ "id", "name", "state", "note", "error", "avatar", "color", "updated_at", "address", "provisional" }),
       conversations_({ "id", "kind", "user", "group", "name", "avatar", "color", "stream", "last", "lastBy", "unread", "members" }, nullptr, "id"),
       messages_({ "id", "sender", "senderName", "ts", "body", "files", "outgoing", "edited", "deleted", "reply_to", "avatar", "tint", "grouped",
                   "dayStart", "replyName", "replyText", "replyMissing", "deliveryState", "deliveryReason", "deliveryNext", "kind", "noticeText" }),
@@ -85,7 +85,8 @@ Chats::Chats(QObject *parent)
       profiles_({ "id", "display_name", "avatar", "default" }),
       invites_({ "id", "name", "invitedBy", "invitedByName" }),
       members_({ "id", "name", "avatar", "color", "state", "isMe", "friend" }),
-      sidebar_({ "key", "kind", "id", "name", "avatar", "color", "preview", "lastTs", "unread", "state", "members", "note", "invitedBy", "section" }, nullptr, "key")
+      sidebar_({ "key", "kind", "id", "name", "avatar", "color", "preview", "lastTs", "unread", "state", "members", "note", "invitedBy", "section" }, nullptr, "key"),
+      devices_({ "id", "name", "state", "check", "created_at", "last_seen" }, nullptr, "id")
 {
     cacheDir_ = QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + "/avatars";
     fileCacheDir_ = QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + "/files";
@@ -125,7 +126,90 @@ void Chats::refresh()
     refreshFileRequests();
     if (!profilesLoaded_)
         refreshProfiles();
+    if (!api_.isDevice())
+        refreshDevices();
+    if (pairingLink_.size() && pairingExpires_ <= QDateTime::currentMSecsSinceEpoch()) {
+        pairingLink_.clear(); /* it has run out: nobody can use it, so it is not shown */
+        emit pairingChanged();
+    }
 }
+
+bool Chats::attachDevice(const QUrl &base, const QString &puddleId, const QByteArray &puddleKey, const QByteArray &deviceSeed)
+{
+    if (!api_.configureDevice(base, puddleId, puddleKey, deviceSeed))
+        return false;
+    setSelf(puddleId);
+    timer_.start();
+    refresh();
+    ponds_.start(); /* through its Puddle, like everything else */
+    return true;
+}
+
+// ---- phones (the desktop app's side) ----
+
+void Chats::refreshDevices()
+{
+    if (busy_[7])
+        return;
+    busy_[7] = true;
+    api_.get(QStringLiteral("/api/v1/devices"), [this](int status, const QJsonDocument &doc) {
+        busy_[7] = false;
+        if (status != 200 || !doc.isObject())
+            return;
+        QList<QJsonObject> rows;
+        int pending = 0;
+        QSet<QString> seen;
+        for (const QJsonValue &v : doc.object().value("devices").toArray()) {
+            const QJsonObject d = v.toObject();
+            rows.append(d);
+            const QString id = d.value("id").toString();
+            seen.insert(id);
+            if (d.value("state").toString() == QLatin1String("pending")) {
+                pending++;
+                if (devicesLoaded_ && !knownDevices_.contains(id))
+                    emit newDevice(d.value("name").toString());
+            }
+        }
+        knownDevices_ = seen;
+        devicesLoaded_ = true;
+        devices_.setItems(rows);
+        if (pending != pendingDevices_) {
+            pendingDevices_ = pending;
+            emit devicesChanged();
+        }
+        if (pending && pairingLink_.size()) { /* the link has been used: no need to keep showing it */
+            pairingLink_.clear();
+            emit pairingChanged();
+        }
+    });
+}
+
+void Chats::startPairing()
+{
+    api_.post(QStringLiteral("/api/v1/devices/pair"), QJsonObject{}, [this](int status, const QJsonDocument &doc) {
+        if (status == 409) {
+            emit failed(tr("Your Puddle has no address to give a phone. Set \"advertise:\" in puddle.yaml to the address it can be reached at."));
+            return;
+        }
+        if (status != 201 || !doc.isObject()) {
+            emit failed(tr("Could not make a pairing link."));
+            return;
+        }
+        pairingLink_ = doc.object().value("link").toString();
+        pairingExpires_ = qint64(doc.object().value("expires_at").toDouble());
+        emit pairingChanged();
+    });
+}
+
+void Chats::stopPairing()
+{
+    pairingLink_.clear();
+    emit pairingChanged();
+}
+
+void Chats::acceptDevice(const QString &id) { post(path("devices", id, "accept"), QJsonObject{}, tr("Could not let that phone in.")); }
+void Chats::declineDevice(const QString &id) { post(path("devices", id, "decline"), QJsonObject{}, tr("Could not turn that phone away.")); }
+void Chats::revokeDevice(const QString &id) { post(path("devices", id, "revoke"), QJsonObject{}, tr("Could not remove that phone.")); }
 
 void Chats::refreshBlocked()
 {
@@ -155,6 +239,16 @@ void Chats::refreshProfiles()
     if (busy_[4])
         return;
     busy_[4] = true;
+    /* where others find us: a phone has no Puddle of its own to ask, so it asks this one */
+    api_.get(QStringLiteral("/api/v1/identity"), [this](int status, const QJsonDocument &doc) {
+        if (status != 200 || !doc.isObject())
+            return;
+        const QString link = doc.object().value("link").toString();
+        if (link != myLink_) {
+            myLink_ = link;
+            emit profilesChanged();
+        }
+    });
     api_.get(QStringLiteral("/api/v1/profiles"), [this](int status, const QJsonDocument &doc) {
         busy_[4] = false;
         if (status != 200 || !doc.isObject())
@@ -417,8 +511,7 @@ QVariantMap Chats::person(const QString &userId) const
                             { "pronouns", profile.value("pronouns").toString() },
                             { "state", p.value("state").toString() },
                             { "since", qint64(p.value("created_at").toDouble()) },
-                            { "address", p.value("address").toString() },
-                            { "certChanged", p.value("certificate_changed").toBool() } };
+                            { "address", p.value("address").toString() } };
     }
     return {};
 }
@@ -786,14 +879,13 @@ void Chats::open(const QString &userId, const QString &kind)
 void Chats::updateCurrentInfo()
 {
     QString name, avatar, color, state;
-    bool cert = false;
     if (currentIsGroup() && groups_.contains(current_)) {
         const QJsonObject g = groups_.value(current_);
         name = g.value("name").toString();
         state = g.value("my").toString() == QLatin1String("in") ? QStringLiteral("active") : g.value("my").toString(); // "active" is "can write here"
-        if (name == curName_ && state == curState_ && curAvatar_.isEmpty() && curColor_.isEmpty() && !curCert_)
+        if (name == curName_ && state == curState_ && curAvatar_.isEmpty() && curColor_.isEmpty())
             return;
-        curName_ = name; curAvatar_.clear(); curColor_.clear(); curState_ = state; curCert_ = false;
+        curName_ = name; curAvatar_.clear(); curColor_.clear(); curState_ = state;
         emit currentInfoChanged();
         return;
     }
@@ -803,13 +895,12 @@ void Chats::updateCurrentInfo()
             avatar = p.value("avatar").toString();
             color = p.value("color").toString();
             state = p.value("state").toString();
-            cert = p.value("certificate_changed").toBool();
         }
     if (name.isEmpty() && !current_.isEmpty())
         name = shortId(current_);
-    if (name == curName_ && avatar == curAvatar_ && color == curColor_ && state == curState_ && cert == curCert_)
+    if (name == curName_ && avatar == curAvatar_ && color == curColor_ && state == curState_)
         return;
-    curName_ = name; curAvatar_ = avatar; curColor_ = color; curState_ = state; curCert_ = cert;
+    curName_ = name; curAvatar_ = avatar; curColor_ = color; curState_ = state;
     emit currentInfoChanged();
 }
 
@@ -1032,7 +1123,6 @@ void Chats::decline(const QString &u) { post(path("streams", u, "decline"), QJso
 void Chats::cancel(const QString &u) { post(path("streams", u, "delete"), QJsonObject{}, tr("Could not remove.")); }
 void Chats::block(const QString &u) { post(path("users", u, "block"), QJsonObject{}, tr("Could not block.")); }
 void Chats::unblock(const QString &u) { post(path("users", u, "unblock"), QJsonObject{}, tr("Could not unblock.")); }
-void Chats::trust(const QString &u) { post(path("streams", u, "trust"), QJsonObject{}, tr("Could not trust the new certificate.")); }
 
 void Chats::request(const QString &link, const QString &note, const QString &profile)
 {

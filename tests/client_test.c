@@ -31,8 +31,6 @@ static int found(void *u, const char *s, const char *k, unsigned char out[32])
     return 1;
 }
 
-static int seen_fp(void *u, const char *fp) { snprintf((char *)u, 65, "%s", fp); return 1; }
-static int refuse_fp(void *u, const char *fp) { (void)u; (void)fp; return 0; }
 
 int main(void)
 {
@@ -60,12 +58,9 @@ int main(void)
 
     /* ---- a request that works ---- */
     ts_set(&srv, TS_NORMAL, 200, "{\"ok\":true}", 0);
-    char fp[65] = "";
-    opts.fingerprint_ok = seen_fp;
-    opts.user = fp;
     puddle_net_request(&at, "POST", "/stream/v1/access/result", body, strlen(body), alice, bob_id, &opts, &r);
     CHECK(r.result == PUDDLE_NET_OK && r.status == 200 && r.body && !strcmp(r.body, "{\"ok\":true}") && r.body_len == 11);
-    CHECK(!strcmp(r.fingerprint, srv.fingerprint) && !strcmp(fp, srv.fingerprint));           /* the certificate's SHA-256 */
+    CHECK(!strcmp(r.fingerprint, srv.fingerprint));                                              /* the certificate's SHA-256 */
     CHECK(!strcmp(r.content_type, "application/json"));                                          /* what it said it was sending */
     CHECK(srv.requests == 1 && !strcmp(srv.method, "POST") && !strcmp(srv.target, "/stream/v1/access/result"));
     CHECK(srv.body_len == strlen(body) && !memcmp(srv.body, body, srv.body_len));
@@ -119,15 +114,97 @@ int main(void)
     CHECK(r.result == PUDDLE_NET_OK && r.status == 204);
     puddle_net_reply_free(&r);
 
-    /* ---- the certificate is not what it was ---- */
+    /* ---- proving who answered: with Bob's key in hand, only an answer Bob signed for counts ---- */
     {
-        int before = srv.requests;
-        opts.fingerprint_ok = refuse_fp;
-        puddle_net_request(&at, "POST", "/x", "{}", 2, alice, bob_id, &opts, &r);
-        CHECK(r.result == PUDDLE_NET_CERT_CHANGED && r.reason[0] && !strcmp(r.fingerprint, srv.fingerprint));
-        CHECK(srv.requests == before);                                                            /* nothing was sent to it */
+        unsigned char bob_pub[32], alice_pub[32];
+        puddle_identity_public(bob, bob_pub, NULL, NULL);
+        puddle_identity_public(alice, alice_pub, NULL, NULL);
+        puddle_net_opts po = opts;
+        po.peer_pub = bob_pub;
+        ts_set(&srv, TS_NORMAL, 200, "{\"ok\":true}", 0);
+
+        /* nobody signed: a stranger's plain 404, or anything else that answers without a receipt */
+        ts_set(&srv, TS_NORMAL, 404, "", 0);
+        puddle_net_request(&at, "POST", "/stream/v1/events", "{}", 2, alice, bob_id, &po, &r);
+        CHECK(r.result == PUDDLE_NET_NOT_PROVEN && r.proof == PUDDLE_RECEIPT_MISSING && r.status == 404 && strstr(r.reason, "didn't recognise us"));
         puddle_net_reply_free(&r);
-        opts.fingerprint_ok = NULL;
+        ts_set(&srv, TS_NORMAL, 200, "{\"ok\":true}", 0);
+        puddle_net_request(&at, "POST", "/stream/v1/events", "{}", 2, alice, bob_id, &po, &r);
+        CHECK(r.result == PUDDLE_NET_NOT_PROVEN && r.proof == PUDDLE_RECEIPT_MISSING && strstr(r.reason, "without signing"));
+        puddle_net_reply_free(&r);
+
+        /* Bob signs: delivered, refusals included (it is still Bob saying it) */
+        srv.signer = bob;
+        puddle_net_request(&at, "POST", "/stream/v1/events", "{}", 2, alice, bob_id, &po, &r);
+        CHECK(r.result == PUDDLE_NET_OK && r.status == 200 && r.proof == PUDDLE_RECEIPT_OK);
+        puddle_net_reply_free(&r);
+        ts_set(&srv, TS_NORMAL, 403, "{\"error\":\"no_stream\"}", 0);
+        puddle_net_request(&at, "POST", "/stream/v1/events", "{}", 2, alice, bob_id, &po, &r);
+        CHECK(r.result == PUDDLE_NET_OK && r.status == 403 && r.proof == PUDDLE_RECEIPT_OK);
+        puddle_net_reply_free(&r);
+        ts_set(&srv, TS_NORMAL, 204, "", 0);
+        puddle_net_request(&at, "GET", "/stream/v1/hello", NULL, 0, alice, bob_id, &po, &r);
+        CHECK(r.result == PUDDLE_NET_OK && r.status == 204 && !strcmp(r.fingerprint, srv.fingerprint));
+        puddle_net_reply_free(&r);
+        ts_set(&srv, TS_NORMAL, 200, "{\"ok\":true}", 0);
+
+        /* someone else signs: it is not Bob */
+        srv.signer = alice;
+        puddle_net_request(&at, "POST", "/stream/v1/events", "{}", 2, alice, bob_id, &po, &r);
+        CHECK(r.result == PUDDLE_NET_NOT_PROVEN && r.proof == PUDDLE_RECEIPT_WRONG_KEY && strstr(r.reason, "couldn't prove"));
+        puddle_net_reply_free(&r);
+        /* Bob's key, but we hold another for him (he rolled and hasn't told us yet): the same */
+        srv.signer = bob;
+        po.peer_pub = alice_pub;
+        puddle_net_request(&at, "POST", "/stream/v1/events", "{}", 2, alice, bob_id, &po, &r);
+        CHECK(r.result == PUDDLE_NET_NOT_PROVEN && r.proof == PUDDLE_RECEIPT_WRONG_KEY);
+        puddle_net_reply_free(&r);
+        po.peer_pub = bob_pub;
+        /* a receipt that doesn't cover what we got */
+        srv.sign_status_off = 1;
+        puddle_net_request(&at, "POST", "/stream/v1/events", "{}", 2, alice, bob_id, &po, &r);
+        CHECK(r.result == PUDDLE_NET_NOT_PROVEN && r.proof == PUDDLE_RECEIPT_BAD && strstr(r.reason, "doesn't check out"));
+        puddle_net_reply_free(&r);
+        srv.sign_status_off = 0;
+        /* Bob's good signature, for the certificate Bob has, which isn't the one this connection showed: someone is in between */
+        snprintf(srv.sign_fp, sizeof srv.sign_fp, "%s", "abababababababababababababababababababababababababababababababab");
+        puddle_net_request(&at, "POST", "/stream/v1/events", "{}", 2, alice, bob_id, &po, &r);
+        CHECK(r.result == PUDDLE_NET_NOT_PROVEN && r.proof == PUDDLE_RECEIPT_OTHER_CERT && strstr(r.reason, "intercepted"));
+        puddle_net_reply_free(&r);
+        srv.sign_fp[0] = '\0';
+
+        /* a certificate proven before: nothing goes over a connection that shows another */
+        {
+            int before = srv.requests;
+            po.expect_fp = "abababababababababababababababababababababababababababababababab";
+            puddle_net_request(&at, "POST", "/stream/v1/events", "{}", 2, alice, bob_id, &po, &r);
+            CHECK(r.result == PUDDLE_NET_OTHER_CERT && r.reason[0] && !strcmp(r.fingerprint, srv.fingerprint));
+            CHECK(srv.requests == before);                                                        /* nothing was sent to it */
+            puddle_net_reply_free(&r);
+            po.expect_fp = srv.fingerprint;
+            puddle_net_request(&at, "POST", "/stream/v1/events", "{}", 2, alice, bob_id, &po, &r);
+            CHECK(r.result == PUDDLE_NET_OK && srv.requests == before + 1);
+            puddle_net_reply_free(&r);
+        }
+
+        /* the receipt is checked over the bytes on the wire, checked by itself too */
+        {
+            unsigned char bp[32];
+            char rc[PUDDLE_RECEIPT_MAX], fpx[65];
+            puddle_identity_public(bob, bp, NULL, NULL);
+            snprintf(fpx, sizeof fpx, "%s", srv.fingerprint);
+            CHECK(puddle_receipt_sign(bob, "bm9uY2Vub25jZW5vbmNl", 200, "{}", 2, fpx, rc, sizeof rc) == 0);
+            CHECK(puddle_receipt_verify(rc, bob_id, bp, "bm9uY2Vub25jZW5vbmNl", 200, "{}", 2, fpx) == PUDDLE_RECEIPT_OK);
+            CHECK(puddle_receipt_verify(rc, bob_id, bp, "b3RoZXJub25jZW90aGVy", 200, "{}", 2, fpx) == PUDDLE_RECEIPT_BAD);   /* another request's */
+            CHECK(puddle_receipt_verify(rc, bob_id, bp, "bm9uY2Vub25jZW5vbmNl", 200, "{ }", 3, fpx) == PUDDLE_RECEIPT_BAD);  /* another body */
+            CHECK(puddle_receipt_verify(rc, alice_id, bp, "bm9uY2Vub25jZW5vbmNl", 200, "{}", 2, fpx) == PUDDLE_RECEIPT_WRONG_KEY);
+            CHECK(puddle_receipt_verify("", bob_id, bp, "x", 200, "{}", 2, fpx) == PUDDLE_RECEIPT_MISSING);
+            CHECK(puddle_receipt_verify(NULL, bob_id, bp, "x", 200, "{}", 2, fpx) == PUDDLE_RECEIPT_MISSING);
+            CHECK(puddle_receipt_verify("v1 nonsense", bob_id, bp, "x", 200, "{}", 2, fpx) == PUDDLE_RECEIPT_BAD);
+            CHECK(puddle_receipt_sign(bob, "n", 200, "{}", 2, "not hex", rc, sizeof rc) == -1);                             /* no certificate, no receipt */
+        }
+        srv.signer = NULL;
+        ts_set(&srv, TS_NORMAL, 200, "{}", 0);
     }
 
     /* ---- the other end misbehaves: these fail, and are not "offline" ---- */
@@ -137,7 +214,7 @@ int main(void)
     puddle_net_reply_free(&r);
     ts_set(&srv, TS_PLAIN, 200, "", 0);
     puddle_net_request(&at, "POST", "/x", "{}", 2, alice, bob_id, &opts, &r);
-    CHECK(r.result == PUDDLE_NET_FAILED && strstr(r.reason, "TLS") && r.fingerprint[0] == '\0');      /* not TLS */
+    CHECK(r.result == PUDDLE_NET_FAILED && strstr(r.reason, "isn't a Puddle") && strstr(r.reason, "TLS") && r.fingerprint[0] == '\0');   /* not TLS */
     puddle_net_reply_free(&r);
     ts_set(&srv, TS_HANG, 200, "", 0);
     {

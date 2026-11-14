@@ -105,7 +105,8 @@ int puddle_http_serve(const puddle_http_handler *h, puddle_io *io, puddle_serve_
     int owner_ok = h->owner_check ? h->owner_check(h->user, req.authorization) : 0;
     snprintf(info->method, sizeof info->method, "%s", req.method);
     snprintf(info->path, sizeof info->path, "%s", req.path);
-    info->auth = owner_ok ? "owner token" : req.authorization[0] ? "wrong token" : "no token";
+    /* "signed": a peer or a paired phone; whether the signature held up is the route's to say (404 if not) */
+    info->auth = owner_ok ? "owner token" : req.authorization[0] ? "wrong token" : req.signature[0] ? "signed" : "no token";
 
     /* ---- what to do about a body, decided before reading any of it ---- */
     int is_read = strcmp(req.method, "GET") == 0 || strcmp(req.method, "HEAD") == 0;

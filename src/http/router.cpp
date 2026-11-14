@@ -6,6 +6,11 @@
 #include "core/error.hpp"
 #include "storage/media.h"
 #include "core/link.h"
+#include "core/streams.h"
+#include "http/reqsig.h"
+#include "base/hash.h"
+
+#include <openssl/evp.h>
 #include "platform/fsutil.h"
 
 #include <new>
@@ -115,12 +120,28 @@ const char *puddle_param(const puddle_call *call, const char *name)
     return "";
 }
 
+/* Before the body is read, so nothing is checked yet but who the signature says it is from: a device on the list (an
+ * accepted one, with `active`)? The signature itself is checked once the body is in. */
+static int claims_device(const puddle_ctx *ctx, const puddle_request *req, int active)
+{
+    puddle_reqsig s;
+    puddle_device dv;
+    if (!ctx->devices || !req->signature[0] || puddle_reqsig_parse(req->signature, &s) != 0)
+        return 0;
+    return active ? puddle_devices_is_active(ctx->devices, s.id) : puddle_devices_get(ctx->devices, s.id, &dv) == 0;
+}
+
 size_t puddle_router_body_limit(const puddle_router *r, const puddle_request *req, int owner_ok)
 {
     const puddle_route *rt = find(r, req->method, req->path);
-    if (!rt || (rt->auth == PUDDLE_AUTH_OWNER && !owner_ok))
+    if (!rt)
         return 0;
-    return rt->body_max;
+    switch (rt->auth) {
+    case PUDDLE_AUTH_LOCAL: return owner_ok ? rt->body_max : 0;
+    case PUDDLE_AUTH_OWNER: return owner_ok || claims_device(r->ctx, req, 1) ? rt->body_max : 0;
+    case PUDDLE_AUTH_DEVICE: return claims_device(r->ctx, req, 0) ? rt->body_max : 0;
+    default: return rt->body_max;
+    }
 }
 
 int puddle_query_parse(const char *target, const char *const *keys, size_t nkeys, char (*values)[PUDDLE_QUERY_VALUE_MAX])
@@ -185,6 +206,67 @@ static int chain_lookup(void *u, const char *sender, const char *kid, unsigned c
 {
     chain_look *c = (chain_look *)u;
     return c->route->chain_key && c->route->chain_key(c->ctx, c->body, c->len, sender, kid, pub);
+}
+
+/* Whether an answer to this authenticated sender is signed for. A PEER route only ever reaches someone whose key we hold. A
+ * CHAIN route can be reached by anyone with a chain of their own, so only someone we already hold a record of is answered in
+ * our name (asked after the handler, which may just have filed them: an answer to our request). Routes that must answer
+ * strangers the same whatever they decide never are. docs/streams.md, "Proving who answers". */
+static int may_sign(const puddle_ctx *ctx, const puddle_route *rt, const char *sender)
+{
+    switch (rt->auth) {
+    case PUDDLE_AUTH_CHAIN_ANON:
+    case PUDDLE_AUTH_CHAIN_OPEN:
+        return 0;
+    case PUDDLE_AUTH_CHAIN:
+        return puddle_streams_knows(ctx->streams, sender);
+    default: /* a peer, or one of the owner's own devices (one pairing has shown the secret) */
+        return 1;
+    }
+}
+
+/* "X-Puddle-Receipt: ...\r\n" for an answer whose body has the SHA-256 `hash` (hex), or "" when it is not to be signed, or
+ * cannot be (no certificate known, as in tests that run without TLS) */
+static void receipt_line_hash(const puddle_ctx *ctx, const char *nonce, int status, const char *hash, char *out, size_t cap)
+{
+    char r[PUDDLE_RECEIPT_MAX];
+    out[0] = '\0';
+    if (nonce && *nonce && puddle_receipt_sign_hash(ctx->identity, nonce, status, hash, ctx->own_tls_fp, r, sizeof r) == 0)
+        snprintf(out, cap, "X-Puddle-Receipt: %s\r\n", r);
+}
+
+static void receipt_line(const puddle_ctx *ctx, const char *nonce, int status, const void *body, size_t len, char *out, size_t cap)
+{
+    char hash[65];
+    out[0] = '\0';
+    if (!nonce || !*nonce)
+        return;
+    puddle_sha256_hex(body ? body : "", body ? len : 0, hash);
+    receipt_line_hash(ctx, nonce, status, hash, out, cap);
+}
+
+/* The SHA-256 (hex) of `len` bytes of an open file from where it stands, put back where it was. 0 or -1. */
+static int hash_file_range(int fd, int64_t off, int64_t len, char hash[65])
+{
+    EVP_MD_CTX *md = EVP_MD_CTX_new();
+    unsigned char buf[65536], out[32];
+    unsigned ol = 0;
+    int ok = md && EVP_DigestInit_ex(md, EVP_sha256(), NULL) == 1;
+    int64_t left = len;
+    while (ok && left > 0) {
+        int64_t got = puddle_fd_read(fd, buf, left < (int64_t)sizeof buf ? (size_t)left : sizeof buf);
+        if (got <= 0) {
+            ok = 0;
+            break;
+        }
+        ok = EVP_DigestUpdate(md, buf, (size_t)got) == 1;
+        left -= got;
+    }
+    ok = ok && EVP_DigestFinal_ex(md, out, &ol) == 1 && ol == 32 && puddle_fd_seek(fd, off) == off;
+    EVP_MD_CTX_free(md);
+    if (ok)
+        puddle_hex_encode(out, 32, hash);
+    return ok ? 0 : -1;
 }
 
 static size_t not_found(char *out, size_t cap, int *status)
@@ -264,17 +346,25 @@ size_t puddle_router_handle_big(const puddle_router *r, const puddle_request *re
     call.auth = rt->auth;
     path_match(rt->path, req->path, &call);
     char sender[PUDDLE_USER_ID_LEN + 1];
+    char nonce[48] = "";           /* the authenticated request's, which every answer to it signs for; "" for the owner */
+    char receipt[PUDDLE_RECEIPT_MAX + 32];
 
-    if (rt->auth == PUDDLE_AUTH_OWNER) {
-        if (!owner_ok)
-            return not_found(out, cap, status);
-    } else {
+    int by_token = (rt->auth == PUDDLE_AUTH_OWNER || rt->auth == PUDDLE_AUTH_LOCAL) && owner_ok;
+    if (rt->auth == PUDDLE_AUTH_LOCAL && !owner_ok)
+        return not_found(out, cap, status);
+    if (!by_token) {
         char me[PUDDLE_USER_ID_LEN + 1];
         puddle_identity_id(ctx->identity, me);
         chain_look cl = { ctx, rt, body, body_len };
-        int chain = rt->auth == PUDDLE_AUTH_CHAIN || rt->auth == PUDDLE_AUTH_CHAIN_OPEN;
-        puddle_peer_key_fn lookup = chain ? chain_lookup : (ctx->peer_key ? ctx->peer_key : no_peer);
-        void *user = chain ? (void *)&cl : ctx->peer_key_user;
+        int chain = rt->auth == PUDDLE_AUTH_CHAIN || rt->auth == PUDDLE_AUTH_CHAIN_OPEN || rt->auth == PUDDLE_AUTH_CHAIN_ANON ||
+                    rt->auth == PUDDLE_AUTH_PAIR;
+        int device = rt->auth == PUDDLE_AUTH_OWNER || rt->auth == PUDDLE_AUTH_DEVICE;
+        if (device && !ctx->devices)
+            return not_found(out, cap, status);
+        puddle_peer_key_fn lookup = chain ? chain_lookup
+                                    : device ? (rt->auth == PUDDLE_AUTH_OWNER ? puddle_devices_key : puddle_devices_key_any)
+                                    : (ctx->peer_key ? ctx->peer_key : no_peer);
+        void *user = chain ? (void *)&cl : device ? (void *)ctx->devices : ctx->peer_key_user;
         int64_t now = puddle_ctx_now_ms(ctx);
         puddle_reqsig sig;
         puddle_authn a = puddle_reqsig_authenticate(req->signature, req->method, req->target, body, body_len, me,
@@ -284,7 +374,9 @@ size_t puddle_router_handle_big(const puddle_router *r, const puddle_request *re
                                            lookup, user, ctx->replay, now, &sig);
         if (a == PUDDLE_AUTHN_REJECT)
             return not_found(out, cap, status);
-        /* from here the sender is who it says, so it may be told what went wrong */
+        /* from here the sender is who it says, so it may be told what went wrong, and (if they are no stranger) signed for */
+        if (may_sign(ctx, rt, sig.id))
+            snprintf(nonce, sizeof nonce, "%s", sig.nonce);
         puddle_jw_init(&w, json, sizeof json);
         if (a == PUDDLE_AUTHN_SKEW) {
             puddle_jw_object(&w);
@@ -298,11 +390,17 @@ size_t puddle_router_handle_big(const puddle_router *r, const puddle_request *re
             *status = puddle_fail(&w, 503, "busy");
         } else {
             memcpy(sender, sig.id, sizeof sender);
-            call.sender = sender;
+            if (rt->auth == PUDDLE_AUTH_OWNER)
+                call.device = sender; /* the owner, on one of their phones */
+            else
+                call.sender = sender;
+            if (device)
+                puddle_devices_seen(ctx->devices, sender, now);
             goto run;
         }
         size_t n = puddle_jw_finish(&w);
-        return puddle_http_response(*status, "", json, n, out, cap);
+        receipt_line(ctx, nonce, *status, json, n, receipt, sizeof receipt);
+        return puddle_http_response(*status, receipt, json, n, out, cap);
     }
 
 run:
@@ -323,6 +421,11 @@ run:
         puddle_jw_init(&w, json, sizeof json);
         st = puddle_fail(&w, 500, "internal");
     }
+    if (call.sender && !nonce[0] && may_sign(ctx, rt, call.sender)) {
+        puddle_reqsig again; /* filed just now, by this very request (an answer to ours): now they are someone we know */
+        if (puddle_reqsig_parse(req->signature, &again) == 0)
+            snprintf(nonce, sizeof nonce, "%s", again.nonce);
+    }
     if (blob.has_file && (st < 200 || st > 299)) { /* opened, then refused (or thrown): not sent */
         puddle_fd_close(blob.fd);
         blob.has_file = 0;
@@ -330,12 +433,14 @@ run:
     if (blob.has_file) { /* a file on disk: headers here, the bytes read and sent after them */
         int64_t off, len;
         int part = st == 200 ? puddle_http_range(req->range, blob.file_size, &off, &len) : 0;
-        char hdr[400];
+        char hdr[400 + PUDDLE_RECEIPT_MAX + 32];
         if (part < 0) {
             puddle_fd_close(blob.fd);
             snprintf(hdr, sizeof hdr, "Content-Range: bytes */%lld\r\n", (long long)blob.file_size);
             *status = 416;
             static const char gone[] = "{\"error\":\"range_not_satisfiable\"}";
+            receipt_line(ctx, nonce, 416, gone, sizeof gone - 1, receipt, sizeof receipt);
+            snprintf(hdr + strlen(hdr), sizeof hdr - strlen(hdr), "%s", receipt);
             return puddle_http_response(416, hdr, gone, sizeof gone - 1, out, cap);
         }
         if (puddle_fd_seek(blob.fd, off) != off) {
@@ -349,6 +454,16 @@ run:
             snprintf(hdr + n, sizeof hdr - (size_t)n, "Content-Range: bytes %lld-%lld/%lld\r\n", (long long)off, (long long)(off + len - 1),
                      (long long)blob.file_size);
         *status = part ? 206 : st;
+        if (nonce[0]) { /* signed for exactly the bytes that go: hashed from disk, then sent from where it was */
+            char hash[65];
+            if (hash_file_range(blob.fd, off, len, hash) != 0) {
+                puddle_fd_close(blob.fd);
+                *status = 500;
+                return puddle_http_error(500, out, cap);
+            }
+            receipt_line_hash(ctx, nonce, *status, hash, receipt, sizeof receipt);
+            snprintf(hdr + strlen(hdr), sizeof hdr - strlen(hdr), "%s", receipt);
+        }
         size_t hl = puddle_http_head(*status, blob.mime[0] ? blob.mime : "application/octet-stream", hdr, (size_t)len, out, cap);
         if (!hl) {
             puddle_fd_close(blob.fd);
@@ -364,10 +479,12 @@ run:
         *status = st;
         /* JSON built for this answer (too big for `out`) changes from one asking to the next; anything else is named by its hash */
         int fixed = strcmp(blob.mime, "application/json") != 0;
-        size_t hl = puddle_http_head(st, blob.mime[0] ? blob.mime : "application/octet-stream",
-                                     fixed ? "Cache-Control: private, max-age=31536000, immutable\r\nX-Content-Type-Options: nosniff\r\n"
-                                           : "Cache-Control: no-store\r\n",
-                                     blob.len, out, cap);
+        char extra[PUDDLE_RECEIPT_MAX + 160];
+        receipt_line(ctx, nonce, st, blob.data, blob.len, receipt, sizeof receipt);
+        snprintf(extra, sizeof extra, "%s%s",
+                 fixed ? "Cache-Control: private, max-age=31536000, immutable\r\nX-Content-Type-Options: nosniff\r\n" : "Cache-Control: no-store\r\n",
+                 receipt);
+        size_t hl = puddle_http_head(st, blob.mime[0] ? blob.mime : "application/octet-stream", extra, blob.len, out, cap);
         if (!hl) {
             free(blob.data);
             *status = 500;
@@ -388,7 +505,8 @@ run:
         }
     }
     *status = st;
-    size_t total = puddle_http_response(st, "", json, n, out, cap);
+    receipt_line(ctx, nonce, st, json, n, receipt, sizeof receipt);
+    size_t total = puddle_http_response(st, receipt, json, n, out, cap);
     memset(json, 0, sizeof json); /* may have held a recovery phrase */
     return total;
 }
