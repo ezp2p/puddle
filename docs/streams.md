@@ -240,7 +240,9 @@ item stays queued, is retried on the outbox's schedule, and carries the reason, 
 
 A peer that rolled its keys and hasn't reached us yet "couldn't prove it's them" until its new chain arrives (its
 outbox is retrying it); taking the new chain, like taking a new address, sends whatever was waiting for them at once,
-and an attempt that crossed paths with it is simply made again with the new key. Every address we hold for the peer is tried, newest first,
+and an attempt that crossed paths with it is simply made again with the new key. So does hearing from them at all: a
+signed request of theirs arriving means they are up, so what waits on the offline schedule for them goes then, not
+minutes later (at most once in 30 seconds, since a peer behind NAT may reach us when we can't reach it). Every address we hold for the peer is tried, newest first,
 before giving up on a round.
 
 

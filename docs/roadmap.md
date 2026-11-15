@@ -555,4 +555,4 @@ bodies, encrypting data at rest, the phone client and device pairing. Parked que
 | 1 | Keys derived from the phrase; the old key counter-signs | Yes, and **the phrase rolls with the keys**: each roll makes a new phrase, authorized by a roll key from the old one. |
 | 2 | Showing the phrase | `puddled` prints once on first run (terminal only, else `--init`). The app shows it once, in a small first-run screen. |
 | 3 | TLS trust | Self-generated certificates, accept any, record the fingerprint, announce changes in the signed address record. |
-| 4 | Retries | Offline: every 5 minutes for a day, then every 30. Anything else fails once; the reason is kept. |
+| 4 | Retries | Offline: every 5 minutes for a day, then every 30, and at once when they are heard from. Anything else fails once; the reason is kept. |
