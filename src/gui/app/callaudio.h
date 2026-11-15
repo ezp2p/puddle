@@ -92,10 +92,34 @@ private:
     int resyncs_ = 0;
 };
 
-// What the speaker reads: decoded audio from the jitter buffer, silence when there is none (a sink that reads nothing stops).
+// The voices of a call, each with its own jitter buffer and decoder (a friend, or each member of a group call), mixed. A
+// voice not heard for 10 s is let go. Frames arrive on network threads; the speaker pulls on its own.
+class Mixer {
+public:
+    Mixer() = default;
+    ~Mixer();
+    Mixer(const Mixer &) = delete;
+    Mixer &operator=(const Mixer &) = delete;
+
+    void push(const QString &from, uint32_t rtpTs, QByteArray frame);
+    void pull(int16_t out[960]); // the next 20 ms, mono at 48 kHz: silence where there is nothing
+    void reset();
+    int voices() const;
+
+private:
+    struct Voice {
+        JitterBuffer buffer;
+        void *decoder = nullptr;
+        int quiet = 0; // 20 ms in a row with nothing
+    };
+    mutable std::mutex mu_;
+    std::map<QString, std::unique_ptr<Voice>> voices_;
+};
+
+// What the speaker reads: the mix, silence when there is none (a sink that reads nothing stops).
 class Playout : public QIODevice {
 public:
-    Playout(JitterBuffer *buffer, int channels, QObject *parent = nullptr);
+    Playout(Mixer *mixer, int channels, QObject *parent = nullptr);
     ~Playout() override;
     qint64 readData(char *data, qint64 maxlen) override;
     qint64 writeData(const char *, qint64) override { return -1; }
@@ -107,10 +131,9 @@ public:
 private:
     void decodeNext();
     EchoCanceller *echo_ = nullptr;
-    JitterBuffer *buffer_;
+    Mixer *mixer_;
     int channels_;
     QByteArray pcm_; // decoded, Int16, interleaved for `channels_`
-    void *decoder_ = nullptr;
 };
 
 class CallAudio : public QObject {
@@ -127,8 +150,8 @@ public:
     void start(Send send);
     void stop();
     bool running() const { return running_; }
-    // A frame from the friend: any thread.
-    void received(uint32_t rtpTs, const QByteArray &frame) { buffer_.push(rtpTs, frame); }
+    // A frame from the friend, or from member `from` in a group call: any thread.
+    void received(const QString &from, uint32_t rtpTs, const QByteArray &frame) { mixer_.push(from, rtpTs, frame); }
     void setMuted(bool muted) { muted_ = muted; }
     bool hasInput() const { return source_ != nullptr; }
     bool hasOutput() const { return sink_ != nullptr; }
@@ -140,7 +163,7 @@ public:
 
 private:
     void readMicrophone();
-    JitterBuffer buffer_;
+    Mixer mixer_;
     Send send_;
     QAudioSource *source_ = nullptr;
     QAudioSink *sink_ = nullptr;

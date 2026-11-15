@@ -80,9 +80,9 @@ Backend::Backend(QObject *parent) : QObject(parent)
 }
 
 // Frames from the friend, on one of the Puddle's network threads: into the jitter buffer, which is safe for that.
-static void onCallFrame(void *user, const char *, const unsigned char *frame, size_t len, uint32_t rtpTs)
+static void onCallFrame(void *user, const char *, const char *from, const unsigned char *frame, size_t len, uint32_t rtpTs)
 {
-    static_cast<CallAudio *>(user)->received(rtpTs, QByteArray(reinterpret_cast<const char *>(frame), qsizetype(len)));
+    static_cast<CallAudio *>(user)->received(QString::fromLatin1(from), rtpTs, QByteArray(reinterpret_cast<const char *>(frame), qsizetype(len)));
 }
 
 // The sound runs while this device has an active call: through the Puddle in this process (the window), or a phone's leg.
@@ -95,7 +95,7 @@ void Backend::followCall()
     if (live && !audio_.running()) {
         audio_.setMuted(calls->muted());
         if (leg) {
-            leg->setOnFrame([a = &audio_](uint32_t ts, const QByteArray &frame) { a->received(ts, frame); });
+            leg->setOnFrame([a = &audio_](const QString &from, uint32_t ts, const QByteArray &frame) { a->received(from, ts, frame); });
             audio_.start([leg](const QByteArray &frame) { leg->send(frame); });
         } else {
             const QByteArray id = calls->callId().toUtf8();

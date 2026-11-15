@@ -13,7 +13,7 @@ signed receipts), the retrying outbox, direct messages with edit and delete, key
 pictures over a stream, and the Qt app (Friends, conversations, chat, delivery state). 32 test suites, including two Puddles
 talking over TLS and the window driven by real clicks and keys.
 
-Group chats (phase 5) are built, and so is proving who answers (phase 6), which replaced certificate pinning for streams. So is joining Ponds' text channels (docs/ponds.md). The phone client is built up to its Android package (phase 7). Calls (phase 8) are under way: voice calls between two Puddles (8.1), made and answered in the window (8.2) and on the phone (8.3), with the echo from the speakers cancelled. Not built: encryption at rest. See "Later" below and `discuss-later.md`.
+Group chats (phase 5) are built, and so is proving who answers (phase 6), which replaced certificate pinning for streams. So is joining Ponds' text channels (docs/ponds.md). The phone client is built up to its Android package (phase 7). Calls (phase 8) are under way: voice calls between two Puddles (8.1), made and answered in the window (8.2) and on the phone (8.3), with the echo from the speakers cancelled, and group calls (8.4). Not built: encryption at rest. See "Later" below and `discuss-later.md`.
 
 ## Order, and why
 
@@ -563,7 +563,12 @@ to one in the window first, then phones, group calls and video.
 - [x] **Echo.** The microphone's sound goes through an echo canceller before it is encoded, in the window and on the
   phone: WebRTC's (webrtc-audio-processing) where it is packaged, else speexdsp's, else none. Its reference is lined up
   with the speaker from what the speaker was handed. `callaudio_test` measures the echo taken off and the near voice kept.
-- [ ] **8.4 Group calls.** A call per pair of members, over the group's connections.
+- [x] **8.4 Group calls.** A connection between each pair of the people in a group's call, over the group's streams
+  (a friend's, or a group-only one), set up with signed `call/group/join|leave|offer|answer`; the smaller id of each pair
+  offers, a member says it is in every 20 s, and joins and leaves carry a `seq` so that late ones are ignored. Joined from
+  the ring or from the group's chat while it goes on; two started at once become one. In the window, a voice per member,
+  mixed; on a phone, the members' frames over a data channel on its leg. `federation/groupcalls.cpp`; tested in
+  `groupcall_test` (four Puddles, a group-only pair among them), `phone_test` and `ui_test`.
 - [ ] **8.5 Video.** A video track beside the voice, from the camera.
 
 ## Later, not planned in detail

@@ -154,8 +154,12 @@ ApplicationWindow {
     // A friend calling: always said, even with the window in front (the call bar shows it there too)
     Connections {
         target: root.backend.chats.calls
-        function onRinging(userId) {
-            root.notify(qsTr("%1 is calling").arg(root.backend.chats.nameOf(userId)), qsTr("Answer in Puddle"), userId)
+        function onRinging(userId, groupId) {
+            if (groupId !== "")
+                root.notify(qsTr("A call in %1").arg(root.backend.chats.nameOf(groupId)),
+                            qsTr("%1 started it. Join in Puddle").arg(root.backend.chats.nameOf(userId)), groupId)
+            else
+                root.notify(qsTr("%1 is calling").arg(root.backend.chats.nameOf(userId)), qsTr("Answer in Puddle"), userId)
         }
     }
     function updateBadge() {

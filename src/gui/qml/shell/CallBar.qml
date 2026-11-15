@@ -7,7 +7,8 @@ import "../theme"
 // The call going on (docs/calls.md), floating over the top of the page whatever is open: a friend ringing (answer or
 // decline), ours ringing at theirs, connecting, or the call itself with how long it has run, mute and hang up. A friend
 // rings on every device of the owner's; once one of them answers or starts a call, the others say where it is (on a phone,
-// on the computer) and can only hang it up.
+// on the computer) and can only hang it up. A group's call shows the group, and how many others are in it; hanging up leaves
+// it to them.
 Card {
     id: bar
 
@@ -15,6 +16,7 @@ Card {
     readonly property var calls: chats.calls
     readonly property string state: calls.state
     readonly property bool ringingHere: state === "ringing"
+    readonly property bool inGroup: calls.group !== ""
 
     objectName: "callBar"
     visible: state !== "" || calls.error !== ""
@@ -48,10 +50,10 @@ Card {
                 font.pixelSize: 12
                 opacity: bar.state === "" ? 1 : 0.7
                 color: bar.state === "" ? Theme.danger : palette.windowText
-                readonly property string what: bar.state === "ringing" ? qsTr("is calling you")
-                    : bar.state === "calling" ? qsTr("Ringing…")
+                readonly property string what: bar.state === "ringing" ? (bar.inGroup ? qsTr("%1 started a call").arg(bar.chats.nameOf(bar.calls.user)) : qsTr("is calling you"))
+                    : bar.state === "calling" ? (bar.inGroup ? qsTr("Waiting for others…") : qsTr("Ringing…"))
                     : bar.state === "connecting" ? qsTr("Connecting…")
-                    : bar.state === "active" ? bar.length()
+                    : bar.state === "active" ? (bar.inGroup ? bar.length() + " · " + (bar.calls.others === 1 ? qsTr("1 other") : qsTr("%1 others").arg(bar.calls.others)) : bar.length())
                     : bar.calls.error
                 text: bar.calls.elsewhere !== "" ? what + " · " + bar.calls.elsewhere : what
             }
@@ -61,7 +63,7 @@ Card {
         PrimaryButton {
             objectName: "acceptCallButton"
             visible: bar.ringingHere
-            text: qsTr("Answer")
+            text: bar.inGroup ? qsTr("Join") : qsTr("Answer")
             icon.source: Theme.icon("phone")
             onClicked: bar.calls.accept()
         }
@@ -96,7 +98,7 @@ Card {
             icon.height: Theme.iconSize
             icon.color: Theme.danger
             display: AbstractButton.IconOnly
-            Accessible.name: bar.state === "calling" ? qsTr("Cancel the call") : qsTr("Hang up")
+            Accessible.name: bar.inGroup ? qsTr("Leave the call") : bar.state === "calling" ? qsTr("Cancel the call") : qsTr("Hang up")
             ToolTip.text: Accessible.name
             ToolTip.visible: hovered
             onClicked: bar.calls.hangUp()

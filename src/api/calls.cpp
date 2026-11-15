@@ -21,9 +21,9 @@ static const puddle_courier &courier(const puddle_call *c)
 
 static Error failure(const char *code)
 {
-    if (!strcmp(code, "no_call"))
-        return Error::notFound("no_call");
-    if (!strcmp(code, "no_stream") || !strcmp(code, "busy") || !strcmp(code, "no_calls"))
+    if (!strcmp(code, "no_call") || !strcmp(code, "no_group"))
+        return Error::notFound(code);
+    if (!strcmp(code, "no_stream") || !strcmp(code, "busy") || !strcmp(code, "no_calls") || !strcmp(code, "full"))
         return Error::conflict(code);
     if (!strcmp(code, "bad_sdp"))
         return Error::badRequest("bad_sdp");
@@ -33,7 +33,7 @@ static Error failure(const char *code)
 /* The call `id` as it stands now. */
 static int one(const puddle_call *c, puddle_jw *w, const char *id, int status = 200)
 {
-    if (courier(c).calls_write(c->ctx, id, nullptr, 0, w) != 0)
+    if (courier(c).calls_write(c->ctx, id, nullptr, nullptr, 0, w) != 0)
         throw Error::notFound("no_call");
     return status;
 }
@@ -46,31 +46,48 @@ static const char *call_param(const puddle_call *c)
     return id;
 }
 
-/* ?user=<id>: only the calls with that friend (a chat shows them). ?limit=: how many ended ones, 50 unless said, up to 200. */
+/* ?user=<id>: only the calls with that friend (a chat shows them); ?group=<id>: only that group's. ?limit=: how many ended
+ * ones, 50 unless said, up to 200. */
 static int list_calls(const puddle_call *c, puddle_jw *w)
 {
-    std::string user;
-    Page p = paging(c, 200, "user", &user);
-    if (!user.empty() && !puddle_id_valid(user.c_str()))
+    const char *keys[3] = { "limit", "user", "group" };
+    char v[3][PUDDLE_QUERY_VALUE_MAX];
+    if (puddle_query_parse(c->req->target, keys, 3, v) != 0)
+        throw Error::badRequest();
+    long limit = 50;
+    if (v[0][0]) {
+        char *end;
+        limit = strtol(v[0], &end, 10);
+        if (*end || limit < 1 || limit > 200)
+            throw Error::badRequest();
+    }
+    if ((v[1][0] && !puddle_id_valid(v[1])) || (v[2][0] && !puddle_id_valid(v[2])))
         throw Error::badRequest("bad_query");
-    courier(c).calls_write(c->ctx, nullptr, user.empty() ? nullptr : user.c_str(), (int)p.limit, w);
+    courier(c).calls_write(c->ctx, nullptr, v[1][0] ? v[1] : nullptr, v[2][0] ? v[2] : nullptr, (int)limit, w);
     return 200;
 }
 
 static int get_call(const puddle_call *c, puddle_jw *w) { return one(c, w, call_param(c)); }
 
 /* {"user": id}: ring a friend. The call comes back as it stands: `calling`, or `ended` with why (unreachable, busy, ...).
+ * {"group": id}: start a call in a group, or join the one going on there (docs/calls.md, "Group calls").
  * From a phone, the phone has the call, and sets up its leg next (media). */
 static int start(const puddle_call *c, puddle_jw *w)
 {
     Body b(c);
-    std::string user = b.string("user", 64);
-    if (!puddle_id_valid(user.c_str()))
+    auto user = b.optString("user", 64), group = b.optString("group", 64);
+    if (user.has_value() == group.has_value() || !puddle_id_valid((user ? *user : *group).c_str()))
         throw Error::badRequest();
     char id[27];
     const char *code = "internal";
-    if (courier(c).call_start(c->ctx, user.c_str(), c->device, id, &code) != 0)
+    if (group) {
+        if (!courier(c).call_start_group)
+            throw Error::conflict("no_calls");
+        if (courier(c).call_start_group(c->ctx, group->c_str(), c->device, id, &code) != 0)
+            throw failure(code);
+    } else if (courier(c).call_start(c->ctx, user->c_str(), c->device, id, &code) != 0) {
         throw failure(code);
+    }
     return one(c, w, id, 201);
 }
 

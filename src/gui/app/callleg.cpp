@@ -22,9 +22,10 @@ struct CallLeg::Impl {
     QString id;
     std::shared_ptr<rtc::PeerConnection> pc;
     std::shared_ptr<rtc::Track> track;
+    std::shared_ptr<rtc::DataChannel> dc;
     bool open = false, connected = false, offered = false;
     uint32_t nextTs = 0;
-    std::function<void(uint32_t, const QByteArray &)> onFrame;
+    std::function<void(const QString &, uint32_t, const QByteArray &)> onFrame;
 
     // Run `fn` on the owner's thread, if it is still there.
     void post(std::function<void(CallLeg *)> fn)
@@ -62,7 +63,7 @@ bool CallLeg::connected() const
     return d_->connected;
 }
 
-void CallLeg::setOnFrame(std::function<void(uint32_t, const QByteArray &)> fn)
+void CallLeg::setOnFrame(std::function<void(const QString &, uint32_t, const QByteArray &)> fn)
 {
     std::lock_guard<std::mutex> g(d_->mu);
     d_->onFrame = std::move(fn);
@@ -72,18 +73,22 @@ void CallLeg::close()
 {
     std::shared_ptr<rtc::PeerConnection> pc;
     std::shared_ptr<rtc::Track> track;
+    std::shared_ptr<rtc::DataChannel> dc;
     bool was;
     {
         std::lock_guard<std::mutex> g(d_->mu);
         d_->gen++;
         pc.swap(d_->pc);
         track.swap(d_->track);
+        dc.swap(d_->dc);
         was = d_->connected;
         d_->id.clear();
         d_->open = d_->connected = d_->offered = false;
     }
     if (track)
         track->resetCallbacks();
+    if (dc)
+        dc->resetCallbacks();
     if (pc) {
         pc->resetCallbacks();
         pc->close();
@@ -105,6 +110,7 @@ void CallLeg::open(const QString &id, std::function<void(const QString &)> ready
     }
     try {
         rtc::Configuration conf; // no ICE servers: the phone and its Puddle find each other by their own addresses
+        conf.disableAutoNegotiation = true; // one offer, made below once the track and the data channel are both in it
         auto pc = std::make_shared<rtc::PeerConnection>(conf);
         rtc::Description::Audio media(MID, rtc::Description::Direction::SendRecv);
         media.addOpusCodec(OPUS_PT);
@@ -127,7 +133,7 @@ void CallLeg::open(const QString &id, std::function<void(const QString &)> ready
             auto d = weak.lock();
             if (!d || data.empty())
                 return;
-            std::function<void(uint32_t, const QByteArray &)> fn;
+            std::function<void(const QString &, uint32_t, const QByteArray &)> fn;
             {
                 std::lock_guard<std::mutex> g(d->mu);
                 if (d->gen != gen)
@@ -135,7 +141,30 @@ void CallLeg::open(const QString &id, std::function<void(const QString &)> ready
                 fn = d->onFrame;
             }
             if (fn)
-                fn(info.timestamp, QByteArray(reinterpret_cast<const char *>(data.data()), qsizetype(data.size())));
+                fn(QString(), info.timestamp, QByteArray(reinterpret_cast<const char *>(data.data()), qsizetype(data.size())));
+        });
+        // a group call's members, each frame marked with whose: as fresh as can be, so nothing is sent again or waited for
+        rtc::DataChannelInit init;
+        init.reliability.unordered = true;
+        init.reliability.maxRetransmits = 0;
+        auto dc = pc->createDataChannel("frames", init);
+        dc->onMessage([weak, gen](rtc::message_variant m) {
+            auto *bin = std::get_if<rtc::binary>(&m);
+            auto d = weak.lock();
+            if (!d || !bin || bin->size() < 6)
+                return;
+            std::function<void(const QString &, uint32_t, const QByteArray &)> fn;
+            {
+                std::lock_guard<std::mutex> g(d->mu);
+                if (d->gen != gen)
+                    return;
+                fn = d->onFrame;
+            }
+            if (!fn)
+                return;
+            const auto *b = reinterpret_cast<const unsigned char *>(bin->data());
+            const uint32_t ts = uint32_t(b[1]) << 24 | uint32_t(b[2]) << 16 | uint32_t(b[3]) << 8 | b[4];
+            fn(QStringLiteral("slot:%1").arg(b[0]), ts, QByteArray(reinterpret_cast<const char *>(b + 5), qsizetype(bin->size() - 5)));
         });
         pc->onStateChange([weak, gen](rtc::PeerConnection::State s) {
             auto d = weak.lock();
@@ -178,6 +207,7 @@ void CallLeg::open(const QString &id, std::function<void(const QString &)> ready
             std::lock_guard<std::mutex> g(d_->mu);
             d_->pc = pc;
             d_->track = track;
+            d_->dc = dc;
         }
         pc->setLocalDescription();
     } catch (const std::exception &) {
@@ -244,7 +274,7 @@ CallLeg::CallLeg(QObject *parent) : QObject(parent) {}
 CallLeg::~CallLeg() = default;
 QString CallLeg::callId() const { return QString(); }
 bool CallLeg::connected() const { return false; }
-void CallLeg::setOnFrame(std::function<void(uint32_t, const QByteArray &)>) {}
+void CallLeg::setOnFrame(std::function<void(const QString &, uint32_t, const QByteArray &)>) {}
 void CallLeg::close() {}
 void CallLeg::open(const QString &, std::function<void(const QString &)> ready) { ready(QString()); }
 bool CallLeg::answer(const QString &, const QString &, int) { return false; }

@@ -202,11 +202,11 @@ int main(int argc, char **argv)
     }
     /* ---- through the speaker's side: 25 frames of a tone, one lost on the way, played as 500 ms without a hole ---- */
     {
-        JitterBuffer b(3);
+        Mixer m;
         for (int i = 0; i < 25; i++)
             if (i != 12)
-                b.push(uint32_t(i) * T, CallAudio::encodeForTest(tone(i * 960)));
-        Playout out(&b, 2);
+                m.push(QStringLiteral("bob"), uint32_t(i) * T, CallAudio::encodeForTest(tone(i * 960)));
+        Playout out(&m, 2);
         out.open(QIODevice::ReadOnly);
         QByteArray all(25 * 960 * 2 * 2, '\0');
         CHECK(out.read(all.data(), all.size()) == all.size());
@@ -223,6 +223,33 @@ int main(int argc, char **argv)
         /* and after the last frame, silence rather than nothing: a speaker that reads nothing stops */
         QByteArray after(960 * 4, 'x');
         CHECK(out.read(after.data(), after.size()) == after.size() && loudness(after.constData(), after.size()) < 50);
+    }
+
+    /* ---- two voices (a group call): each its own buffer and decoder, played together; one gone quiet is let go ---- */
+    {
+        Mixer m;
+        for (int i = 0; i < 10; i++) {
+            m.push(QStringLiteral("bob"), 5000 + uint32_t(i) * T, CallAudio::encodeForTest(tone(i * 960)));
+            m.push(QStringLiteral("carol"), 90000 + uint32_t(i) * T, CallAudio::encodeForTest(tone(i * 960))); /* her own clock */
+        }
+        CHECK(m.voices() == 2);
+        Mixer one;
+        for (int i = 0; i < 10; i++)
+            one.push(QStringLiteral("bob"), uint32_t(i) * T, CallAudio::encodeForTest(tone(i * 960)));
+        int16_t both[960], alone[960];
+        double lb = 0, la = 0;
+        for (int i = 0; i < 8; i++) {
+            m.pull(both);
+            one.pull(alone);
+            if (i >= 3) { /* once the codec has settled */
+                lb += loudness(reinterpret_cast<const char *>(both), sizeof both);
+                la += loudness(reinterpret_cast<const char *>(alone), sizeof alone);
+            }
+        }
+        CHECK(lb > 1.8 * la && la > 2000 * 5); /* the same tone twice, in step: about twice as loud */
+        for (int i = 0; i < 520; i++) /* 10 s of nothing more from either */
+            m.pull(both);
+        CHECK(m.voices() == 0);
     }
 
     if (failures) {

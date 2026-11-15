@@ -15,6 +15,9 @@
 // fingerprint each side checks travels in a request the phone signed and an answer the Puddle signed, so the media is
 // bound to the pairing.
 //
+// In a group call the members' frames come over a data channel the offer also opens, each marked with the member's number
+// (`slot` in the call's members): [slot][RTP timestamp, big-endian][frame]. The phone's own still go on the track.
+//
 // Built without libdatachannel, built() is false and a leg never opens: calls still ring and connect on the phone, silent.
 class CallLeg : public QObject {
     Q_OBJECT
@@ -34,8 +37,9 @@ public:
     QString callId() const;
     bool connected() const;
 
-    // Each Opus frame from the friend, with its RTP timestamp. Called on a network thread: it must not block.
-    void setOnFrame(std::function<void(uint32_t ts, const QByteArray &frame)> fn);
+    // Each Opus frame from the friend ("" as `from`), or a member of a group call ("slot:<n>"), with its RTP timestamp in
+    // that one's count. Called on a network thread: it must not block.
+    void setOnFrame(std::function<void(const QString &from, uint32_t ts, const QByteArray &frame)> fn);
     // One Opus frame of 20 ms from the microphone. Any thread. false if the leg can't take it (not open yet).
     bool send(const QByteArray &frame);
 

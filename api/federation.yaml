@@ -472,6 +472,55 @@ paths:
       responses:
         "204": { description: Ended }
         "404": { description: No such call }
+  /stream/v1/call/group/join:
+    post:
+      tags: [calls]
+      operationId: groupCallJoin
+      summary: The sender is in the group's call `call` (docs/calls.md, "Group calls")
+      description: |
+        From a member of `group` over a stream that carries groups (a friend's, or a group-only one; `403 not_member` otherwise). Sent
+        to every member on joining, and again every 20 s while in it; a member not heard from in three of those has gone. It says
+        the sender is in no other call of the group. `seq` only goes up from each sender: one no newer than the last is ignored
+        (they may arrive out of order). The answer: whether the recipient is in that call too (`in`; if so, of the two, the
+        smaller id offers), and `call` if the recipient knows of another call in the group with a smaller id, which everyone moves
+        to (two started at once). A recipient that isn't in it is rung, if it hadn't heard of it and is free.
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [call, group], properties: { call: { type: string, pattern: "^[a-z2-7]{26}$" }, group: { $ref: "wire/ids.yaml#/$defs/UserId" }, seq: { type: integer, minimum: 1 } } } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, required: [in], properties: { in: { type: boolean }, call: { type: string } } } } } }
+        "403": { description: not_member }
+  /stream/v1/call/group/leave:
+    post:
+      tags: [calls]
+      operationId: groupCallLeave
+      summary: The sender left the group's call
+      description: "Sent to every member. `{call, group, seq}` as for join; a stale one (an older `seq`) is ignored. The call is over for those not in it once nobody is."
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [call, group], properties: { call: { type: string }, group: { type: string }, seq: { type: integer, minimum: 1 } } } } } }
+      responses:
+        "204": { description: Noted }
+  /stream/v1/call/group/offer:
+    post:
+      tags: [calls]
+      operationId: groupCallOffer
+      summary: Connect two members in the group's call
+      description: |
+        From the member with the smaller user id of the two (`409 ours_to_offer` otherwise), to one in the same call (`404 no_call`
+        otherwise). `{call, group, sdp, udp}` as for a friend's offer; answered with `group/answer` once the recipient has made
+        its side. A member's offer replaces any connection the two had. `409 full` past 8 in the call.
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [call, group, sdp, udp], properties: { call: { type: string }, group: { type: string }, sdp: { type: string, maxLength: 16384 }, udp: { type: integer } } } } } }
+      responses:
+        "204": { description: Answered in a moment }
+        "404": { description: Not in that call }
+        "409": { description: "ours_to_offer, or full" }
+  /stream/v1/call/group/answer:
+    post:
+      tags: [calls]
+      operationId: groupCallAnswer
+      summary: The other member's side of the connection
+      description: "`{call, group, sdp, udp}`. `404 no_call` if the offerer has no such connection waiting."
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [call, group, sdp, udp], properties: { call: { type: string }, group: { type: string }, sdp: { type: string, maxLength: 16384 }, udp: { type: integer } } } } } }
+      responses:
+        "204": { description: Connecting }
+        "404": { description: No such connection }
 
 components:
   securitySchemes:

@@ -237,9 +237,10 @@ typedef struct {
     char call[32];
 } heard;
 
-static void on_frame(void *user, const char *call, const unsigned char *frame, size_t len, uint32_t ts)
+static void on_frame(void *user, const char *call, const char *from, const unsigned char *frame, size_t len, uint32_t ts)
 {
     (void)ts;
+    (void)from;
     heard *h = user;
     pthread_mutex_lock(&h->mu);
     h->frames++;

@@ -14,6 +14,8 @@ Decided with the owner:
   advertise, so nobody outside learns who calls whom. A Puddle that can't be reached waits for the Levee relay
   (`levee.md`, "Voice and video").
 - **First version:** one to one calls in the window, then on the phone, then group calls, then video.
+- **Group calls are a mesh:** a connection between each pair of the people in the call, over the connections the group
+  already has. No Puddle carries anyone else's call, so it suits small groups (up to 8 in a call).
 
 ## The path
 
@@ -110,11 +112,11 @@ to 22, and both keep this end's own voice when it talks over the friend.
 
 | route | |
 |---|---|
-| `GET /api/v1/calls` | `{version, items}`: the current call, then ended ones, newest first; `?user=` a friend's only, `?limit=` how many (50) |
-| `POST /api/v1/calls/start` | `{user}`: ring a friend |
-| `POST /api/v1/calls/{call}/accept` | |
-| `POST /api/v1/calls/{call}/decline` | |
-| `POST /api/v1/calls/{call}/end` | hang up, or give up ringing |
+| `GET /api/v1/calls` | `{version, items}`: the current call, then group calls going on that the owner is not in, then ended ones, newest first; `?user=` a friend's only, `?group=` a group's only, `?limit=` how many (50) |
+| `POST /api/v1/calls/start` | `{user}`: ring a friend; `{group}`: start a call in a group, or join the one going on there |
+| `POST /api/v1/calls/{call}/accept` | answer, or join a group call |
+| `POST /api/v1/calls/{call}/decline` | (a group call stops ringing, and can still be joined) |
+| `POST /api/v1/calls/{call}/end` | hang up, or give up ringing; leave a group call |
 | `POST /api/v1/calls/{call}/media` | a phone's leg: `{sdp}` its offer, answered `{sdp, udp}` ("On a phone") |
 
 Each call says which of the owner's devices has it (`device`): `null` for the window, or the phone (`{id, name}`) that
@@ -127,12 +129,14 @@ has moved.
 
 ### In the window
 
-- A friend's conversation has a call button in its header (one call at a time, so it is off during one).
+- A friend's conversation has a call button in its header (one call at a time, so it is off during one); so does a group's,
+  which starts a call there, or says "Join (2)" while one goes on that the owner is not in.
 - A bar floats over the top of whatever page is open while a call goes on: a friend ringing (Answer, Decline), ours
   ringing at theirs, connecting, or the call with how long it has run, mute and hang up. A friend ringing is also a
   notification.
-- Each call is a note in the chat among the messages ("You called Bob · 3:12", "Missed call from Bob"), shown once the
-  messages around it are loaded.
+- Each call is a note in the chat among the messages ("You called Bob · 3:12", "Missed call from Bob", "Alice started a
+  call · 12:40"), shown once the messages around it are loaded.
+- A group call's bar shows the group, and how many others are in it; hanging up leaves it to them.
 
 ## On a phone
 
@@ -162,8 +166,60 @@ sooner than the leg's own connection would.
 In the app (`src/gui/app/callleg.*`), the phone uses the window's microphone, speaker and jitter buffer (`callaudio.*`),
 fed from the leg instead of from the Puddle in its own process.
 
+## Group calls
+
+A call in a group (`groups.md`) is a connection between each pair of the people in it, over the streams the group already
+has: a friendship, or the group-only stream two members who never met were given. Each Puddle sends its owner's frames to
+every other member in the call and passes on what each sends, so with five in a call each Puddle sends four streams and
+gets four. Nobody carries the others' calls, nobody is in charge of it, and it stops when the last one leaves. Up to 8 in a
+call (`PUDDLE_GROUP_CALL_MAX`): beyond that, a member's upload is the limit.
+
+Over the stream, signed like a friend's call, from a member of the group to another (`403 not_member` otherwise):
+
+| route | body | answer |
+|---|---|---|
+| `POST /stream/v1/call/group/join` | `{call, group, seq}` | `200 {in, call?}`: whether we are in it too; `call`, a smaller id we know of in the group |
+| `POST /stream/v1/call/group/leave` | `{call, group, seq}` | `204` |
+| `POST /stream/v1/call/group/offer` | `{call, group, sdp, udp}` | `204`, answered in a moment with `group/answer`; `404 no_call`, `409 ours_to_offer`, `409 full` |
+| `POST /stream/v1/call/group/answer` | `{call, group, sdp, udp}` | `204`; `404 no_call` |
+
+- **Starting and joining.** Whoever starts a call chooses its id and tells every member of the group (`join`); so does
+  everyone who joins. A member who hears of a call they are not in is rung for 45 seconds, if they are free, and can join
+  it for as long as it goes on (the group's chat says "Join (2)"). Turning it down only stops the ringing.
+- **Connecting.** Each `join` is answered with whether the recipient is in the call too. For every two in it, the one
+  with the smaller user id offers (`group/offer`), and the other answers (`group/answer`), so two who join at the same
+  moment never both offer. Offers and answers name their DTLS fingerprints and travel signed, as a friend's call does.
+- **Staying in step.** A member in the call says `join` again every 20 seconds; one not heard from in three of those, with
+  no connection up, has gone. The same message mends a connection that dropped: the one to offer offers again. A `join`
+  also means the sender is in no other call of the group.
+- **Out of order.** Joins and leaves go out at once to everyone, on separate threads, so two of them can arrive the wrong
+  way round (a "still in" just after a "left"). Each carries a `seq` that only goes up from that sender (its clock in
+  microseconds, or one more than the last), and the older of two is ignored.
+- **Two at once.** Two members who start a call at the same moment start two calls. The first to hear of the other moves
+  to whichever has the smaller id (`join` answers with it), and so everyone ends up in one.
+- **Leaving.** Leaving tells every member. The call goes on for the rest; it ends for one left alone after 45 seconds
+  (`hung_up`, or `no_answer` if nobody ever came).
+
+What the owner sees is a call with `group` set and its `members` (the others in it, each with whether it is connected):
+`calling` while alone in it, `connecting`, `active` once connected with anyone; `ringing` or `open` for one going on that
+the owner is not in. The history notes each call left (`hung_up`, `cancelled`, `no_answer`, `failed`), and each one rung
+for and never joined (`missed`, or `declined`), under the group; `user` is who started it.
+
+One call at a time still: in a group call, a friend's ring is answered `busy`, and the other way round.
+
+`groupcall_test` has four Puddles, three of them in a group, two of whom have never met: starting, ringing, joining,
+frames between every pair marked with whose they are (over the group-only stream too), leaving and coming back, busy, a
+call nobody joins, two starting at once ending up in one, and that only a member can start one. `ui_test` does it from
+the window's header and bar.
+
+### Group calls on a phone
+
+A phone in a group call has its leg to its Puddle as for a friend's call ("On a phone"). What it says goes on its track,
+and its Puddle sends it to everyone connected. What the others say comes the other way over a data channel the phone's
+offer also opens (`frames`: unordered, never sent again), one message per frame: the member's number in the call (`slot`
+in `members`), the frame's RTP timestamp (4 bytes, big-endian), then the Opus frame. The app keeps a jitter buffer and
+decoder for each (`Mixer` in `callaudio.*`), and plays them mixed, as the window does.
+
 ## Later steps
 
-- **Group calls (8.4):** a group call is a call per pair of members (a mesh), over the group's connections, so it suits
-  small groups.
 - **Video (8.5):** a video track beside the audio, from the window's camera (and the phone's).

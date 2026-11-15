@@ -140,19 +140,35 @@ Pane {
                 PanelToggle { objectName: "sidebarButton"; glyph: "layout-sidebar"; label: qsTr("Conversations"); active: page.sidebarShown; onClicked: page.toggleSidebar() }
                 Avatar { chats: page.chats; name: page.chats.currentName; hash: page.chats.currentAvatar; tint: page.chats.currentColor; size: 28 }
                 Label { text: page.chats.currentName; font.bold: true; font.pixelSize: 16; elide: Text.ElideRight; Layout.fillWidth: true }
-                // ring this friend (docs/calls.md); only one call at a time
+                // ring this friend, or start a call in this group or join the one going on (docs/calls.md); one call at a time
                 ToolButton {
+                    id: callButton
                     objectName: "callButton"
-                    visible: !page.chats.currentIsGroup && page.chats.current !== "" && page.canSend
+                    // how many are in this group's call, kept fresh as calls come and go
+                    property int inGroupCall: 0
+                    function update() { inGroupCall = page.chats.currentIsGroup ? page.chats.calls.groupCall(page.chats.current) : 0 }
+                    Component.onCompleted: update()
+                    Connections {
+                        target: page.chats.calls
+                        function onGroupCallsChanged() { callButton.update() }
+                    }
+                    Connections {
+                        target: page.chats
+                        function onCurrentChanged() { callButton.update() }
+                    }
+                    visible: page.chats.current !== "" && page.canSend
                     enabled: page.chats.calls.state === ""
                     icon.source: Theme.icon("phone")
                     icon.width: Theme.iconSize
                     icon.height: Theme.iconSize
-                    display: AbstractButton.IconOnly
-                    Accessible.name: qsTr("Call %1").arg(page.chats.currentName)
+                    display: inGroupCall > 0 ? AbstractButton.TextBesideIcon : AbstractButton.IconOnly
+                    text: inGroupCall > 0 ? qsTr("Join (%1)").arg(inGroupCall) : ""
+                    Accessible.name: !page.chats.currentIsGroup ? qsTr("Call %1").arg(page.chats.currentName)
+                        : inGroupCall > 0 ? qsTr("Join the call in %1").arg(page.chats.currentName)
+                        : qsTr("Start a call in %1").arg(page.chats.currentName)
                     ToolTip.text: Accessible.name
                     ToolTip.visible: hovered
-                    onClicked: page.chats.calls.call(page.chats.current)
+                    onClicked: page.chats.currentIsGroup ? page.chats.calls.callGroup(page.chats.current) : page.chats.calls.call(page.chats.current)
                 }
                 PanelToggle {
                     objectName: "contextButton"

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QHash>
 #include <QObject>
 #include <QTimer>
 
@@ -15,12 +16,17 @@
 // A call is had by one of the owner's devices: the window, or the phone that started or answered it. Every device rings;
 // the others show where it went and can hang it up. On a phone (setDevice), the call it has gets a leg of its own to the
 // Puddle (callleg.h), set up here.
+//
+// A group call (docs/calls.md, "Group calls") is the same here, with `group` set: started from the group's chat, joined from
+// its ringing or from the chat while it goes on (groupCall), and left by hanging up while the others carry on.
 class Calls : public QObject {
     Q_OBJECT
     Q_PROPERTY(QString state READ state NOTIFY changed)         // "" for no call; calling, ringing, connecting, active
     Q_PROPERTY(QString callId READ callId NOTIFY changed)
-    Q_PROPERTY(QString user READ user NOTIFY changed)           // the friend
-    Q_PROPERTY(QString name READ name NOTIFY changed)
+    Q_PROPERTY(QString user READ user NOTIFY changed)           // the friend; who started it, in a group call
+    Q_PROPERTY(QString group READ group NOTIFY changed)         // the group, in a group call; "" with a friend
+    Q_PROPERTY(int others READ others NOTIFY changed)           // in a group call: how many others are in it
+    Q_PROPERTY(QString name READ name NOTIFY changed)           // the friend's name, or the group's
     Q_PROPERTY(bool incoming READ incoming NOTIFY changed)
     Q_PROPERTY(qint64 answeredAt READ answeredAt NOTIFY changed) // ms since the epoch, 0 until it connected
     Q_PROPERTY(bool here READ here NOTIFY changed)              // this device has the call (ringing is everywhere's)
@@ -33,7 +39,9 @@ public:
     QString state() const { return state_; }
     QString callId() const { return id_; }
     QString user() const { return user_; }
-    QString name() const { return nameOf_ ? nameOf_(user_) : user_; }
+    QString group() const { return group_; }
+    int others() const { return others_; }
+    QString name() const { return nameOf_ ? nameOf_(group_.isEmpty() ? user_ : group_) : user_; }
     bool incoming() const { return incoming_; }
     qint64 answeredAt() const { return answered_; }
     bool here() const { return here_; }
@@ -52,6 +60,10 @@ public:
 
     Q_INVOKABLE void refresh();
     Q_INVOKABLE void call(const QString &user);
+    // Start a call in a group, or join the one going on there
+    Q_INVOKABLE void callGroup(const QString &group);
+    // How many are in the call going on in `group` (0: none); in it or not
+    Q_INVOKABLE int groupCall(const QString &group) const { return groupCalls_.value(group, 0); }
     Q_INVOKABLE void accept();
     Q_INVOKABLE void decline();
     Q_INVOKABLE void hangUp();
@@ -59,16 +71,20 @@ public:
     Q_INVOKABLE void toggleMute() { setMuted(!muted_); }
     // Words for how a call ended, as a chat shows it
     Q_INVOKABLE QString describe(const QString &reason, bool incoming, const QString &name, qint64 seconds) const;
+    // ... and a group's, as its chat shows it: `name` is who started it
+    Q_INVOKABLE QString describeGroup(const QString &reason, bool incoming, const QString &name, qint64 seconds) const;
 
 signals:
     void changed();
     void mutedChanged();
     void errorChanged();
-    void ringing(const QString &user);  // a friend's call just started ringing here
+    void ringing(const QString &user, const QString &group); // a friend's call (or a call in a group) just started ringing here
+    void groupCallsChanged();            // the calls going on in groups
     void historyChanged();               // a call ended (or began): the notes in a chat may have changed
 
 private:
     void act(const QString &verb);
+    void start(const QJsonObject &body);
     void take(const QJsonObject &call);
     void setError(const QString &e);
     void followLeg();
@@ -80,7 +96,9 @@ private:
     std::function<QString(const QString &)> nameOf_;
     quint64 version_ = 0;
     bool busy_ = false;
-    QString state_, id_, user_, error_;
+    QString state_, id_, user_, group_, error_;
+    int others_ = 0;
+    QHash<QString, int> groupCalls_;
     bool incoming_ = false, muted_ = false;
     qint64 answered_ = 0;
 };

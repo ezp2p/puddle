@@ -224,41 +224,94 @@ void EchoCanceller::process(int16_t *pcm, int samples)
     }
 }
 
+
+// ---- the voices, mixed ----
+
+static void freeDecoder(void *d)
+{
+#ifdef PUDDLE_HAVE_OPUS
+    if (d)
+        opus_decoder_destroy(static_cast<OpusDecoder *>(d));
+#else
+    Q_UNUSED(d);
+#endif
+}
+
+Mixer::~Mixer()
+{
+    reset();
+}
+
+void Mixer::push(const QString &from, uint32_t rtpTs, QByteArray frame)
+{
+    std::lock_guard<std::mutex> g(mu_);
+    auto &v = voices_[from];
+    if (!v) {
+        v = std::make_unique<Voice>();
+#ifdef PUDDLE_HAVE_OPUS
+        int err = 0;
+        v->decoder = opus_decoder_create(kRate, 1, &err);
+#endif
+    }
+    v->buffer.push(rtpTs, std::move(frame));
+}
+
+void Mixer::pull(int16_t out[kFrameSamples])
+{
+    int32_t sum[kFrameSamples] = {};
+    std::lock_guard<std::mutex> g(mu_);
+    for (auto it = voices_.begin(); it != voices_.end();) {
+        Voice &v = *it->second;
+        int16_t mono[kFrameSamples * 6]; // Opus may hand back up to 120 ms; only 20 ms of it is used
+        int n = 0;
+        QByteArray frame;
+        JitterBuffer::Kind k = v.buffer.pop(&frame);
+#ifdef PUDDLE_HAVE_OPUS
+        auto *dec = static_cast<OpusDecoder *>(v.decoder);
+        if (dec && k == JitterBuffer::Frame)
+            n = opus_decode(dec, reinterpret_cast<const unsigned char *>(frame.constData()), frame.size(), mono, kFrameSamples * 6, 0);
+        else if (dec && k == JitterBuffer::Lost)
+            n = opus_decode(dec, nullptr, 0, mono, kFrameSamples, 0); // the decoder's best guess at what was lost
+#endif
+        v.quiet = k == JitterBuffer::Wait ? v.quiet + 1 : 0;
+        for (int i = 0; i < qMin(n, kFrameSamples); i++)
+            sum[i] += mono[i];
+        if (v.quiet >= 500) { // 10 s with nothing: gone (it comes back as new if it speaks again)
+            freeDecoder(v.decoder);
+            it = voices_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (int i = 0; i < kFrameSamples; i++)
+        out[i] = int16_t(qBound(-32768, sum[i], 32767));
+}
+
+void Mixer::reset()
+{
+    std::lock_guard<std::mutex> g(mu_);
+    for (auto &[from, v] : voices_)
+        freeDecoder(v->decoder);
+    voices_.clear();
+}
+
+int Mixer::voices() const
+{
+    std::lock_guard<std::mutex> g(mu_);
+    return int(voices_.size());
+}
+
 // ---- the speaker's side ----
 
-Playout::Playout(JitterBuffer *buffer, int channels, QObject *parent) : QIODevice(parent), buffer_(buffer), channels_(channels)
-{
-#ifdef PUDDLE_HAVE_OPUS
-    int err = 0;
-    decoder_ = opus_decoder_create(kRate, 1, &err);
-#endif
-}
+Playout::Playout(Mixer *mixer, int channels, QObject *parent) : QIODevice(parent), mixer_(mixer), channels_(channels) {}
 
-Playout::~Playout()
-{
-#ifdef PUDDLE_HAVE_OPUS
-    if (decoder_)
-        opus_decoder_destroy(static_cast<OpusDecoder *>(decoder_));
-#endif
-}
+Playout::~Playout() = default;
 
 void Playout::decodeNext()
 {
-    int16_t mono[kFrameSamples * 6]; // Opus may hand back up to 120 ms
-    int n = 0;
-    QByteArray frame;
-    JitterBuffer::Kind k = buffer_->pop(&frame);
-#ifdef PUDDLE_HAVE_OPUS
-    auto *dec = static_cast<OpusDecoder *>(decoder_);
-    if (dec && k == JitterBuffer::Frame)
-        n = opus_decode(dec, reinterpret_cast<const unsigned char *>(frame.constData()), frame.size(), mono, kFrameSamples * 6, 0);
-    else if (dec && k == JitterBuffer::Lost)
-        n = opus_decode(dec, nullptr, 0, mono, kFrameSamples, 0); // the decoder's best guess at what was lost
-#endif
-    if (n <= 0) {
-        n = kFrameSamples;
-        memset(mono, 0, sizeof(int16_t) * n);
-    }
+    int16_t mono[kFrameSamples];
+    mixer_->pull(mono);
+    const int n = kFrameSamples;
     const qsizetype at = pcm_.size();
     pcm_.resize(at + qsizetype(n) * channels_ * 2);
     auto *out = reinterpret_cast<int16_t *>(pcm_.data() + at);
@@ -317,7 +370,7 @@ void CallAudio::start(Send send)
 {
     stop();
     send_ = std::move(send);
-    buffer_.reset();
+    mixer_.reset();
     captured_.clear();
     resampleAt_ = 0;
     running_ = true;
@@ -341,7 +394,7 @@ void CallAudio::start(Send send)
             f = wanted(out.preferredFormat().channelCount() > 0 ? out.preferredFormat().channelCount() : 2);
         sink_ = new QAudioSink(out, f, this);
         sink_->setBufferSize(f.bytesForDuration(80000));
-        playout_ = new Playout(&buffer_, f.channelCount(), this);
+        playout_ = new Playout(&mixer_, f.channelCount(), this);
         playout_->open(QIODevice::ReadOnly); // started below, once the echo canceller is known
     }
     // the microphone: 48 kHz mono Int16 if it gives that, else what it prefers, turned into that here

@@ -15,6 +15,9 @@
 #include "service/server.h"
 
 #include <mutex>
+#include <QSet>
+#include <QJsonArray>
+#include "core/group.h"
 
 static int failures;
 #define CHECK(cond) do { if (!(cond)) { fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); failures++; } } while (0)
@@ -177,20 +180,23 @@ int main(int argc, char **argv)
         struct Heard {
             std::mutex mu;
             QList<QByteArray> frames;
+            QSet<QString> from;
             int count() { std::lock_guard<std::mutex> g(mu); return int(frames.size()); }
-            void clear() { std::lock_guard<std::mutex> g(mu); frames.clear(); }
+            void clear() { std::lock_guard<std::mutex> g(mu); frames.clear(); from.clear(); }
         } atBob, atPhone;
-        puddle_calls_on_audio(bobEngine, [](void *u, const char *, const unsigned char *f, size_t n, uint32_t) {
+        puddle_calls_on_audio(bobEngine, [](void *u, const char *, const char *from, const unsigned char *f, size_t n, uint32_t) {
             auto *h = static_cast<Heard *>(u);
             std::lock_guard<std::mutex> g(h->mu);
             h->frames.append(QByteArray(reinterpret_cast<const char *>(f), qsizetype(n)));
+            h->from.insert(QString::fromLatin1(from));
         }, &atBob);
         Calls &pc = *P.callModel(), &ac = *A.callModel(), &bc = *B.callModel();
         CallLeg *leg = pc.leg();
         CHECK(leg && !ac.leg() && !bc.leg());
-        leg->setOnFrame([&](uint32_t, const QByteArray &f) {
+        leg->setOnFrame([&](const QString &from, uint32_t, const QByteArray &f) {
             std::lock_guard<std::mutex> g(atPhone.mu);
             atPhone.frames.append(f);
+            atPhone.from.insert(from);
         });
         auto frame = [](char tag, int i) { return QByteArray(1, tag) + QByteArray::number(i) + QByteArray(40, char(i)); };
 
@@ -275,6 +281,60 @@ int main(int argc, char **argv)
         CHECK(until([&] { return bc.state().isEmpty() && ac.state().isEmpty(); }, 20000));
         P.resume();
         CHECK(until([&] { return pc.state().isEmpty(); }));
+
+        /* a group call on the phone (docs/calls.md, "Group calls on a phone"): Bob and Alice in a group, Bob starts a call and
+         * the phone joins; Bob's frames reach it over its leg's data channel, marked with his number in the call */
+        {
+            QString gid;
+            st = -1;
+            B.api()->post("/api/v1/groups/create", QJsonObject{ { "name", "Duo" }, { "members", QJsonArray{ alice.uid } }, { "profile", "main" } },
+                          [&](int s, const QJsonDocument &d) { st = s, gid = d.object().value("group").toObject().value("id").toString(); });
+            CHECK(until([&] { return st != -1; }) && st == 201);
+            CHECK(until([&] {
+                st = -1;
+                A.api()->post("/api/v1/groups/" + gid + "/accept", QJsonObject{ { "profile", "main" } }, [&](int s, const QJsonDocument &) { st = s; });
+                until([&] { return st != -1; });
+                return st == 200;
+            }));
+            CHECK(until([&] {
+                puddle_group g;
+                if (puddle_groups_get(puddle_server_groups(bob.srv), gid.toUtf8().constData(), &g) != 0)
+                    return false;
+                const bool two = puddle_group_count(&g, PUDDLE_GM_MEMBER) == 2;
+                puddle_group_free(&g);
+                return two;
+            }));
+            atPhone.clear(), atBob.clear();
+            bc.callGroup(gid);
+            CHECK(until([&] { return pc.state() == "ringing" && pc.group() == gid && ac.state() == "ringing" && bc.state() == "calling"; }));
+            CHECK(until([&] { return pc.name() == "Duo"; }) && pc.user() == bob.uid); /* once the phone has the group's name */
+            pc.accept();
+            CHECK(until([&] { return pc.state() == "active" && pc.here() && leg->connected() && pc.others() == 1 && bc.state() == "active"; }));
+            CHECK(until([&] { return ac.state() == "active" && ac.elsewhere() == "on My phone"; }));
+            const QString gcall = pc.callId();
+            CHECK(leg->callId() == gcall && bc.callId() == gcall);
+            for (int i = 0; i < 30; i++) {
+                const QByteArray f = frame('g', i);
+                puddle_call_send_audio(bobEngine, gcall.toUtf8().constData(), reinterpret_cast<const unsigned char *>(f.constData()), size_t(f.size()));
+                leg->send(frame('q', i));
+                until([] { return false; }, 20);
+            }
+            CHECK(until([&] { return atPhone.count() >= 25 && atBob.count() >= 25; }));
+            {
+                std::lock_guard<std::mutex> g(atPhone.mu);
+                CHECK(atPhone.frames.contains(frame('g', 29)) && atPhone.from == QSet<QString>{ "slot:1" });
+            }
+            {
+                std::lock_guard<std::mutex> g(atBob.mu);
+                CHECK(atBob.frames.contains(frame('q', 29)) && atBob.from == QSet<QString>{ alice.uid });
+            }
+            /* the phone leaves: Bob carries on alone, and the call is still there for Alice to join */
+            pc.hangUp();
+            CHECK(until([&] { return pc.state().isEmpty() && leg->callId().isEmpty() && pc.groupCall(gid) == 1; }));
+            CHECK(until([&] { return bc.state() == "calling" && bc.others() == 0; }));
+            bc.hangUp();
+            CHECK(until([&] { return bc.state().isEmpty() && pc.groupCall(gid) == 0; }));
+        }
         puddle_calls_on_audio(bobEngine, nullptr, nullptr);
         leg->setOnFrame(nullptr);
     }
@@ -282,9 +342,12 @@ int main(int argc, char **argv)
 
     /* ...but not managing phones: the Puddle answers that as it would a stranger, and the phone says what it saw */
     {
+        P.pause(); /* its own asking, which clears the problem when it gets an answer, waits until this is read */
+        until([] { return false; }, 300);
         int st = -1;
         P.api()->get("/api/v1/devices", [&](int s, const QJsonDocument &) { st = s; });
         CHECK(until([&] { return st != -1; }) && st == 0 && P.problem().contains("didn't recognise"));
+        P.resume();
     }
 
     /* ---- the phone is closed and opened again: it remembers ---- */

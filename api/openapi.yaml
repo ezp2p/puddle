@@ -722,30 +722,36 @@ paths:
   /api/v1/calls:
     get:
       tags: [calls]
-      summary: The call going on, then those that ended, newest first
+      summary: The call going on, the group calls going on that the owner is not in, then those that ended, newest first
       description: "`version` changes whenever a call does, so asking often costs little. Ended calls are kept in the Puddle's data folder (the newest 500)."
       parameters:
-        - { name: user, in: query, schema: { $ref: "wire/ids.yaml#/$defs/UserId" }, description: Only the calls with this friend }
+        - { name: user, in: query, schema: { $ref: "wire/ids.yaml#/$defs/UserId" }, description: Only the calls with this friend (no group calls) }
+        - { name: group, in: query, schema: { $ref: "wire/ids.yaml#/$defs/UserId" }, description: Only this group's calls }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 }, description: How many ended ones }
       responses: { "200": { description: OK, content: { application/json: { schema: { type: object, properties: { version: { type: integer }, items: { type: array, items: { $ref: "objects/call.yaml" } } } } } } } }
   /api/v1/calls/start:
     post:
       tags: [calls]
-      summary: Ring a friend
+      summary: Ring a friend, or start a call in a group (or join the one going on there)
       description: |
-        The call comes back as it stands: `calling` while it rings at theirs, or already `ended` with why (`unreachable`, `busy`,
-        `no_calls` on their side, `failed`). `409 no_stream` (not a friend with an active stream), `409 busy` (a call is going on here).
+        `{user}`: the call comes back as it stands: `calling` while it rings at theirs, or already `ended` with why (`unreachable`,
+        `busy`, `no_calls` on their side, `failed`). `409 no_stream` (not a friend with an active stream), `409 busy` (a call is
+        going on here).
+        `{group}`: a call in the group (docs/calls.md, "Group calls"), `calling` until someone else is in it; if one is going on
+        there, the owner joins it instead (the same as `accept`). `404 no_group` (not a member), `409 full` (8 in it already),
+        `409 busy`.
         From a phone, the phone has the call (its `device`), and sets up its leg next with `media`.
-      requestBody: { content: { application/json: { schema: { type: object, required: [user], properties: { user: { $ref: "wire/ids.yaml#/$defs/UserId" } } } } } }
+      requestBody: { content: { application/json: { schema: { type: object, description: One or the other, properties: { user: { $ref: "wire/ids.yaml#/$defs/UserId" }, group: { $ref: "wire/ids.yaml#/$defs/UserId" } } } } } }
       responses:
         "201": { description: OK, content: { application/json: { schema: { $ref: "objects/call.yaml" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Error" }
   /api/v1/calls/{call}:
     parameters: [{ name: call, in: path, required: true, schema: { type: string, pattern: "^[a-z2-7]{26}$" } }]
     get: { tags: [calls], summary: One call, responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "objects/call.yaml" } } } }, "404": { $ref: "#/components/responses/NotFound" } } }
   /api/v1/calls/{call}/accept:
     parameters: [{ name: call, in: path, required: true, schema: { type: string, pattern: "^[a-z2-7]{26}$" } }]
-    post: { tags: [calls], summary: "Answer a call that is ringing here (`404 no_call` otherwise). A phone that answers has the call, and sets up its leg next with `media`", responses: { "200": { description: "It, `connecting`", content: { application/json: { schema: { $ref: "objects/call.yaml" } } } } } }
+    post: { tags: [calls], summary: "Answer a call that is ringing here, or join a group call that is `ringing` or `open` (`404 no_call` otherwise). A phone that answers has the call, and sets up its leg next with `media`", responses: { "200": { description: "It, `connecting` (a group call: `calling` until connected with someone)", content: { application/json: { schema: { $ref: "objects/call.yaml" } } } } } }
   /api/v1/calls/{call}/media:
     parameters: [{ name: call, in: path, required: true, schema: { type: string, pattern: "^[a-z2-7]{26}$" } }]
     post:
@@ -755,18 +761,19 @@ paths:
         Only from a phone, and only the one that started or answered the call: `400 not_a_phone` with the owner token, `404 no_call`
         from any other phone or once the call is over. The offer comes complete with its candidates, and so does the answer; the
         phone adds this Puddle's address (the one it reaches it at) at `udp`. Asking again replaces the leg (a new network, say).
-        `400 bad_sdp` if the offer can't be used.
-      requestBody: { content: { application/json: { schema: { type: object, required: [sdp], properties: { sdp: { type: string, maxLength: 16384, description: "The phone's WebRTC offer: one Opus audio track" } } } } } }
+        `400 bad_sdp` if the offer can't be used. In a group call the members' frames come over the data channel the offer opens
+        (docs/calls.md, "Group calls on a phone").
+      requestBody: { content: { application/json: { schema: { type: object, required: [sdp], properties: { sdp: { type: string, maxLength: 16384, description: "The phone's WebRTC offer: one Opus audio track, and a data channel `frames`" } } } } } }
       responses:
         "200": { description: The Puddle's answer, content: { application/json: { schema: { type: object, required: [sdp, udp], properties: { sdp: { type: string }, udp: { type: integer, description: "The UDP port this Puddle's calls use (`calls.port`)" } } } } } }
         "400": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/NotFound" }
   /api/v1/calls/{call}/decline:
     parameters: [{ name: call, in: path, required: true, schema: { type: string, pattern: "^[a-z2-7]{26}$" } }]
-    post: { tags: [calls], summary: "Turn down a call that is ringing here", responses: { "200": { description: "It, ended `declined`", content: { application/json: { schema: { $ref: "objects/call.yaml" } } } } } }
+    post: { tags: [calls], summary: "Turn down a call that is ringing here (a group call stops ringing, and stays `open` to join)", responses: { "200": { description: "It, ended `declined` (a group call: `open`)", content: { application/json: { schema: { $ref: "objects/call.yaml" } } } } } }
   /api/v1/calls/{call}/end:
     parameters: [{ name: call, in: path, required: true, schema: { type: string, pattern: "^[a-z2-7]{26}$" } }]
-    post: { tags: [calls], summary: "Hang up, or give up ringing (`cancelled`); on one ringing here, the same as decline", responses: { "200": { description: It, ended, content: { application/json: { schema: { $ref: "objects/call.yaml" } } } } } }
+    post: { tags: [calls], summary: "Hang up, or give up ringing (`cancelled`); on one ringing here, the same as decline. In a group call: leave it, to the others (it is `open` then, while anyone is in it)", responses: { "200": { description: It, ended (or `open`), content: { application/json: { schema: { $ref: "objects/call.yaml" } } } } } }
 
   # ---- phones (docs/identity.md, "Devices"). The owner token only: a phone may not let other phones in ----
   /api/v1/devices:

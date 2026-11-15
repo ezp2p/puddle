@@ -889,15 +889,18 @@ void Chats::open(const QString &userId, const QString &kind)
     refreshCallNotes();
 }
 
-// The calls with the friend whose chat is open, as notes among the messages: "You called Bob · 3:12", "Missed call from Bob".
+// The calls with the friend whose chat is open, as notes among the messages: "You called Bob · 3:12", "Missed call from Bob";
+// or the group's: "Alice started a call · 12:40".
 void Chats::refreshCallNotes()
 {
-    if (current_.isEmpty() || currentIsGroup()) {
+    if (current_.isEmpty()) {
         callNotes_.clear();
         return;
     }
     const QString user = current_;
-    api_.get(QStringLiteral("/api/v1/calls?limit=200&user=") + user, [this, user](int status, const QJsonDocument &doc) {
+    const bool group = currentIsGroup();
+    api_.get(QStringLiteral("/api/v1/calls?limit=200&") + (group ? QStringLiteral("group=") : QStringLiteral("user=")) + user,
+             [this, user, group](int status, const QJsonDocument &doc) {
         if (status != 200 || user != current_)
             return;
         QHash<QString, QJsonObject> notes;
@@ -907,13 +910,17 @@ void Chats::refreshCallNotes()
                 continue;
             const qint64 answered = qint64(c.value("answered").toDouble()), ended = qint64(c.value("ended").toDouble());
             const QString id = QStringLiteral("call:") + c.value("id").toString();
+            if (notes.contains(id))
+                continue; /* a group call left and joined again: the newest says it best */
             QJsonObject n;
             n.insert("id", id);
             n.insert("kind", QStringLiteral("notice"));
             n.insert("call", true);
             n.insert("ts", c.value("created"));
-            n.insert("noticeText", calls_.describe(c.value("reason").toString(), c.value("direction").toString() == QLatin1String("incoming"), nameOf(user),
-                                                   answered > 0 && ended > answered ? (ended - answered) / 1000 : 0));
+            const bool incoming = c.value("direction").toString() == QLatin1String("incoming");
+            const qint64 seconds = answered > 0 && ended > answered ? (ended - answered) / 1000 : 0;
+            n.insert("noticeText", group ? calls_.describeGroup(c.value("reason").toString(), incoming, nameOf(c.value("user").toString()), seconds)
+                                         : calls_.describe(c.value("reason").toString(), incoming, nameOf(user), seconds));
             notes.insert(id, n);
         }
         if (notes.keys() == callNotes_.keys())
