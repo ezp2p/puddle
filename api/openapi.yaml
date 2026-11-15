@@ -762,8 +762,8 @@ paths:
         from any other phone or once the call is over. The offer comes complete with its candidates, and so does the answer; the
         phone adds this Puddle's address (the one it reaches it at) at `udp`. Asking again replaces the leg (a new network, say).
         `400 bad_sdp` if the offer can't be used. In a group call the members' frames come over the data channel the offer opens
-        (docs/calls.md, "Group calls on a phone").
-      requestBody: { content: { application/json: { schema: { type: object, required: [sdp], properties: { sdp: { type: string, maxLength: 16384, description: "The phone's WebRTC offer: one Opus audio track, and a data channel `frames`" } } } } } }
+        (docs/calls.md, "Group calls on a phone"), and their video on the tracks `v1`..`v7`, by their `slot` ("Video").
+      requestBody: { content: { application/json: { schema: { type: object, required: [sdp], properties: { sdp: { type: string, maxLength: 16384, description: "The phone's WebRTC offer: an Opus audio track `audio`, an H.264 video track `video` (both with their SSRCs), seven receive-only video tracks `v1`..`v7`, and a data channel `frames`" } } } } } }
       responses:
         "200": { description: The Puddle's answer, content: { application/json: { schema: { type: object, required: [sdp, udp], properties: { sdp: { type: string }, udp: { type: integer, description: "The UDP port this Puddle's calls use (`calls.port`)" } } } } } }
         "400": { $ref: "#/components/responses/Error" }

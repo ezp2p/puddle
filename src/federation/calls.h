@@ -28,6 +28,7 @@ extern "C" {
 #define PUDDLE_CALL_KEEP_ENDED 10      /* ended calls whose connections are kept a while */
 #define PUDDLE_CALL_HISTORY 500        /* ended calls the owner's history keeps (state/calls.jsonl) */
 #define PUDDLE_CALL_FRAME_MAX 1500     /* the largest Opus frame passed on */
+#define PUDDLE_CALL_VIDEO_MAX (1024 * 1024) /* the largest video frame (an H.264 access unit) passed on */
 #define PUDDLE_GROUP_CALL_MAX 8        /* people in a group call, us included: each sends to all the others */
 #define PUDDLE_GROUP_CALL_BEAT_MS 20000 /* how often a member in a group call says so again; one not heard for three is gone */
 
@@ -74,6 +75,16 @@ void puddle_calls_on_audio(puddle_calls *c, puddle_call_frame_fn fn, void *user)
 /* Send one Opus frame of 20 ms on the active call `id` (to everyone connected, in a group call). 0 sent, -1 no such active
  * call (or too large). */
 int puddle_call_send_audio(puddle_calls *c, const char *id, const unsigned char *frame, size_t len);
+/* ---- video (docs/calls.md, "Video"): H.264 access units, Annex B (each NAL unit after a start code), on a track of its own
+ * beside the sound. The Puddle passes them on whole and decodes nothing; the device encodes, and decodes each sender's. ---- */
+
+/* Each frame of video from the friend (or member `from`), as it arrives; `rtp_ts` in that one's own 90 kHz count. Called on
+ * a network thread: it must not block. */
+void puddle_calls_on_video(puddle_calls *c, puddle_call_frame_fn fn, void *user);
+/* Send one frame of the owner's camera on the active call `id` (to everyone connected, in a group call), stamped with the
+ * time now. 0 sent, -1 not (no such active call, its video track isn't open yet, or too large). */
+int puddle_call_send_video(puddle_calls *c, const char *id, const unsigned char *frame, size_t len);
+
 /* For tests: how long ringing (the caller's and the callee's) and connecting may take, in ms; 0 leaves one as it is. */
 void puddle_calls_set_timeouts(puddle_calls *c, int64_t ring_ms, int64_t ring_in_ms, int64_t connect_ms);
 /* For tests: how often a member in a group call says so again (and so how soon one that went is noticed: three times it). */

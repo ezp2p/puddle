@@ -32,6 +32,7 @@ class Calls : public QObject {
     Q_PROPERTY(bool here READ here NOTIFY changed)              // this device has the call (ringing is everywhere's)
     Q_PROPERTY(QString elsewhere READ elsewhere NOTIFY changed)  // where it is if not here, in words: "on Pixel", "on the computer"
     Q_PROPERTY(bool muted READ muted NOTIFY mutedChanged)
+    Q_PROPERTY(bool camera READ camera NOTIFY cameraChanged)    // this end's camera is on (off at the start of every call)
     Q_PROPERTY(QString error READ error NOTIFY errorChanged)     // the last thing that went wrong starting or answering, in words
 public:
     explicit Calls(ApiClient *api, QObject *parent = nullptr);
@@ -47,6 +48,7 @@ public:
     bool here() const { return here_; }
     QString elsewhere() const;
     bool muted() const { return muted_; }
+    bool camera() const { return camera_; }
     QString error() const { return error_; }
     quint64 version() const { return version_; }
 
@@ -69,6 +71,10 @@ public:
     Q_INVOKABLE void hangUp();
     Q_INVOKABLE void setMuted(bool muted);
     Q_INVOKABLE void toggleMute() { setMuted(!muted_); }
+    Q_INVOKABLE void setCamera(bool on);
+    Q_INVOKABLE void toggleCamera() { setCamera(!camera_); }
+    // Who has number `slot` in a group call (a phone's video from "slot:<n>"), "" if nobody
+    Q_INVOKABLE QString slotUser(int slot) const { return slots_.value(slot); }
     // Words for how a call ended, as a chat shows it
     Q_INVOKABLE QString describe(const QString &reason, bool incoming, const QString &name, qint64 seconds) const;
     // ... and a group's, as its chat shows it: `name` is who started it
@@ -77,6 +83,7 @@ public:
 signals:
     void changed();
     void mutedChanged();
+    void cameraChanged();
     void errorChanged();
     void ringing(const QString &user, const QString &group); // a friend's call (or a call in a group) just started ringing here
     void groupCallsChanged();            // the calls going on in groups
@@ -99,6 +106,7 @@ private:
     QString state_, id_, user_, group_, error_;
     int others_ = 0;
     QHash<QString, int> groupCalls_;
-    bool incoming_ = false, muted_ = false;
+    bool incoming_ = false, muted_ = false, camera_ = false;
+    QHash<int, QString> slots_;
     qint64 answered_ = 0;
 };

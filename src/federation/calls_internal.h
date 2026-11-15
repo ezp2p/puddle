@@ -20,7 +20,10 @@
 #include <vector>
 
 #define OPUS_PT 111
+#define H264_PT 96
 #define MID "audio"
+#define VIDEO_MID "video"
+#define PHONE_SLOTS 7 /* a phone's leg has a video track for each other member a group call can have: v1 .. v7 */
 #define LOST_MS 10000 /* a connection that dropped and hasn't come back in this long is over */
 
 namespace callsx {
@@ -32,6 +35,9 @@ struct Leg {
     std::shared_ptr<rtc::PeerConnection> pc;
     std::shared_ptr<rtc::Track> track;
     std::shared_ptr<rtc::DataChannel> dc;
+    std::shared_ptr<rtc::Track> vtrack;                      /* the phone's camera, and the friend's video back to it */
+    std::shared_ptr<rtc::Track> vslots[PHONE_SLOTS + 1];     /* in a group call: member n's video to the phone ("v<n>") */
+    uint32_t vbase[PHONE_SLOTS + 1] = {};                    /* each one's RTP timestamps, moved by this much */
     bool open = false, connected = false, dc_open = false;
     int64_t deadline = 0, lost_since = 0;
     uint32_t next_ts = 0;  /* our next RTP timestamp to the phone */
@@ -57,6 +63,8 @@ struct Call {
     bool have_in = false;
     std::string device;     /* who has the call: "" the owner's device in this process (the window), else a phone's device id */
     LegPtr leg;             /* that phone's leg, once it has asked for one */
+    std::shared_ptr<rtc::Track> vtrack; /* the video, beside the sound */
+    uint32_t vbase = 0;     /* our video's RTP timestamps are this plus the time */
 };
 
 using CallPtr = std::shared_ptr<Call>;
@@ -72,6 +80,8 @@ struct Pair {
     uint32_t next_ts = 0;   /* the RTP timestamp of our next frame to them */
     uint32_t last_in = 0;   /* the phone's last timestamp, to keep its gaps */
     bool have_in = false;
+    std::shared_ptr<rtc::Track> vtrack;
+    uint32_t vbase = 0;
 };
 
 using PairPtr = std::shared_ptr<Pair>;
@@ -87,7 +97,6 @@ struct GroupCall {
     std::map<std::string, int64_t> in;      /* the others in it, and when we last heard so */
     std::map<std::string, PairPtr> pairs;   /* while we are in it: our connection with each */
     std::map<std::string, int> slots;       /* each member's number in what goes to a phone */
-    int next_slot = 1;
     std::string device;                     /* as Call's */
     LegPtr leg;
 };
@@ -123,8 +132,8 @@ struct puddle_calls {
     bool stopping = false;
     std::thread worker;
     std::vector<std::thread> gpool;
-    puddle_call_frame_fn on_audio = nullptr;
-    void *on_audio_user = nullptr;
+    puddle_call_frame_fn on_audio = nullptr, on_video = nullptr;
+    void *on_audio_user = nullptr, *on_video_user = nullptr;
     std::atomic<uint64_t> version{1};
     int64_t ring_ms = PUDDLE_CALL_RING_MS, ring_in_ms = PUDDLE_CALL_RING_IN_MS, connect_ms = PUDDLE_CALL_CONNECT_MS;
     int64_t beat_ms = PUDDLE_GROUP_CALL_BEAT_MS;
@@ -144,17 +153,28 @@ bool tell(puddle_calls *cs, const std::string &peer, const char *path, std::stri
 std::string error_of(const std::string &json);
 void remember(puddle_calls *cs, const Record &r); /* lock held */
 std::shared_ptr<rtc::RtpPacketizationConfig> opus_handler(const std::shared_ptr<rtc::Track> &track);
+/* H.264 out, packetized (FU-A) with sender reports, and in, as whole access units with long start codes */
+void h264_handler(const std::shared_ptr<rtc::Track> &track);
+rtc::Description::Video video_media(const char *mid, rtc::Description::Direction dir);
+uint32_t video_now(); /* the time in a 90 kHz count, for our own video's timestamps */
+bool track_open(const std::shared_ptr<rtc::Track> &t);
 uint32_t stamp(uint32_t &next, uint32_t &last, bool &have, uint32_t in);
 void send_on(const std::shared_ptr<rtc::Track> &track, const rtc::binary &data, uint32_t ts);
 rtc::Configuration pc_config(puddle_calls *cs);
 bool gathered(const std::shared_ptr<rtc::PeerConnection> &pc, puddle_calls *cs, const std::function<bool()> &has_track);
+/* The answerer's side, once its offer is set: when every track it offered has been set up here (`seen` counts them, so each
+ * says which SSRC we send it from: two tracks in one connection need that, or what arrives can't be told apart), make the
+ * answer, and wait for it to be complete. The answer, or "". */
+std::string answer_when_ready(const std::shared_ptr<rtc::PeerConnection> &pc, puddle_calls *cs, const std::string &offer,
+                              const std::shared_ptr<std::atomic<int>> &seen);
 void add_their_addresses(puddle_calls *cs, const std::shared_ptr<rtc::PeerConnection> &pc, const std::string &peer, int udp);
 bool phone_gone(puddle_calls *cs, const std::string &device, int64_t now);
 void close_leg(puddle_calls *cs, const LegPtr &leg); /* lock held: closed by the worker */
 /* A phone's leg for a call: `mine` (lock held) says whether it is still the call's leg; `fail` ends what it is for; `frame`
  * takes what the phone sends. The answer to its offer, or "" (then `code`). */
 std::string answer_leg(puddle_calls *cs, const LegPtr &leg, const std::string &offer, std::function<bool(const LegPtr &)> mine,
-                       std::function<void()> fail, std::function<void(const rtc::binary &, uint32_t)> frame);
+                       std::function<void()> fail, std::function<void(const rtc::binary &, uint32_t)> frame,
+                       std::function<void(const rtc::binary &, uint32_t)> vframe);
 void write_device(puddle_ctx *ctx, puddle_jw *w, const std::string &device);
 
 /* ---- groupcalls.cpp ---- */
@@ -169,6 +189,7 @@ int group_decline(puddle_ctx *ctx, const char *id, const char **code);
 int group_end(puddle_ctx *ctx, const char *id, const char **code);
 int group_media(puddle_ctx *ctx, const char *id, const char *device, const char *sdp, char **answer, int *udp, const char **code);
 int group_send_audio(puddle_calls *cs, const char *id, const unsigned char *frame, size_t len); /* 1: not a group call's */
+int group_send_video(puddle_calls *cs, const char *id, const unsigned char *frame, size_t len); /* 1: not a group call's */
 /* lock held. write_call for a group call; the joined one and those heard of (first), in a list */
 void write_group(puddle_ctx *ctx, puddle_jw *w, const GroupCall &g);
 int group_write_one(puddle_ctx *ctx, puddle_jw *w, const char *id); /* 0 written, 1 none */

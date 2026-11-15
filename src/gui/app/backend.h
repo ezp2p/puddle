@@ -8,6 +8,7 @@
 #include <thread>
 
 #include "callaudio.h"
+#include "callvideo.h"
 #include "chats.h"
 #include "phone.h"
 
@@ -28,6 +29,7 @@ class Backend : public QObject {
     Q_PROPERTY(QString error READ error NOTIFY errorChanged)   // non-empty if something failed
     Q_PROPERTY(QObject *log READ log CONSTANT)                 // list model, role "display"
     Q_PROPERTY(QObject *chats READ chats CONSTANT)             // people, conversations, messages (see Chats)
+    Q_PROPERTY(QObject *video READ video CONSTANT)             // a call's video (see CallVideo)
     Q_PROPERTY(QString myLink READ myLink NOTIFY startedChanged)  // puddle:// link others use to ask us; "" if unknown
     Q_PROPERTY(QString myId READ myId NOTIFY startedChanged)
     // Shows what is normally hidden (user IDs, codes), as Discord's Developer Mode does. Off unless the owner turns it on.
@@ -60,6 +62,7 @@ public:
     QString error() const { return error_; }
     QObject *log() { return &log_; }
     Chats *chats() { return &chats_; }
+    QObject *video() { return &video_; }
     QString myLink() const { return phone_ ? chats_.myLink() : myLink_; }
     QString myId() const { return phone_ ? phone_->puddleId() : myId_; }
     bool developerMode() const { return developerMode_; }
@@ -132,4 +135,5 @@ private:
     std::thread worker_;
     QThreadPool takePool_;    // files handed to the Puddle (Chats::setTakeFile), one at a time
     CallAudio audio_;         // a call's microphone and speaker; its frames go through the Puddle (federation/calls.h)
+    CallVideo video_;         // and its camera and pictures
 };

@@ -430,7 +430,8 @@ paths:
       operationId: callOffer
       summary: Ring the recipient (docs/calls.md, "Setting a call up")
       description: |
-        From a friend only (`403 no_stream` otherwise). `sdp` is the caller's WebRTC offer with its candidates; it names the DTLS
+        From a friend only (`403 no_stream` otherwise). `sdp` is the caller's WebRTC offer with its candidates: an Opus track
+        `audio` and an H.264 track `video`, each naming the SSRC it is sent from (docs/calls.md, "Video"). It names the DTLS
         certificate the media will use, and arrives signed by the caller, so the call is bound to who they are. `udp` is the port the
         caller's calls arrive on. `409 busy` if a call is going on (the same offer again is still `ringing`); `409 no_calls` if this
         Puddle has none. Not through the outbox: a call that can't be set up now is missed.

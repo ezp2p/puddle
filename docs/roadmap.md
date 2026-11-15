@@ -13,7 +13,7 @@ signed receipts), the retrying outbox, direct messages with edit and delete, key
 pictures over a stream, and the Qt app (Friends, conversations, chat, delivery state). 32 test suites, including two Puddles
 talking over TLS and the window driven by real clicks and keys.
 
-Group chats (phase 5) are built, and so is proving who answers (phase 6), which replaced certificate pinning for streams. So is joining Ponds' text channels (docs/ponds.md). The phone client is built up to its Android package (phase 7). Calls (phase 8) are under way: voice calls between two Puddles (8.1), made and answered in the window (8.2) and on the phone (8.3), with the echo from the speakers cancelled, and group calls (8.4). Not built: encryption at rest. See "Later" below and `discuss-later.md`.
+Group chats (phase 5) are built, and so is proving who answers (phase 6), which replaced certificate pinning for streams. So is joining Ponds' text channels (docs/ponds.md). The phone client is built up to its Android package (phase 7). Calls (phase 8) are under way: voice calls between two Puddles (8.1), made and answered in the window (8.2) and on the phone (8.3), with the echo from the speakers cancelled, group calls (8.4), and video (8.5). Not built: encryption at rest. See "Later" below and `discuss-later.md`.
 
 ## Order, and why
 
@@ -569,7 +569,12 @@ to one in the window first, then phones, group calls and video.
   the ring or from the group's chat while it goes on; two started at once become one. In the window, a voice per member,
   mixed; on a phone, the members' frames over a data channel on its leg. `federation/groupcalls.cpp`; tested in
   `groupcall_test` (four Puddles, a group-only pair among them), `phone_test` and `ui_test`.
-- [ ] **8.5 Video.** A video track beside the voice, from the camera.
+- [x] **8.5 Video.** A video track beside the voice in every connection of a call: H.264 (Constrained Baseline) with
+  OpenH264 on the device, 640×480 at 15 frames a second, a key frame every 2 s; the Puddles pass whole frames on and decode
+  nothing. Each track says its SSRC, and an answer waits until every track is set up. The camera from the call bar, tiles
+  under it; on a phone, a `video` track both ways and `v1`..`v7` for a group call's members. `app/callvideo.*`; tested in
+  `callvideo_test`, `call_test`, `groupcall_test`, `phone_test` and `ui_test`. Not yet: key frames on request, resending,
+  a bitrate that follows the connection.
 
 ## Later, not planned in detail
 

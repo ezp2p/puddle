@@ -273,6 +273,62 @@ static void send_frames(node *n, const char *call, int count, unsigned char seed
     }
 }
 
+/* ---- video: H.264-shaped access units (a parameter set, then a picture), big enough to be cut into many packets ---- */
+
+typedef struct {
+    pthread_mutex_t mu;
+    int good, bad;
+    char from[PUDDLE_USER_ID_LEN + 1];
+} seen_video;
+
+/* access unit `k`: SPS, PPS, then an IDR slice of 6000 bytes, none of them zero (so no start code inside) */
+static size_t video_au(int k, unsigned char *out)
+{
+    static const unsigned char sc[4] = { 0, 0, 0, 1 };
+    size_t n = 0;
+    memcpy(out + n, sc, 4); n += 4; out[n++] = 0x67; out[n++] = 0x42; out[n++] = 0xc0; out[n++] = 0x1f;
+    memcpy(out + n, sc, 4); n += 4; out[n++] = 0x68; out[n++] = 0xce; out[n++] = 0x3c; out[n++] = 0x80;
+    memcpy(out + n, sc, 4); n += 4; out[n++] = 0x65; out[n++] = (unsigned char)(k + 1);
+    for (int i = 0; i < 6000; i++) out[n++] = (unsigned char)(1 + (k * 31 + i) % 255);
+    return n;
+}
+
+static void on_video(void *user, const char *call, const char *from, const unsigned char *frame, size_t len, uint32_t ts)
+{
+    (void)call;
+    (void)ts;
+    seen_video *v = user;
+    unsigned char want[7000];
+    int k = len > 21 ? frame[21] - 1 : -1;
+    size_t n = k >= 0 ? video_au(k, want) : 0;
+    pthread_mutex_lock(&v->mu);
+    if (n == len && !memcmp(want, frame, len)) {
+        v->good++;
+        snprintf(v->from, sizeof v->from, "%s", from);
+    } else {
+        v->bad++;
+    }
+    pthread_mutex_unlock(&v->mu);
+}
+
+static int video_good(seen_video *v)
+{
+    pthread_mutex_lock(&v->mu);
+    int n = v->good;
+    pthread_mutex_unlock(&v->mu);
+    return n;
+}
+
+static void send_video(node *n, const char *call, int count)
+{
+    unsigned char au[7000];
+    for (int k = 0; k < count; k++) {
+        size_t len = video_au(k, au);
+        CHECK(puddle_call_send_video(puddle_server_calls(n->srv), call, au, len) == 0);
+        usleep(66000);
+    }
+}
+
 static void call_id(char out[32])
 {
     const char *at = strstr(resp, "\"id\":\"");
@@ -338,6 +394,21 @@ int main(void)
     for (int i = 0; i < 100 && (frames_of(&hb) < 45 || frames_of(&ha) < 45); i++) usleep(20000);
     CHECK(frames_of(&hb) >= 45 && frames_of(&ha) >= 45);                /* over UDP: a few may go missing, none come wrong */
     CHECK(ha.frames == ha.good && hb.frames == hb.good && !strcmp(hb.call, id));
+
+    /* ---- video beside it: whole access units, cut into packets and put back together on the way ---- */
+    seen_video va = { PTHREAD_MUTEX_INITIALIZER, 0, 0, "" }, vb = va;
+    puddle_calls_on_video(puddle_server_calls(a.srv), on_video, &va);
+    puddle_calls_on_video(puddle_server_calls(b.srv), on_video, &vb);
+    send_video(&a, id, 15);
+    send_video(&b, id, 15);
+    for (int i = 0; i < 100 && (video_good(&va) < 12 || video_good(&vb) < 12); i++) usleep(20000);
+    CHECK(video_good(&vb) >= 12 && video_good(&va) >= 12 && va.bad == 0 && vb.bad == 0); /* over UDP: a few may go missing, none come wrong */
+    CHECK(!strcmp(vb.from, a.uid) && !strcmp(va.from, b.uid));
+    {
+        unsigned char big[16];
+        memset(big, 1, sizeof big);
+        CHECK(puddle_call_send_video(puddle_server_calls(a.srv), "nosuchcallnosuchcallnosuch", big, sizeof big) == -1);
+    }
 
     snprintf(path, sizeof path, "/api/v1/calls/%s/end", id);
     CHECK(post(&a, path, NULL) == 200 && json_has("\"state\":\"ended\"") && json_has("\"reason\":\"hung_up\""));

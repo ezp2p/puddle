@@ -164,7 +164,8 @@ asks every 0.7 s while it is open) for 10 seconds or is removed. That last check
 sooner than the leg's own connection would.
 
 In the app (`src/gui/app/callleg.*`), the phone uses the window's microphone, speaker and jitter buffer (`callaudio.*`),
-fed from the leg instead of from the Puddle in its own process.
+and camera and decoders (`callvideo.*`), fed from the leg instead of from the Puddle in its own process. Its video is in
+"Video" below.
 
 ## Group calls
 
@@ -220,6 +221,41 @@ offer also opens (`frames`: unordered, never sent again), one message per frame:
 in `members`), the frame's RTP timestamp (4 bytes, big-endian), then the Opus frame. The app keeps a jitter buffer and
 decoder for each (`Mixer` in `callaudio.*`), and plays them mixed, as the window does.
 
+## Video
+
+Every connection of a call has a video track (`video`) beside its audio track: H.264, Constrained Baseline, payload type
+96, packetization mode 1. A Puddle passes whole frames (access units) on, cut into packets (FU-A) and put back together on
+the way, and decodes nothing, as with the sound, so `puddled` needs no codec. Each Puddle stamps the frames its owner
+sends with its own 90 kHz clock, and passes others on with the sender's spacing kept.
+
+With two tracks in one connection, each side says in its description which SSRC it sends each one from: libdatachannel
+gives a packet it can't place to every track. So the answerer makes its answer only once every track offered has been set
+up (`answer_when_ready`), rather than at once.
+
+The device (`src/gui/app/callvideo.*`) encodes with OpenH264: 640×480, 15 frames a second, about 600 kbit/s, a key frame
+every 2 seconds (whoever joins or lost a frame sees again within that, with nothing asked for). It takes the camera with
+Qt Multimedia (the smallest of its formats at least that big), scales to cover and keeps the middle, and turns it into
+I420 for the encoder. Each sender has a decoder of its own; a broken picture isn't shown rather than shown smeared.
+Encoding and decoding run on a thread of their own. A sender with nothing for 2 seconds has stopped (its camera is off),
+and its decoder goes, so it starts again from a key frame. Without OpenH264 the app builds and calls are voice only
+(`-DPUDDLE_VIDEO=OFF` too).
+
+The camera is off at the start of every call; the bar has a button for it once the call is connected. While anyone's
+camera is on, tiles show under the bar: one for each sender, named, and this end's own, small and mirrored. On a Mac the
+app says why it wants the camera (and the microphone) in its `Info.plist`, and asks the first time.
+
+On a phone, its leg has a `video` track both ways (its camera, and the friend's back) and seven that only come in, `v1` to
+`v7`: in a group call, each other member's video comes on the track for their number (`slot`), which is the smallest not
+held by another member in the call, so never more than seven. Video isn't sent over the data channel: a key frame is
+dozens of packets, and losing one would lose it all.
+
+`call_test` and `groupcall_test` pass H.264-shaped frames of 6 KB (cut into a few packets each) between every pair;
+`callvideo_test` encodes and decodes real pictures, and a decoder that starts late waits for the key frame; `phone_test`
+sends video both ways on a phone's leg, and a member's on `v1`; `ui_test` turns the camera on from the bar (pictures fed in
+place of a camera) and shows the friend's.
+
 ## Later steps
 
-- **Video (8.5):** a video track beside the audio, from the window's camera (and the phone's).
+- **Asking for a key frame** (RTCP PLI) instead of one every 2 seconds, and resending lost packets (NACK).
+- **Bitrate that follows the connection** (REMB or transport-wide feedback), and a smaller picture in a big group call.
+- **Screen sharing**, as a second video track.

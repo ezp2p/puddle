@@ -196,10 +196,21 @@ Pane {
             }
             // the call going on, over whatever page is open
             CallBar {
+                id: callBar
                 chats: shell.chats
+                video: shell.backend.video
                 z: 10
                 anchors.top: parent.top
                 anchors.topMargin: Theme.headerHeight + 8
+                anchors.horizontalCenter: parent.horizontalCenter
+            }
+            // and its video, under it
+            CallVideoView {
+                chats: shell.chats
+                video: shell.backend.video
+                z: 10
+                anchors.top: callBar.bottom
+                anchors.topMargin: 8
                 anchors.horizontalCenter: parent.horizontalCenter
             }
         }

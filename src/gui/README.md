@@ -17,6 +17,7 @@ src/gui/
     callmodel.*       the call going on, from the owner API (chats.calls), and how a call is described in a chat
     callaudio.*       a call's sound: the microphone, its echo canceller, Opus, a jitter buffer per voice mixed, and the speaker; the Backend plays it (docs/calls.md)
     callleg.*         a phone's own WebRTC leg to its Puddle for the call it has (docs/calls.md, "On a phone")
+    callvideo.*       a call's video: the camera, H.264 there and back (OpenH264), each sender's pictures for QML (docs/calls.md, "Video")
     composer.*        the files waiting to go with a message (QML: import Puddle.Files): their type, size and tiny preview,
                       photos with Qt's image reading and videos from their first frame (Qt Multimedia)
     dock*             macOS Dock visibility

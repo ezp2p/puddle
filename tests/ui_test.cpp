@@ -21,6 +21,10 @@
 #include "../src/gui/app/composer.h"
 #include "../src/gui/app/phone.h"
 #include "testnode.h"
+#include "federation/calls.h"
+
+#include <QPainter>
+#include <atomic>
 
 static int failures;
 #define CHECK(cond) do { if (!(cond)) { fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); failures++; } } while (0)
@@ -340,6 +344,55 @@ int main(int argc, char **argv)
         CHECK(until([&] { QQuickItem *s = find("callStatus"); return s && s->property("text").toString().startsWith("0:0"); }, 5000));
         CHECK(click(find("muteButton")));
         CHECK(until([&] { return ca.muted(); }, 2000));
+
+        /* ---- video (docs/calls.md, "Video") ---- */
+        if (CallVideo::isBuilt()) {
+            auto *video = static_cast<CallVideo *>(backend.video());
+            auto picture = [](int k) {
+                QImage img(640, 480, QImage::Format_RGB32);
+                img.fill(qRgb(40, 90, 160));
+                QPainter p(&img);
+                p.fillRect(50 + k * 12, 150, 100, 100, Qt::yellow);
+                return img;
+            };
+            /* the camera, from the bar: the window's own picture shows, and what it takes reaches Bob's Puddle */
+            static std::atomic<int> atBob{ 0 };
+            puddle_calls_on_video(puddle_server_calls(bob.srv), [](void *, const char *, const char *, const unsigned char *, size_t, uint32_t) { atBob++; }, nullptr);
+            CHECK(until([&] { return find("cameraButton") && find("cameraButton")->isVisible(); }, 3000));
+            CHECK(click(find("cameraButton")));
+            CHECK(until([&] { return ca.camera() && video->cameraOn(); }, 2000));
+            CHECK(until([&] { return find("selfTile") && find("selfTile")->isVisible() && find("callVideo")->isVisible(); }, 3000));
+            for (int k = 0; k < 20 && atBob < 5; k++) { /* there is no camera here: pictures stand in for it */
+                video->feed(picture(k));
+                until([] { return false; }, 66);
+            }
+            CHECK(atBob >= 5);
+            puddle_calls_on_video(puddle_server_calls(bob.srv), nullptr, nullptr);
+            /* Bob's camera: a tile for him in the window */
+            H264Encoder enc;
+            CHECK(enc.open(CallVideo::kWidth, CallVideo::kHeight, CallVideo::kFps, CallVideo::kBitrate));
+            const QByteArray bid = cb.callId().toUtf8();
+            for (int k = 0; k < 20; k++) {
+                const QByteArray au = enc.encode(pictureOf(picture(k), CallVideo::kWidth, CallVideo::kHeight), k * 66);
+                if (!au.isEmpty())
+                    puddle_call_send_video(puddle_server_calls(bob.srv), bid.constData(), reinterpret_cast<const unsigned char *>(au.constData()), size_t(au.size()));
+                until([] { return false; }, 66);
+            }
+            CHECK(until([&] { return video->sources() == QStringList{ bob.uid }; }, 3000));
+            CHECK(until([&] {
+                QQuickItem *t = find("videoTile");
+                if (!t)
+                    return false;
+                for (QQuickItem *c : t->childItems())
+                    if (c->property("text").toString() == "Bob")
+                        return true;
+                return false;
+            }, 3000));
+            /* the camera off: its tile goes; Bob's goes once his pictures stop */
+            CHECK(click(find("cameraButton")));
+            CHECK(until([&] { return !ca.camera() && !video->cameraOn() && find("selfTile") == nullptr; }, 2000)); /* (find: the visible only) */
+            CHECK(until([&] { return find("videoTile") == nullptr && find("callVideo") == nullptr; }, 5000));
+        }
         CHECK(click(find("hangUpButton")));
         CHECK(until([&] { return ca.state().isEmpty() && cb.state().isEmpty(); }, 10000));
         CHECK(until([&] { return find("callBar") == nullptr && note("You called Bob · 0:0"); }, 5000));

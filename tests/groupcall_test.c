@@ -289,6 +289,62 @@ static void wait_heard(heard *h, const char *from, int at_least)
     CHECK(heard_from(h, from) >= at_least);
 }
 
+/* ---- video: H.264-shaped access units (a parameter set, then a picture), big enough to be cut into many packets ---- */
+
+typedef struct {
+    pthread_mutex_t mu;
+    int good, bad;
+    char from[PUDDLE_USER_ID_LEN + 1];
+} seen_video;
+
+/* access unit `k`: SPS, PPS, then an IDR slice of 6000 bytes, none of them zero (so no start code inside) */
+static size_t video_au(int k, unsigned char *out)
+{
+    static const unsigned char sc[4] = { 0, 0, 0, 1 };
+    size_t n = 0;
+    memcpy(out + n, sc, 4); n += 4; out[n++] = 0x67; out[n++] = 0x42; out[n++] = 0xc0; out[n++] = 0x1f;
+    memcpy(out + n, sc, 4); n += 4; out[n++] = 0x68; out[n++] = 0xce; out[n++] = 0x3c; out[n++] = 0x80;
+    memcpy(out + n, sc, 4); n += 4; out[n++] = 0x65; out[n++] = (unsigned char)(k + 1);
+    for (int i = 0; i < 6000; i++) out[n++] = (unsigned char)(1 + (k * 31 + i) % 255);
+    return n;
+}
+
+static void on_video(void *user, const char *call, const char *from, const unsigned char *frame, size_t len, uint32_t ts)
+{
+    (void)call;
+    (void)ts;
+    seen_video *v = user;
+    unsigned char want[7000];
+    int k = len > 21 ? frame[21] - 1 : -1;
+    size_t n = k >= 0 ? video_au(k, want) : 0;
+    pthread_mutex_lock(&v->mu);
+    if (n == len && !memcmp(want, frame, len)) {
+        v->good++;
+        snprintf(v->from, sizeof v->from, "%s", from);
+    } else {
+        v->bad++;
+    }
+    pthread_mutex_unlock(&v->mu);
+}
+
+static int video_good(seen_video *v)
+{
+    pthread_mutex_lock(&v->mu);
+    int n = v->good;
+    pthread_mutex_unlock(&v->mu);
+    return n;
+}
+
+static void send_video(node *n, const char *call, int count)
+{
+    unsigned char au[7000];
+    for (int k = 0; k < count; k++) {
+        size_t len = video_au(k, au);
+        CHECK(puddle_call_send_video(puddle_server_calls(n->srv), call, au, len) == 0);
+        usleep(66000);
+    }
+}
+
 static void call_id(char out[32])
 {
     const char *at = strstr(resp, "\"id\":\"");
@@ -457,6 +513,23 @@ int main(void)
     send_frames(&a, id, 30, 201);
     wait_heard(&hc, a.uid, 25);
     CHECK(ha.bad == 0 && hb.bad == 0 && hc.bad == 0);
+
+    /* ---- video from each to the other two ---- */
+    {
+        seen_video va = { PTHREAD_MUTEX_INITIALIZER, 0, 0, "" }, vb = va, vc = va;
+        puddle_calls_on_video(puddle_server_calls(a.srv), on_video, &va);
+        puddle_calls_on_video(puddle_server_calls(b.srv), on_video, &vb);
+        puddle_calls_on_video(puddle_server_calls(c.srv), on_video, &vc);
+        send_video(&c, id, 12);
+        for (int i = 0; i < 100 && (video_good(&va) < 9 || video_good(&vb) < 9); i++) usleep(20000);
+        CHECK(video_good(&va) >= 9 && video_good(&vb) >= 9 && !strcmp(va.from, c.uid) && !strcmp(vb.from, c.uid)); /* bob's over the group-only stream */
+        send_video(&b, id, 12);
+        for (int i = 0; i < 100 && video_good(&vc) < 9; i++) usleep(20000);
+        CHECK(video_good(&vc) >= 9 && !strcmp(vc.from, b.uid));
+        CHECK(va.bad == 0 && vb.bad == 0 && vc.bad == 0);
+        for (int k = 0; k < 3; k++)
+            puddle_calls_on_video(puddle_server_calls(all[k]->srv), NULL, NULL);
+    }
 
     /* ---- busy: one call at a time ---- */
     snprintf(body, sizeof body, "{\"user\":\"%s\"}", a.uid);

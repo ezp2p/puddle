@@ -47,6 +47,8 @@ void puddle_calls_on_audio(puddle_calls *, puddle_call_frame_fn, void *) {}
 void puddle_calls_set_timeouts(puddle_calls *, int64_t, int64_t, int64_t) {}
 void puddle_calls_set_beat(puddle_calls *, int64_t) {}
 int puddle_call_send_audio(puddle_calls *, const char *, const unsigned char *, size_t) { return -1; }
+void puddle_calls_on_video(puddle_calls *, puddle_call_frame_fn, void *) {}
+int puddle_call_send_video(puddle_calls *, const char *, const unsigned char *, size_t) { return -1; }
 uint64_t puddle_calls_version(puddle_calls *) { return 0; }
 
 static int no_calls(const puddle_call *, puddle_jw *w) { return puddle_fail(w, 409, "no_calls"); }
@@ -303,15 +305,57 @@ static CallPtr find(puddle_calls *cs, const std::string &id)
     return nullptr;
 }
 
+/* Say in the track's description which SSRC we send it from, so the other side can tell it from the connection's other
+ * tracks (libdatachannel otherwise gives a packet it can't place to every track). */
+static uint32_t own_ssrc(const std::shared_ptr<rtc::Track> &track)
+{
+    uint32_t ssrc = random32() | 1;
+    auto d = track->description();
+    d.addSSRC(ssrc, std::string("puddle"));
+    track->setDescription(std::move(d));
+    return ssrc;
+}
+
 /* Opus out, packetized with sender reports, and in, as whole frames. */
 std::shared_ptr<rtc::RtpPacketizationConfig> callsx::opus_handler(const std::shared_ptr<rtc::Track> &track)
 {
-    auto rtp = std::make_shared<rtc::RtpPacketizationConfig>(random32(), "puddle", OPUS_PT, rtc::OpusRtpPacketizer::DefaultClockRate);
+    auto rtp = std::make_shared<rtc::RtpPacketizationConfig>(own_ssrc(track), "puddle", OPUS_PT, rtc::OpusRtpPacketizer::DefaultClockRate);
     auto pack = std::make_shared<rtc::OpusRtpPacketizer>(rtp);
     pack->addToChain(std::make_shared<rtc::RtcpSrReporter>(rtp));
     pack->addToChain(std::make_shared<rtc::OpusRtpDepacketizer>());
     track->setMediaHandler(pack);
     return rtp;
+}
+
+void callsx::h264_handler(const std::shared_ptr<rtc::Track> &track)
+{
+    auto rtp = std::make_shared<rtc::RtpPacketizationConfig>(own_ssrc(track), "puddle", H264_PT, rtc::H264RtpPacketizer::ClockRate);
+    auto pack = std::make_shared<rtc::H264RtpPacketizer>(rtc::NalUnit::Separator::StartSequence, rtp, 1200);
+    pack->addToChain(std::make_shared<rtc::RtcpSrReporter>(rtp));
+    pack->addToChain(std::make_shared<rtc::H264RtpDepacketizer>(rtc::NalUnit::Separator::LongStartSequence));
+    track->setMediaHandler(pack);
+}
+
+rtc::Description::Video callsx::video_media(const char *mid, rtc::Description::Direction dir)
+{
+    rtc::Description::Video media(mid, dir);
+    media.addH264Codec(H264_PT); /* Constrained Baseline, packetization-mode 1 */
+    return media;
+}
+
+uint32_t callsx::video_now()
+{
+    using namespace std::chrono;
+    return (uint32_t)(duration_cast<microseconds>(steady_clock::now().time_since_epoch()).count() * 9 / 100);
+}
+
+bool callsx::track_open(const std::shared_ptr<rtc::Track> &t)
+{
+    try {
+        return t && t->isOpen();
+    } catch (const std::exception &) {
+        return false;
+    }
 }
 
 /* The RTP timestamp for a frame passed on, whose own was `in`: ours moves on by a frame, and by as much again as theirs
@@ -337,9 +381,51 @@ void callsx::send_on(const std::shared_ptr<rtc::Track> &track, const rtc::binary
     }
 }
 
+/* The friend's video: to the owner's device here, or on to the phone that has the call, on its leg's video track. */
+static void setup_vtrack(puddle_calls *cs, const std::weak_ptr<Call> &weak, const std::shared_ptr<rtc::Track> &track)
+{
+    h264_handler(track);
+    std::string id, peer;
+    {
+        std::lock_guard<std::mutex> g(cs->mu);
+        CallPtr call = weak.lock();
+        if (!call)
+            return;
+        peer = call->peer, id = call->id;
+        call->vtrack = track;
+        call->vbase = random32();
+    }
+    track->onFrame([cs, weak, id, peer](rtc::binary data, rtc::FrameInfo info) {
+        if (data.empty() || data.size() > PUDDLE_CALL_VIDEO_MAX)
+            return;
+        puddle_call_frame_fn fn = nullptr;
+        void *user = nullptr;
+        std::shared_ptr<rtc::Track> phone;
+        uint32_t ts = 0;
+        {
+            std::lock_guard<std::mutex> g(cs->mu);
+            CallPtr call = weak.lock();
+            if (!call || call->state == "ended")
+                return;
+            if (call->device.empty()) {
+                fn = cs->on_video, user = cs->on_video_user;
+            } else if (call->leg && track_open(call->leg->vtrack)) {
+                phone = call->leg->vtrack;
+                ts = call->leg->vbase[0] + info.timestamp;
+            }
+        }
+        if (fn)
+            fn(user, id.c_str(), peer.c_str(), (const unsigned char *)data.data(), data.size(), info.timestamp);
+        else if (phone)
+            send_on(phone, data, ts);
+    });
+}
+
 /* The friend's connection: frames go to the owner's device here (the window), or on to the phone that has the call. */
 static void setup_track(puddle_calls *cs, const std::weak_ptr<Call> &weak, const std::shared_ptr<rtc::Track> &track)
 {
+    if (track->mid() == VIDEO_MID)
+        return setup_vtrack(cs, weak, track);
     auto rtp = opus_handler(track);
     std::string id, peer;
     {
@@ -390,6 +476,7 @@ rtc::Configuration callsx::pc_config(puddle_calls *cs)
 {
     rtc::Configuration conf; /* no ICE servers: only the two Puddles' own addresses (docs/calls.md, "Finding a path") */
     conf.enableIceUdpMux = true;
+    conf.disableAutoNegotiation = true; /* the answer waits until each track says its SSRC (answer_when_ready) */
     conf.portRangeBegin = conf.portRangeEnd = cs->port;
     if (!cs->bind.empty())
         conf.bindAddress = cs->bind;
@@ -445,6 +532,29 @@ bool callsx::gathered(const std::shared_ptr<rtc::PeerConnection> &pc, puddle_cal
     return false;
 }
 
+static int media_lines(const std::string &sdp)
+{
+    int n = 0;
+    for (size_t at = 0; (at = sdp.find("m=", at)) != std::string::npos; at += 2)
+        if ((at == 0 || sdp[at - 1] == '\n') && (!sdp.compare(at, 7, "m=audio") || !sdp.compare(at, 7, "m=video")))
+            n++;
+    return n;
+}
+
+std::string callsx::answer_when_ready(const std::shared_ptr<rtc::PeerConnection> &pc, puddle_calls *cs, const std::string &offer,
+                                      const std::shared_ptr<std::atomic<int>> &seen)
+{
+    const int want = media_lines(offer);
+    for (int i = 0; i < 500 && seen->load() < want; i++)
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    if (seen->load() < want)
+        return "";
+    pc->setLocalDescription();
+    if (!gathered(pc, cs, [] { return true; }))
+        return "";
+    return std::string(*pc->localDescription());
+}
+
 /* The friend's advertised addresses, at the UDP port they said, as candidates beside the ones their description lists. */
 void callsx::add_their_addresses(puddle_calls *cs, const std::shared_ptr<rtc::PeerConnection> &pc, const std::string &peer, int udp)
 {
@@ -475,7 +585,8 @@ void callsx::close_leg(puddle_calls *cs, const LegPtr &leg)
 /* The same port, and only the phone's own addresses and ours (it adds our advertised one itself). What it sends goes to
  * `frame`; a leg that fails ends what it is for, unless a newer one took its place. */
 std::string callsx::answer_leg(puddle_calls *cs, const LegPtr &leg, const std::string &offer, std::function<bool(const LegPtr &)> mine,
-                               std::function<void()> fail, std::function<void(const rtc::binary &, uint32_t)> frame)
+                               std::function<void()> fail, std::function<void(const rtc::binary &, uint32_t)> frame,
+                               std::function<void(const rtc::binary &, uint32_t)> vframe)
 {
     std::shared_ptr<rtc::PeerConnection> pc;
     std::string sdp;
@@ -507,7 +618,30 @@ std::string callsx::answer_leg(puddle_calls *cs, const LegPtr &leg, const std::s
             if (failed)
                 fail();
         });
-        pc->onTrack([cs, wleg, frame](std::shared_ptr<rtc::Track> track) {
+        auto seen = std::make_shared<std::atomic<int>>(0);
+        pc->onTrack([cs, wleg, frame, vframe, seen](std::shared_ptr<rtc::Track> track) {
+            struct Count {
+                std::shared_ptr<std::atomic<int>> n;
+                ~Count() { (*n)++; }
+            } counted{ seen };
+            const std::string mid = track->mid();
+            if (mid == VIDEO_MID || (mid.size() == 2 && mid[0] == 'v' && mid[1] >= '1' && mid[1] <= '0' + PHONE_SLOTS)) {
+                /* its camera (and the friend's video back), or a member's video in a group call */
+                h264_handler(track);
+                std::lock_guard<std::mutex> g(cs->mu);
+                LegPtr leg = wleg.lock();
+                if (!leg)
+                    return;
+                int n = mid == VIDEO_MID ? 0 : mid[1] - '0';
+                (n ? leg->vslots[n] : leg->vtrack) = track;
+                leg->vbase[n] = random32();
+                if (!n)
+                    track->onFrame([vframe](rtc::binary data, rtc::FrameInfo info) {
+                        if (!data.empty() && data.size() <= PUDDLE_CALL_VIDEO_MAX)
+                            vframe(data, info.timestamp);
+                    });
+                return;
+            }
             opus_handler(track);
             {
                 std::lock_guard<std::mutex> g(cs->mu);
@@ -542,8 +676,7 @@ std::string callsx::answer_leg(puddle_calls *cs, const LegPtr &leg, const std::s
             });
         });
         pc->setRemoteDescription(rtc::Description(offer, "offer"));
-        if (gathered(pc, cs, [&] { return leg->track != nullptr; }))
-            sdp = std::string(*pc->localDescription());
+        sdp = answer_when_ready(pc, cs, offer, seen);
     } catch (const std::exception &e) {
         puddle_log(PUDDLE_LOG_INFO, "calls: a phone's offer can't be used: %s", e.what());
     }
@@ -766,6 +899,7 @@ int puddle_call_start(puddle_ctx *ctx, const char *peer, const char *device, cha
         media.addOpusCodec(OPUS_PT);
         auto track = pc->addTrack(media);
         setup_track(cs, call, track);
+        setup_vtrack(cs, call, pc->addTrack(video_media(VIDEO_MID, rtc::Description::Direction::SendRecv)));
         pc->setLocalDescription();
         if (gathered(pc, cs, [&] { return call->track != nullptr; }))
             sdp = std::string(*pc->localDescription());
@@ -831,11 +965,14 @@ int puddle_call_accept(puddle_ctx *ctx, const char *id, const char *device, cons
             call->pc = pc;
         }
         std::weak_ptr<Call> weak = call;
-        pc->onTrack([cs, weak](std::shared_ptr<rtc::Track> track) { setup_track(cs, weak, track); });
+        auto seen = std::make_shared<std::atomic<int>>(0);
+        pc->onTrack([cs, weak, seen](std::shared_ptr<rtc::Track> track) {
+            setup_track(cs, weak, track);
+            (*seen)++;
+        });
         pc->setRemoteDescription(rtc::Description(offer, "offer")); /* the answer is made from it */
         add_their_addresses(cs, pc, call->peer, udp);
-        if (gathered(pc, cs, [&] { return call->track != nullptr; }))
-            sdp = std::string(*pc->localDescription());
+        sdp = answer_when_ready(pc, cs, offer, seen);
     } catch (const std::exception &e) {
         puddle_log(PUDDLE_LOG_WARN, "calls: cannot answer %.12s…'s call: %s", call->peer.c_str(), e.what());
     }
@@ -928,6 +1065,20 @@ int puddle_call_media(puddle_ctx *ctx, const char *id, const char *device, const
                     return;
                 to = call->track;
                 ts = stamp(call->next_ts, call->last_in, call->have_in, in);
+            }
+            send_on(to, data, ts);
+        },
+        [cs, wcall, leg = std::weak_ptr<Leg>(leg)](const rtc::binary &data, uint32_t in) { /* its camera, on to the friend */
+            std::shared_ptr<rtc::Track> to;
+            uint32_t ts;
+            {
+                std::lock_guard<std::mutex> g(cs->mu);
+                CallPtr call = wcall.lock();
+                LegPtr l = leg.lock();
+                if (!call || !l || call->leg != l || call->state != "active" || !track_open(call->vtrack))
+                    return;
+                to = call->vtrack;
+                ts = call->vbase + in;
             }
             send_on(to, data, ts);
         });
@@ -1090,6 +1241,38 @@ int puddle_call_send_audio(puddle_calls *cs, const char *id, const unsigned char
         track = call->track;
         ts = call->next_ts;
         call->next_ts += 960; /* 20 ms at 48 kHz */
+    }
+    try {
+        track->sendFrame((const rtc::byte *)frame, len, rtc::FrameInfo(ts));
+    } catch (const std::exception &) {
+        return -1;
+    }
+    return 0;
+}
+
+void puddle_calls_on_video(puddle_calls *cs, puddle_call_frame_fn fn, void *user)
+{
+    if (!cs)
+        return;
+    std::lock_guard<std::mutex> g(cs->mu);
+    cs->on_video = fn, cs->on_video_user = user;
+}
+
+int puddle_call_send_video(puddle_calls *cs, const char *id, const unsigned char *frame, size_t len)
+{
+    if (!cs || !frame || !len || len > PUDDLE_CALL_VIDEO_MAX)
+        return -1;
+    if (int r = group_send_video(cs, id, frame, len); r != 1)
+        return r;
+    std::shared_ptr<rtc::Track> track;
+    uint32_t ts;
+    {
+        std::lock_guard<std::mutex> g(cs->mu);
+        CallPtr call = cs->current;
+        if (!call || call->id != id || call->state != "active" || !call->device.empty() || !track_open(call->vtrack))
+            return -1;
+        track = call->vtrack;
+        ts = call->vbase + video_now();
     }
     try {
         track->sendFrame((const rtc::byte *)frame, len, rtc::FrameInfo(ts));

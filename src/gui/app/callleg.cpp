@@ -8,10 +8,14 @@
 
 #include <QRandomGenerator>
 
+#include <chrono>
 #include <mutex>
+#include <vector>
 
 #define OPUS_PT 111
+#define H264_PT 96
 #define MID "audio"
+#define SLOTS 7
 
 // Everything the connection's own threads touch, behind one lock. `gen` tells a callback of a leg that was closed (or
 // replaced) from one of the leg there is now.
@@ -23,9 +27,11 @@ struct CallLeg::Impl {
     std::shared_ptr<rtc::PeerConnection> pc;
     std::shared_ptr<rtc::Track> track;
     std::shared_ptr<rtc::DataChannel> dc;
+    std::shared_ptr<rtc::Track> vtrack;
+    std::vector<std::shared_ptr<rtc::Track>> vslots;
     bool open = false, connected = false, offered = false;
-    uint32_t nextTs = 0;
-    std::function<void(const QString &, uint32_t, const QByteArray &)> onFrame;
+    uint32_t nextTs = 0, vbase = 0;
+    std::function<void(const QString &, uint32_t, const QByteArray &)> onFrame, onVideo;
 
     // Run `fn` on the owner's thread, if it is still there.
     void post(std::function<void(CallLeg *)> fn)
@@ -69,10 +75,39 @@ void CallLeg::setOnFrame(std::function<void(const QString &, uint32_t, const QBy
     d_->onFrame = std::move(fn);
 }
 
+void CallLeg::setOnVideo(std::function<void(const QString &, uint32_t, const QByteArray &)> fn)
+{
+    std::lock_guard<std::mutex> g(d_->mu);
+    d_->onVideo = std::move(fn);
+}
+
+bool CallLeg::sendVideo(const QByteArray &au)
+{
+    std::shared_ptr<rtc::Track> track;
+    uint32_t ts;
+    {
+        std::lock_guard<std::mutex> g(d_->mu);
+        if (!d_->vtrack || au.isEmpty())
+            return false;
+        track = d_->vtrack;
+        using namespace std::chrono;
+        ts = d_->vbase + uint32_t(duration_cast<microseconds>(steady_clock::now().time_since_epoch()).count() * 9 / 100);
+    }
+    try {
+        if (!track->isOpen())
+            return false;
+        track->sendFrame(reinterpret_cast<const rtc::byte *>(au.constData()), size_t(au.size()), rtc::FrameInfo(ts));
+    } catch (const std::exception &) {
+        return false;
+    }
+    return true;
+}
+
 void CallLeg::close()
 {
     std::shared_ptr<rtc::PeerConnection> pc;
-    std::shared_ptr<rtc::Track> track;
+    std::shared_ptr<rtc::Track> track, vtrack;
+    std::vector<std::shared_ptr<rtc::Track>> vslots;
     std::shared_ptr<rtc::DataChannel> dc;
     bool was;
     {
@@ -80,6 +115,8 @@ void CallLeg::close()
         d_->gen++;
         pc.swap(d_->pc);
         track.swap(d_->track);
+        vtrack.swap(d_->vtrack);
+        vslots.swap(d_->vslots);
         dc.swap(d_->dc);
         was = d_->connected;
         d_->id.clear();
@@ -87,6 +124,10 @@ void CallLeg::close()
     }
     if (track)
         track->resetCallbacks();
+    if (vtrack)
+        vtrack->resetCallbacks();
+    for (auto &t : vslots)
+        t->resetCallbacks();
     if (dc)
         dc->resetCallbacks();
     if (pc) {
@@ -112,11 +153,13 @@ void CallLeg::open(const QString &id, std::function<void(const QString &)> ready
         rtc::Configuration conf; // no ICE servers: the phone and its Puddle find each other by their own addresses
         conf.disableAutoNegotiation = true; // one offer, made below once the track and the data channel are both in it
         auto pc = std::make_shared<rtc::PeerConnection>(conf);
+        // each track it sends on says its SSRC: there are several in this connection, and the Puddle has to tell them apart
+        const uint32_t assrc = QRandomGenerator::system()->generate() | 1, vssrc = assrc ^ 0x5a5a5a5a;
         rtc::Description::Audio media(MID, rtc::Description::Direction::SendRecv);
         media.addOpusCodec(OPUS_PT);
+        media.addSSRC(assrc, std::string("puddle"));
         auto track = pc->addTrack(media);
-        auto rtp = std::make_shared<rtc::RtpPacketizationConfig>(QRandomGenerator::system()->generate(), "puddle", OPUS_PT,
-                                                                 rtc::OpusRtpPacketizer::DefaultClockRate);
+        auto rtp = std::make_shared<rtc::RtpPacketizationConfig>(assrc, "puddle", OPUS_PT, rtc::OpusRtpPacketizer::DefaultClockRate);
         auto pack = std::make_shared<rtc::OpusRtpPacketizer>(rtp);
         pack->addToChain(std::make_shared<rtc::RtcpSrReporter>(rtp));
         pack->addToChain(std::make_shared<rtc::OpusRtpDepacketizer>());
@@ -143,6 +186,43 @@ void CallLeg::open(const QString &id, std::function<void(const QString &)> ready
             if (fn)
                 fn(QString(), info.timestamp, QByteArray(reinterpret_cast<const char *>(data.data()), qsizetype(data.size())));
         });
+        // video: the camera and the friend's, both ways; and in a group call each member's, coming in on the track for their number
+        auto videoIn = [weak, gen](const QString &from) {
+            return [weak, gen, from](rtc::binary data, rtc::FrameInfo info) {
+                auto d = weak.lock();
+                if (!d || data.empty())
+                    return;
+                std::function<void(const QString &, uint32_t, const QByteArray &)> fn;
+                {
+                    std::lock_guard<std::mutex> g(d->mu);
+                    if (d->gen != gen)
+                        return;
+                    fn = d->onVideo;
+                }
+                if (fn)
+                    fn(from, info.timestamp, QByteArray(reinterpret_cast<const char *>(data.data()), qsizetype(data.size())));
+            };
+        };
+        rtc::Description::Video vmedia("video", rtc::Description::Direction::SendRecv);
+        vmedia.addH264Codec(H264_PT);
+        vmedia.addSSRC(vssrc, std::string("puddle"));
+        auto vtrack = pc->addTrack(vmedia);
+        auto vrtp = std::make_shared<rtc::RtpPacketizationConfig>(vssrc, "puddle", H264_PT, rtc::H264RtpPacketizer::ClockRate);
+        auto vpack = std::make_shared<rtc::H264RtpPacketizer>(rtc::NalUnit::Separator::StartSequence, vrtp, 1200);
+        vpack->addToChain(std::make_shared<rtc::RtcpSrReporter>(vrtp));
+        vpack->addToChain(std::make_shared<rtc::H264RtpDepacketizer>(rtc::NalUnit::Separator::LongStartSequence));
+        vtrack->setMediaHandler(vpack);
+        vtrack->onFrame(videoIn(QString()));
+        std::vector<std::shared_ptr<rtc::Track>> vslots;
+        for (int n = 1; n <= SLOTS; n++) {
+            rtc::Description::Video m("v" + std::to_string(n), rtc::Description::Direction::RecvOnly);
+            m.addH264Codec(H264_PT);
+            auto t = pc->addTrack(m);
+            t->setMediaHandler(std::make_shared<rtc::H264RtpDepacketizer>(rtc::NalUnit::Separator::LongStartSequence));
+            t->onFrame(videoIn(QStringLiteral("slot:%1").arg(n)));
+            vslots.push_back(t);
+        }
+
         // a group call's members, each frame marked with whose: as fresh as can be, so nothing is sent again or waited for
         rtc::DataChannelInit init;
         init.reliability.unordered = true;
@@ -207,6 +287,9 @@ void CallLeg::open(const QString &id, std::function<void(const QString &)> ready
             std::lock_guard<std::mutex> g(d_->mu);
             d_->pc = pc;
             d_->track = track;
+            d_->vtrack = vtrack;
+            d_->vslots = vslots;
+            d_->vbase = QRandomGenerator::system()->generate();
             d_->dc = dc;
         }
         pc->setLocalDescription();
@@ -275,6 +358,8 @@ CallLeg::~CallLeg() = default;
 QString CallLeg::callId() const { return QString(); }
 bool CallLeg::connected() const { return false; }
 void CallLeg::setOnFrame(std::function<void(const QString &, uint32_t, const QByteArray &)>) {}
+void CallLeg::setOnVideo(std::function<void(const QString &, uint32_t, const QByteArray &)>) {}
+bool CallLeg::sendVideo(const QByteArray &) { return false; }
 void CallLeg::close() {}
 void CallLeg::open(const QString &, std::function<void(const QString &)> ready) { ready(QString()); }
 bool CallLeg::answer(const QString &, const QString &, int) { return false; }

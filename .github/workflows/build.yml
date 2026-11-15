@@ -34,7 +34,7 @@ jobs:
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
-        run: brew install openssl@3 libyaml qt libdatachannel opus speexdsp  # libdatachannel: calls (Ubuntu has no package, so Linux builds without); opus: their sound in the window; speexdsp: its echo canceller
+        run: brew install openssl@3 libyaml qt libdatachannel opus speexdsp openh264  # libdatachannel: calls (Ubuntu has no package, so Linux builds without); opus: their sound in the window; speexdsp: its echo canceller; openh264: their video
 
       - name: Configure
         run: |

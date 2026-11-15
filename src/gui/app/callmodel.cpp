@@ -57,6 +57,10 @@ void Calls::take(const QJsonObject &call)
     const int wasOthers = others_;
     group_ = live ? call.value("group").toString() : QString();
     others_ = live ? int(call.value("members").toArray().size()) : 0;
+    slots_.clear();
+    for (const QJsonValue &m : call.value("members").toArray())
+        if (live && m.toObject().value("slot").toInt() > 0)
+            slots_.insert(m.toObject().value("slot").toInt(), m.toObject().value("user").toString());
     incoming_ = live && call.value("direction").toString() == QLatin1String("incoming");
     answered_ = live ? qint64(call.value("answered").toDouble()) : 0;
     const QJsonObject dev = call.value("device").toObject();
@@ -68,6 +72,10 @@ void Calls::take(const QJsonObject &call)
     if (!live && muted_) {
         muted_ = false;
         emit mutedChanged();
+    }
+    if (!live && camera_) { /* the next call starts with the camera off */
+        camera_ = false;
+        emit cameraChanged();
     }
     followLeg();
     if (state_ != was || id_ != wasId || device_ != wasDevice || here_ != wasHere || group_ != wasGroup || others_ != wasOthers) {
@@ -212,6 +220,14 @@ QString Calls::describeGroup(const QString &reason, bool incoming, const QString
     if (reason == QLatin1String("cancelled"))
         return tr("You started a call, then left");
     return incoming ? tr("A call %1 started didn't connect").arg(name) : tr("Your call didn't connect");
+}
+
+void Calls::setCamera(bool on)
+{
+    if (on == camera_)
+        return;
+    camera_ = on;
+    emit cameraChanged();
 }
 
 QString Calls::describe(const QString &reason, bool incoming, const QString &name, qint64 seconds) const

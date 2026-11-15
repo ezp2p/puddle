@@ -225,6 +225,8 @@ if(PUDDLE_BUILD_GUI)
       src/gui/app/callmodel.h
       src/gui/app/callleg.cpp
       src/gui/app/callleg.h
+      src/gui/app/callvideo.cpp
+      src/gui/app/callvideo.h
       src/gui/app/callaudio.cpp
       src/gui/app/callaudio.h)
     # a call's sound (callaudio.h): Opus. Without libopus a call still connects, in silence.
@@ -255,8 +257,22 @@ if(PUDDLE_BUILD_GUI)
     elseif(NOT PUDDLE_ECHO STREQUAL "off")
       message(WARNING "neither webrtc-audio-processing nor speexdsp found: calls will not cancel echo")
     endif()
-    # everything that builds callaudio.cpp
+    # and its video (callvideo.h): H.264 with OpenH264. Without it a call is voice only.
+    option(PUDDLE_VIDEO "Video in calls, with OpenH264" ON)
+    if(PkgConfig_FOUND AND PUDDLE_VIDEO)
+      pkg_check_modules(OPENH264 IMPORTED_TARGET openh264)
+    endif()
+    if(OPENH264_FOUND)
+      message(STATUS "Calls have video with OpenH264 ${OPENH264_VERSION}")
+    elseif(PUDDLE_VIDEO)
+      message(WARNING "OpenH264 not found: calls will be voice only")
+    endif()
+    # everything that builds callaudio.cpp (and callvideo.cpp)
     function(puddle_call_sound t)
+      if(OPENH264_FOUND)
+        target_compile_definitions(${t} PRIVATE PUDDLE_HAVE_OPENH264)
+        target_link_libraries(${t} PRIVATE PkgConfig::OPENH264)
+      endif()
       if(OPUS_FOUND)
         target_compile_definitions(${t} PRIVATE PUDDLE_HAVE_OPUS)
         target_link_libraries(${t} PRIVATE PkgConfig::OPUS)
@@ -291,6 +307,7 @@ if(PUDDLE_BUILD_GUI)
         src/gui/qml/setup/Setup.qml
         src/gui/qml/setup/Pair.qml
         src/gui/qml/shell/CallBar.qml
+        src/gui/qml/shell/CallVideoView.qml
         src/gui/qml/shell/Shell.qml
         src/gui/qml/shell/Sidebar.qml
         src/gui/qml/shell/SidebarRow.qml
@@ -355,7 +372,9 @@ if(PUDDLE_BUILD_GUI)
       OUTPUT_NAME Puddle
       MACOSX_BUNDLE_BUNDLE_NAME Puddle
       MACOSX_BUNDLE_GUI_IDENTIFIER io.github.ezp2p.puddle
-      MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION})
+      MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
+      # CMake's own template, with why the app asks for the microphone and the camera (macOS refuses both without)
+      MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/Info.plist.in)
     install(TARGETS puddle BUNDLE DESTINATION . RUNTIME DESTINATION bin)
 
     # The first-run state machine, against the real core, with no window (needs the offscreen platform).
@@ -363,7 +382,7 @@ if(PUDDLE_BUILD_GUI)
       src/gui/app/apiclient.cpp src/gui/app/apiclient.h src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h src/gui/app/callmodel.cpp src/gui/app/callmodel.h src/gui/app/callleg.cpp src/gui/app/callleg.h
       src/gui/app/phone.cpp src/gui/app/phone.h)
     target_include_directories(backend_test PRIVATE src/gui/app)
-    target_sources(backend_test PRIVATE src/gui/app/callaudio.cpp src/gui/app/callaudio.h)
+    target_sources(backend_test PRIVATE src/gui/app/callaudio.cpp src/gui/app/callaudio.h src/gui/app/callvideo.cpp src/gui/app/callvideo.h)
     target_link_libraries(backend_test PRIVATE puddle_service Qt6::Gui Qt6::Network Qt6::Multimedia)
     if(APPLE)
       target_sources(backend_test PRIVATE src/gui/app/dock_mac.mm)
@@ -394,7 +413,7 @@ if(PUDDLE_BUILD_GUI)
     target_include_directories(ui_test PRIVATE src/gui/app)
     target_compile_definitions(ui_test PRIVATE PUDDLE_GUI_DIR="${CMAKE_SOURCE_DIR}/src/gui/qml")
     target_link_libraries(ui_test PRIVATE puddle_service Qt6::Quick Qt6::QuickControls2 Qt6::Network Qt6::Multimedia Qt6::Test)
-    target_sources(ui_test PRIVATE src/gui/app/callaudio.cpp src/gui/app/callaudio.h)
+    target_sources(ui_test PRIVATE src/gui/app/callaudio.cpp src/gui/app/callaudio.h src/gui/app/callvideo.cpp src/gui/app/callvideo.h)
     puddle_call_sound(backend_test)
     puddle_call_sound(ui_test)
 
@@ -405,6 +424,14 @@ if(PUDDLE_BUILD_GUI)
     target_link_libraries(callaudio_test PRIVATE Qt6::Core Qt6::Multimedia)
     puddle_call_sound(callaudio_test)
     add_test(NAME callaudio COMMAND callaudio_test)
+    # A call's video without a camera: pictures to I420 and back, H.264 there and back, and senders coming and going.
+    add_executable(callvideo_test tests/callvideo_test.cpp src/gui/app/callvideo.cpp src/gui/app/callvideo.h)
+    set_target_properties(callvideo_test PROPERTIES AUTOMOC ON)
+    target_include_directories(callvideo_test PRIVATE src/gui/app)
+    target_link_libraries(callvideo_test PRIVATE Qt6::Gui Qt6::Multimedia)
+    puddle_call_sound(callvideo_test)
+    add_test(NAME callvideo COMMAND callvideo_test)
+    set_tests_properties(callvideo PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PUDDLE_TEST_NO_AUDIO=1")
     if(APPLE)
       target_sources(ui_test PRIVATE src/gui/app/dock_mac.mm)
       target_link_libraries(ui_test PRIVATE "-framework AppKit" "-framework UserNotifications")

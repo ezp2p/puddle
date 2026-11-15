@@ -199,6 +199,33 @@ int main(int argc, char **argv)
             atPhone.from.insert(from);
         });
         auto frame = [](char tag, int i) { return QByteArray(1, tag) + QByteArray::number(i) + QByteArray(40, char(i)); };
+        /* video: an H.264-shaped access unit (SPS, PPS, a picture of 5000 bytes, none of them zero), many packets long */
+        auto au = [](char tag, int i) {
+            const QByteArray sc("\x00\x00\x00\x01", 4);
+            QByteArray pic(5000, '\0');
+            for (int k = 0; k < pic.size(); k++)
+                pic[k] = char(1 + (k + i) % 250);
+            return sc + QByteArray("\x67\x42\xc0\x1f", 4) + sc + QByteArray("\x68\xce\x3c\x80", 4) + sc + QByteArray("\x65", 1) + QByteArray(1, tag) +
+                   QByteArray(1, char(i + 1)) + pic;
+        };
+        struct Seen {
+            std::mutex mu;
+            QList<QByteArray> aus;
+            QSet<QString> from;
+            int count() { std::lock_guard<std::mutex> g(mu); return int(aus.size()); }
+            void clear() { std::lock_guard<std::mutex> g(mu); aus.clear(); from.clear(); }
+        } videoAtBob, videoAtPhone;
+        puddle_calls_on_video(bobEngine, [](void *u, const char *, const char *from, const unsigned char *f, size_t n, uint32_t) {
+            auto *h = static_cast<Seen *>(u);
+            std::lock_guard<std::mutex> g(h->mu);
+            h->aus.append(QByteArray(reinterpret_cast<const char *>(f), qsizetype(n)));
+            h->from.insert(QString::fromLatin1(from));
+        }, &videoAtBob);
+        leg->setOnVideo([&](const QString &from, uint32_t, const QByteArray &a) {
+            std::lock_guard<std::mutex> g(videoAtPhone.mu);
+            videoAtPhone.aus.append(a);
+            videoAtPhone.from.insert(from);
+        });
 
         /* Bob rings: the phone and the computer both ring; the phone answers */
         QSignalSpy rangPhone(&pc, &Calls::ringing), rangComputer(&ac, &Calls::ringing);
@@ -239,6 +266,22 @@ int main(int argc, char **argv)
         {
             std::lock_guard<std::mutex> g(atBob.mu);
             CHECK(atBob.frames.value(0).startsWith('p') && atBob.frames.contains(frame('p', 29)));
+        }
+        /* video both ways on the leg: Bob's camera reaches the phone on its "video" track, and the phone's reaches Bob */
+        for (int i = 0; i < 15; i++) {
+            const QByteArray a = au('b', i);
+            puddle_call_send_video(bobEngine, id.toUtf8().constData(), reinterpret_cast<const unsigned char *>(a.constData()), size_t(a.size()));
+            leg->sendVideo(au('p', i));
+            until([] { return false; }, 66);
+        }
+        CHECK(until([&] { return videoAtPhone.count() >= 12 && videoAtBob.count() >= 12; }));
+        {
+            std::lock_guard<std::mutex> g(videoAtPhone.mu);
+            CHECK(videoAtPhone.aus.contains(au('b', 14)) && videoAtPhone.from == QSet<QString>{ "" });
+        }
+        {
+            std::lock_guard<std::mutex> g(videoAtBob.mu);
+            CHECK(videoAtBob.aus.contains(au('p', 14)) && videoAtBob.from == QSet<QString>{ alice.uid });
         }
         /* only a phone sets up a leg */
         st = -1;
@@ -328,6 +371,23 @@ int main(int argc, char **argv)
                 std::lock_guard<std::mutex> g(atBob.mu);
                 CHECK(atBob.frames.contains(frame('q', 29)) && atBob.from == QSet<QString>{ alice.uid });
             }
+            /* Bob's video reaches the phone on the track for his number, "v1"; the phone's reaches Bob */
+            videoAtPhone.clear(), videoAtBob.clear();
+            for (int i = 0; i < 15; i++) {
+                const QByteArray a = au('g', i);
+                puddle_call_send_video(bobEngine, gcall.toUtf8().constData(), reinterpret_cast<const unsigned char *>(a.constData()), size_t(a.size()));
+                leg->sendVideo(au('q', i));
+                until([] { return false; }, 66);
+            }
+            CHECK(until([&] { return videoAtPhone.count() >= 12 && videoAtBob.count() >= 12; }));
+            {
+                std::lock_guard<std::mutex> g(videoAtPhone.mu);
+                CHECK(videoAtPhone.aus.contains(au('g', 14)) && videoAtPhone.from == QSet<QString>{ "slot:1" } && pc.slotUser(1) == bob.uid);
+            }
+            {
+                std::lock_guard<std::mutex> g(videoAtBob.mu);
+                CHECK(videoAtBob.aus.contains(au('q', 14)) && videoAtBob.from == QSet<QString>{ alice.uid });
+            }
             /* the phone leaves: Bob carries on alone, and the call is still there for Alice to join */
             pc.hangUp();
             CHECK(until([&] { return pc.state().isEmpty() && leg->callId().isEmpty() && pc.groupCall(gid) == 1; }));
@@ -336,7 +396,9 @@ int main(int argc, char **argv)
             CHECK(until([&] { return bc.state().isEmpty() && pc.groupCall(gid) == 0; }));
         }
         puddle_calls_on_audio(bobEngine, nullptr, nullptr);
+        puddle_calls_on_video(bobEngine, nullptr, nullptr);
         leg->setOnFrame(nullptr);
+        leg->setOnVideo(nullptr);
     }
 #endif
 

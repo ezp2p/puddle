@@ -13,6 +13,7 @@ Card {
     id: bar
 
     required property var chats
+    property var video: null        // the call's video (CallVideo); none, no camera button
     readonly property var calls: chats.calls
     readonly property string state: calls.state
     readonly property bool ringingHere: state === "ringing"
@@ -89,6 +90,20 @@ Card {
             ToolTip.text: Accessible.name
             ToolTip.visible: hovered
             onClicked: bar.calls.toggleMute()
+        }
+        ToolButton {
+            objectName: "cameraButton"
+            visible: (bar.state === "active" || bar.state === "connecting") && bar.calls.here && bar.video !== null && bar.video.built
+            checkable: true
+            checked: bar.calls.camera
+            icon.source: Theme.icon(bar.calls.camera ? "video" : "video-off")
+            icon.width: Theme.iconSize
+            icon.height: Theme.iconSize
+            display: AbstractButton.IconOnly
+            Accessible.name: bar.calls.camera ? qsTr("Turn the camera off") : qsTr("Turn the camera on")
+            ToolTip.text: Accessible.name
+            ToolTip.visible: hovered
+            onClicked: bar.calls.toggleCamera()
         }
         ToolButton {
             objectName: "hangUpButton"
