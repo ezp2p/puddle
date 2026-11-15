@@ -38,6 +38,7 @@ tags:
   - { name: invites, description: Links that are accepted automatically }
   - { name: files, description: "Files sent in chats: uploaded a chunk at a time, then sent in a message (docs/files.md)" }
   - { name: devices, description: "Phones paired with this Puddle: thin clients that sign every request with a key of their own (docs/identity.md, \"Devices\")" }
+  - { name: calls, description: "Calls with friends: the Puddles carry them, the owner's device records and plays (docs/calls.md)" }
   - { name: updates, description: Objects as they change }
 
 paths:
@@ -716,6 +717,36 @@ paths:
         "200": { description: The file, content: { application/octet-stream: {} } }
         "206": { description: The part asked for, content: { application/octet-stream: {} } }
         "404": { $ref: "#/components/responses/NotFound" }
+
+  # ---- calls (docs/calls.md). `409 no_calls` from all of them when this Puddle has none (built without, or `calls: off`) ----
+  /api/v1/calls:
+    get:
+      tags: [calls]
+      summary: The call going on, then the last few that ended, newest first
+      responses: { "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "objects/call.yaml" } } } } } } } }
+  /api/v1/calls/start:
+    post:
+      tags: [calls]
+      summary: Ring a friend
+      description: |
+        The call comes back as it stands: `calling` while it rings at theirs, or already `ended` with why (`unreachable`, `busy`,
+        `no_calls` on their side, `failed`). `409 no_stream` (not a friend with an active stream), `409 busy` (a call is going on here).
+      requestBody: { content: { application/json: { schema: { type: object, required: [user], properties: { user: { $ref: "wire/ids.yaml#/$defs/UserId" } } } } } }
+      responses:
+        "201": { description: OK, content: { application/json: { schema: { $ref: "objects/call.yaml" } } } }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/calls/{call}:
+    parameters: [{ name: call, in: path, required: true, schema: { type: string, pattern: "^[a-z2-7]{26}$" } }]
+    get: { tags: [calls], summary: One call, responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "objects/call.yaml" } } } }, "404": { $ref: "#/components/responses/NotFound" } } }
+  /api/v1/calls/{call}/accept:
+    parameters: [{ name: call, in: path, required: true, schema: { type: string, pattern: "^[a-z2-7]{26}$" } }]
+    post: { tags: [calls], summary: "Answer a call that is ringing here (`404 no_call` otherwise)", responses: { "200": { description: "It, `connecting`", content: { application/json: { schema: { $ref: "objects/call.yaml" } } } } } }
+  /api/v1/calls/{call}/decline:
+    parameters: [{ name: call, in: path, required: true, schema: { type: string, pattern: "^[a-z2-7]{26}$" } }]
+    post: { tags: [calls], summary: "Turn down a call that is ringing here", responses: { "200": { description: "It, ended `declined`", content: { application/json: { schema: { $ref: "objects/call.yaml" } } } } } }
+  /api/v1/calls/{call}/end:
+    parameters: [{ name: call, in: path, required: true, schema: { type: string, pattern: "^[a-z2-7]{26}$" } }]
+    post: { tags: [calls], summary: "Hang up, or give up ringing (`cancelled`); on one ringing here, the same as decline", responses: { "200": { description: It, ended, content: { application/json: { schema: { $ref: "objects/call.yaml" } } } } } }
 
   # ---- phones (docs/identity.md, "Devices"). The owner token only: a phone may not let other phones in ----
   /api/v1/devices:

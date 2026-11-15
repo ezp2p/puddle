@@ -140,6 +140,7 @@ target_link_libraries(puddle_http PUBLIC OpenSSL::SSL)
 
 # api: the owner API: routes that use the objects
 add_library(puddle_api STATIC
+  src/api/calls.cpp
   src/api/conversations.cpp
   src/api/devices.cpp
   src/api/files.cpp
@@ -154,6 +155,7 @@ target_link_libraries(puddle_api PUBLIC puddle_objects puddle_http)
 
 # federation: the stream API: routes other Puddles call, and how our news reaches them
 add_library(puddle_federation STATIC
+  src/federation/calls.cpp
   src/federation/files.cpp
   src/federation/access.cpp
   src/federation/courier.cpp
@@ -167,6 +169,18 @@ add_library(puddle_federation STATIC
   src/federation/profiles_api.cpp
   src/federation/sender.cpp)
 target_link_libraries(puddle_federation PUBLIC puddle_wire puddle_events puddle_http)
+# Calls (docs/calls.md) need libdatachannel. Without it a Puddle still builds, and has none: friends are told `no_calls`.
+option(PUDDLE_CALLS "Calls with friends, with libdatachannel" ON)
+if(PUDDLE_CALLS)
+  find_package(LibDataChannel QUIET)
+endif()
+if(PUDDLE_CALLS AND LibDataChannel_FOUND)
+  target_link_libraries(puddle_federation PUBLIC LibDataChannel::LibDataChannel)
+  target_compile_definitions(puddle_federation PRIVATE PUDDLE_HAVE_CALLS)
+  message(STATUS "calls: with libdatachannel")
+else()
+  message(STATUS "calls: none (libdatachannel not found, or PUDDLE_CALLS off)")
+endif()
 
 # service: the assembled Puddle (server.cpp) and every route together
 add_library(puddle_service STATIC
@@ -349,13 +363,15 @@ enable_testing()
 # Each layer of src/ includes only the layers it may (tests/layers.cmake).
 add_test(NAME layers COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_CURRENT_SOURCE_DIR}/src -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/layers.cmake)
 
-foreach(t http json store storage files transfers people conversations config yaml profile encoding identity auth reqsig phrase serve router routes link group groupapi groupowner streams ratelimit access owner_streams client outbox inbound open_request flow message messages keysync devices protocol_vectors wireprofile profiles e2e group_e2e)
+foreach(t http json store storage files transfers people conversations config yaml profile encoding identity auth reqsig phrase serve router routes link group groupapi groupowner streams ratelimit access owner_streams client outbox inbound open_request flow message messages keysync devices protocol_vectors wireprofile profiles e2e group_e2e call)
   add_executable(${t}_test tests/${t}_test.c)
   target_link_libraries(${t}_test PRIVATE puddle_service)
   add_test(NAME ${t} COMMAND ${t}_test)
   # fill new and freed heap memory with garbage, so reading memory nobody wrote shows up as a failure
   set_tests_properties(${t} PROPERTIES ENVIRONMENT "MallocScribble=1;MALLOC_PERTURB_=165")
 endforeach()
+# call skips (77) when built without libdatachannel
+set_tests_properties(call PROPERTIES SKIP_RETURN_CODE 77)
 # The Puddle Protocol's vectors, from a checkout of ezp2p/protocol beside this one (skipped without one)
 target_compile_definitions(protocol_vectors_test PRIVATE PUDDLE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 endif()

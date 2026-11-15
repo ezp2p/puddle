@@ -52,6 +52,8 @@ tags:
     description: Group invites
   - name: files
     description: Files sent in messages, fetched a checked chunk at a time (docs/files.md)
+  - name: calls
+    description: Setting up and ending calls (docs/calls.md); the media itself goes over WebRTC
 
 paths:
   /stream/v1/hello:
@@ -422,6 +424,54 @@ paths:
         "202": { description: Received }
         "400": { $ref: "#/components/responses/BadRequest" }
         "403": { description: Not a friend }
+  /stream/v1/call/offer:
+    post:
+      tags: [calls]
+      operationId: callOffer
+      summary: Ring the recipient (docs/calls.md, "Setting a call up")
+      description: |
+        From a friend only (`403 no_stream` otherwise). `sdp` is the caller's WebRTC offer with its candidates; it names the DTLS
+        certificate the media will use, and arrives signed by the caller, so the call is bound to who they are. `udp` is the port the
+        caller's calls arrive on. `409 busy` if a call is going on (the same offer again is still `ringing`); `409 no_calls` if this
+        Puddle has none. Not through the outbox: a call that can't be set up now is missed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [call, sdp, udp]
+              properties:
+                call: { type: string, pattern: "^[a-z2-7]{26}$", description: Chosen by the caller }
+                sdp: { type: string, maxLength: 16384 }
+                udp: { type: integer, minimum: 1, maximum: 65535 }
+      responses:
+        "200": { description: Ringing, content: { application/json: { schema: { type: object, properties: { state: { const: ringing } } } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { description: Not a friend }
+        "409": { description: "busy, or no_calls" }
+  /stream/v1/call/answer:
+    post:
+      tags: [calls]
+      operationId: callAnswer
+      summary: The callee answered; here is its side
+      description: "`{call, sdp, udp}` as for the offer. `404 no_call` if the caller has no such call ringing (it gave up)."
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [call, sdp, udp], properties: { call: { type: string }, sdp: { type: string, maxLength: 16384 }, udp: { type: integer } } } } } }
+      responses:
+        "204": { description: Connecting }
+        "404": { description: No such call }
+  /stream/v1/call/end:
+    post:
+      tags: [calls]
+      operationId: callEnd
+      summary: A call is over
+      description: |
+        `reason`: `hung_up`, `declined`, `cancelled`, `no_answer`, `busy` or `failed` (anything else is taken as `hung_up`). A callee
+        whose phone was still ringing records `cancelled` and `no_answer` as `missed`. `404 no_call` for a call it doesn't know.
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [call, reason], properties: { call: { type: string }, reason: { type: string } } } } } }
+      responses:
+        "204": { description: Ended }
+        "404": { description: No such call }
 
 components:
   securitySchemes:

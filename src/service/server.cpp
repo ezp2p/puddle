@@ -29,6 +29,7 @@
 #include "federation/sender.h"
 #include "core/ponds.h"
 #include "federation/ponds.h"
+#include "federation/calls.h"
 #include "wire/wireprofile.h"
 
 #include <errno.h>
@@ -355,6 +356,11 @@ int puddle_server_take_file(puddle_server *s, int fd, char id[65])
     return 0;
 }
 
+puddle_calls *puddle_server_calls(puddle_server *s)
+{
+    return s ? s->ctx.calls : NULL;
+}
+
 puddle_outbox *puddle_server_outbox(puddle_server *s)
 {
     return s->outbox;
@@ -376,6 +382,7 @@ void puddle_server_destroy(puddle_server *s)
     puddle_replay_free(s->replay);
     puddle_roll_slot_free(s->roll_slot);
     puddle_pond_followers_stop(s->ctx.pond_followers); /* if it ran and was not stopped */
+    puddle_calls_stop(s->ctx.calls);
     puddle_ponds_close(s->ponds);
     puddle_transfers_close(s->transfers); /* stops its worker, which uses the streams and the files */
     puddle_outbox_close(s->outbox); /* stops its worker before what the worker uses goes away */
@@ -497,6 +504,12 @@ int puddle_server_run(puddle_server *s)
     if (puddle_outbox_start(s->outbox) != 0)
         puddle_log(PUDDLE_LOG_WARN, "cannot start the outbox; nothing will be sent to other Puddles");
     s->ctx.pond_followers = puddle_pond_followers_start(&s->ctx);
+    {
+        char cerr[200];
+        s->ctx.calls = puddle_calls_start(&s->ctx, &s->fetch_hooks, cerr, sizeof cerr);
+        if (!s->ctx.calls)
+            puddle_log(PUDDLE_LOG_INFO, "no calls: %s", cerr);
+    }
 
     for (;;) {
         puddle_sock socks[2] = { s->listener, s->stop.read_end };
@@ -578,6 +591,9 @@ int puddle_server_run(puddle_server *s)
     s->mu.unlock();
     puddle_pond_followers_stop(s->ctx.pond_followers); /* ends their requests that are waiting on the Ponds */
     s->ctx.pond_followers = NULL;
+    puddle_calls *calls = s->ctx.calls; /* a call going on ends, and the friend is told */
+    s->ctx.calls = NULL;
+    puddle_calls_stop(calls);
 
     puddle_log(PUDDLE_LOG_INFO, "stopped");
     return rc;

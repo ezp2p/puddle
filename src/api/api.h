@@ -30,6 +30,8 @@ extern const puddle_route puddle_file_api_routes[];      /* api/files.cpp: uploa
 extern const size_t puddle_file_api_routes_count;
 extern const puddle_route puddle_pond_api_routes[];      /* api/ponds.cpp: Ponds, their channels and messages */
 extern const size_t puddle_pond_api_routes_count;
+extern const puddle_route puddle_call_api_routes[];      /* api/calls.cpp: calls with friends */
+extern const size_t puddle_call_api_routes_count;
 extern const puddle_route puddle_device_routes[];        /* api/devices.cpp: paired phones, and what a phone calls itself */
 extern const size_t puddle_device_routes_count;
 

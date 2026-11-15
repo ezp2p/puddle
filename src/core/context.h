@@ -30,6 +30,7 @@ typedef struct puddle_files puddle_files;
 typedef struct puddle_transfers puddle_transfers;
 typedef struct puddle_ponds puddle_ponds;
 typedef struct puddle_pond_followers puddle_pond_followers;
+typedef struct puddle_calls puddle_calls;
 typedef struct puddle_replay puddle_replay;
 typedef struct puddle_bucket puddle_bucket;
 typedef struct puddle_keyed puddle_keyed;
@@ -71,6 +72,12 @@ typedef struct {
     int (*pond_fetch)(puddle_ctx *ctx, const char *pond, int64_t channel, int64_t message, const char *file, const char **code);
     int (*pond_admin)(puddle_ctx *ctx, const char *pond, const char *method, const char *target, const char *body, size_t len, int *status,
                       char **reply, size_t *reply_len, const char **code);
+    /* calls (docs/calls.md): ring a friend, answer, decline, hang up, and what is going on */
+    int (*call_start)(puddle_ctx *ctx, const char *peer, char id[27], const char **code);
+    int (*call_accept)(puddle_ctx *ctx, const char *id, const char **code);
+    int (*call_decline)(puddle_ctx *ctx, const char *id, const char **code);
+    int (*call_end)(puddle_ctx *ctx, const char *id, const char **code);
+    int (*calls_write)(puddle_ctx *ctx, const char *id, puddle_jw *w);
 } puddle_courier;
 
 /* What handlers can reach. */
@@ -90,6 +97,7 @@ struct puddle_ctx {
     puddle_transfers *transfers;           /* fetching others' files (core/transfers.h); NULL = nothing is fetched */
     puddle_ponds *ponds;                   /* the Ponds we are in (core/ponds.h); NULL in tests that have none */
     puddle_pond_followers *pond_followers; /* a thread following each (federation/ponds.h); NULL = none are followed */
+    puddle_calls *calls;                   /* calls with friends (federation/calls.h); NULL = none (off, not built, or not started) */
     puddle_replay *replay;                 /* one nonce memory for the whole Puddle */
     puddle_bucket *anon_bucket;            /* work done for strangers before they are authenticated; NULL = unlimited */
     puddle_keyed *access_limit;            /* requests for a stream, per requester; NULL = unlimited */

@@ -38,7 +38,11 @@ static const char DEFAULT_CONFIG[] =
     "# itself (bigger ones wait until you ask; \"never\" waits for every one).\n"
     "# files:\n"
     "#   max_size: 100 MiB\n"
-    "#   auto_download: 100 MiB\n";
+    "#   auto_download: 100 MiB\n"
+    "\n"
+    "# Calls (docs/calls.md) arrive on this UDP port, beside the HTTPS one: forward it too. \"calls: off\" turns them off.\n"
+    "# calls:\n"
+    "#   port: 8443\n";
 
 static void seterr(char *err, size_t n, const char *fmt, ...)
 {
@@ -250,6 +254,34 @@ int puddle_config_load(puddle_config *cfg, const char *path, char *err, size_t e
                     bad(err, errlen, path, fv, what);
                     goto fail;
                 }
+            }
+        } else if (strcmp(key, "calls") == 0) {
+            if (ynode_is_null(v))
+                continue;
+            if (s && strcmp(s, "off") == 0) {
+                cfg->calls_off = 1;
+                continue;
+            }
+            if (ynode_kind(v) != Y_MAP) {
+                bad(err, errlen, path, v, "calls takes port, e.g. \"port: 8443\", or is off");
+                goto fail;
+            }
+            for (size_t j = 0; j < ynode_count(v); j++) {
+                const char *ck = ynode_key(v, j);
+                const ynode *cv = ynode_item(v, j);
+                const char *cs = ynode_scalar(cv);
+                char *cend = NULL;
+                long p = cs ? strtol(cs, &cend, 10) : 0;
+                if (strcmp(ck, "port") != 0) {
+                    snprintf(what, sizeof what, "unknown setting 'calls.%.50s'", ck);
+                    bad(err, errlen, path, cv, what);
+                    goto fail;
+                }
+                if (!cs || !*cs || *cend != '\0' || p < 1 || p > 65535) {
+                    bad(err, errlen, path, cv, "calls.port must be a number from 1 to 65535");
+                    goto fail;
+                }
+                cfg->calls_port = (uint16_t)p;
             }
         } else {
             snprintf(what, sizeof what, "unknown setting '%.60s'", key);
