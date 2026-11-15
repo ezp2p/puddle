@@ -19,7 +19,7 @@ class Ponds : public QObject {
     Q_PROPERTY(QObject *messages READ messages CONSTANT)   // the open channel, oldest first: id, author, name, tint, text, files, ts, mine, grouped, dayStart
     Q_PROPERTY(QString current READ current NOTIFY currentChanged)            // the open Pond's id, "" for none
     Q_PROPERTY(QString currentName READ currentName NOTIFY currentInfoChanged)
-    Q_PROPERTY(QString currentStatus READ currentStatus NOTIFY currentInfoChanged) // connecting, connected, unreachable, removed, certificate_changed
+    Q_PROPERTY(QString currentStatus READ currentStatus NOTIFY currentInfoChanged) // connecting, connected, unreachable, removed, certificate_changed, not_proven
     Q_PROPERTY(QString currentDescription READ currentDescription NOTIFY currentInfoChanged)
     Q_PROPERTY(QString channel READ channel NOTIFY channelChanged)            // the open channel's id, "" for none
     Q_PROPERTY(QString channelName READ channelName NOTIFY channelChanged)

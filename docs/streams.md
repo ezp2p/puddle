@@ -199,8 +199,8 @@ block is not given away; for an answer to our own request, that is decided after
 `access/status`, which must answer everyone the same whatever they decide, are never signed at all.
 
 An answer sent straight from a file on disk (a download, any part of it asked for with `Range`) is signed for over
-exactly the bytes that go, hashed as they are read. Ponds don't sign receipts (yet): a Puddle still pins a Pond's certificate
-(`docs/ponds.md`).
+exactly the bytes that go, hashed as they are read. A Pond with the feature `receipts` signs its answers the same way;
+one without is still pinned to its certificate (`docs/ponds.md`, "Proving who answers").
 
 **Checking a receipt.** When the sender holds a key for the peer, it accepts an answer only if the receipt is there,
 names the peer's id and the key it holds for them, carries this request's nonce, the status and body it got, and the

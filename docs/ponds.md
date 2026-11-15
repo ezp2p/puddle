@@ -22,7 +22,8 @@ The owner pastes a `pond://host[:port]?invite=<token>` link and chooses a profil
 
 On success the Pond answers with its id, name, channels and the member as it sees them. The Puddle records:
 
-- the Pond and the certificate fingerprint it showed (first contact trusts whoever answers, as with a Puddle);
+- the Pond, its key (`pond.key`, from protocol 3: refused unless its SHA-256 is the Pond's id) and the certificate it
+  showed (first contact trusts whoever answers, as with a Puddle);
 - the profile choice for `pond:<id>`.
 
 Then it starts following the Pond. An invite the Pond did not accept is `409 invite_refused`; the Pond does not say why.
@@ -45,7 +46,7 @@ If the Pond can't be reached, the status is `unreachable` and the thread backs o
 is not about a channel means the Pond no longer knows us (we were removed). The status becomes `removed`, following
 stops, and what was kept stays readable until the owner leaves.
 
-If the Pond's certificate changed, the status is `certificate_changed` and nothing is sent. Stopping the Puddle cuts
+Who answers is proven as described in "Proving who answers" below; when it can't be, nothing is sent. Stopping the Puddle cuts
 any request that is waiting (`puddle_net_opts.on_socket` and `puddle_sock_cut`), so shutting down never waits on a
 Pond.
 
@@ -53,6 +54,23 @@ What the owner changes is carried by the same thread, which is woken to say it:
 
 - a different profile for the Pond (`POST /pond/v1/profile`, without pictures, which a Pond has no way to fetch);
 - new keys after a roll (`POST /pond/v1/keys`).
+
+## Proving who answers
+
+A Pond that lists `receipts` in `features` (protocol 3, the Puddle Protocol's spec/05) signs every answer to a member
+with its key, over its own TLS certificate: the same `X-Puddle-Receipt` a Puddle sends (`docs/streams.md`, "Proving who
+answers"). For such a Pond (`signs` in `pond.json`) every call passes the Pond's key to the client, which believes an
+answer only with a good receipt, and sends nothing over a certificate the Pond hasn't proven. Shown a new one (a
+renewed certificate, say), the Puddle asks `GET /pond/v1/info` over it, which changes nothing; if the receipt names that
+certificate, it is kept as the Pond's and the call is made again (`federation/ponds.cpp`, `member_call`). If not, the
+status is `not_proven` and the call fails with `not_proven`, and the follower tries again later.
+
+The one answer a Pond leaves unsigned to a member's Puddle is the plain `404` for someone it doesn't know. Over a
+certificate the Pond has proven, that still means it no longer has us (`removed`).
+
+A Pond without `receipts` is pinned to the certificate it showed at join, as before: another one is
+`certificate_changed`, and nothing is sent. A Pond that gains receipts tells us its key in an `/info` over the pinned
+certificate; from then on it is held to its receipts, and it is never pinned again, whatever a later answer says.
 
 ## Versions
 
@@ -174,7 +192,7 @@ Leaving deletes the folder.
 
 Errors: `no_pond`, `no_channel` and `no_profile` are `404`. `bad_text` is `400`. `slow_down` is `429`.
 `invite_refused`, `removed`, `no_file`, `files_off`, `too_large` and `no_role` are `409`. The admin routes pass on
-what the Pond says: `204` when done, `400` with a `message` to show, `404 no_channel`, `409 outranked` or `not_yourself`. `unreachable`, `not_a_pond`, `certificate_changed` and `failed` are `502`.
+what the Pond says: `204` when done, `400` with a `message` to show, `404 no_channel`, `409 outranked` or `not_yourself`. `unreachable`, `not_a_pond`, `certificate_changed`, `not_proven` and `failed` are `502`.
 
 ## In the app
 

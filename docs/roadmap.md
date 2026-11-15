@@ -504,8 +504,8 @@ anything is sent and for every answer. The design is in `streams.md`, "Proving w
     anything else leaves it waiting on the offline schedule with a reason, and every address is tried. A peer with no
     key held (first contact) is sent to as before.
   - **Gone:** the recorded certificate, the "held" state, `certificate_changed`, `POST /api/v1/stream/trust`, and
-    `tls_fp` in address records (ignored if an older Puddle sends one). Ponds keep their pinned certificate: they don't
-    sign receipts yet.
+    `tls_fp` in address records (ignored if an older Puddle sends one). Ponds kept their pinned certificate until they
+    signed receipts too (protocol 3 of `/pond/v1`; `docs/ponds.md`, "Proving who answers").
 
 ## Phase 7: Phone client
 

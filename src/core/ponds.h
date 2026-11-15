@@ -6,8 +6,8 @@
  * history is asked of the Pond when the owner scrolls back to it.
  *
  * Kept in <data_dir>/ponds/<pond id>/:
- *   pond.json        the Pond as it last told us (the shape of its /info answer), with its address, its certificate and our
- *                    cursor in its events
+ *   pond.json        the Pond as it last told us (the shape of its /info answer), with its address, its certificate, whether
+ *                    it signs receipts, and our cursor in its events
  *   members.json     its members
  *   <channel>.jsonl  the newest messages of a channel, oldest first, at most PUDDLE_POND_CACHE
  *
@@ -46,12 +46,17 @@ int puddle_ponds_ids(puddle_ponds *p, char (**ids)[PUDDLE_USER_ID_LEN + 1], size
 typedef struct {
     char id[PUDDLE_USER_ID_LEN + 1];
     puddle_address address;
-    char tls_fp[65];
-    int64_t cursor; /* the last event applied */
+    char tls_fp[65]; /* the certificate it showed at join, or the last one it proved with a receipt */
+    int64_t cursor;  /* the last event applied */
+    int signs;       /* it signs receipts (the Puddle Protocol, spec/05): every answer must carry one, by `key` */
+    unsigned char key[32];
 } puddle_pond_conn;
 
 /* 0, or -1 if we have not joined `id`. `out` may be NULL, to ask only that. */
 int puddle_ponds_conn(puddle_ponds *p, const char *id, puddle_pond_conn *out);
+
+/* A Pond that signs proved, by a receipt, that `tls_fp` is now its certificate. 0, or -1 if we have not joined `id`. */
+int puddle_ponds_set_tls_fp(puddle_ponds *p, const char *id, const char *tls_fp);
 
 /* A Pond just joined: `info` is its answer (pond.yaml, Info), `tls_fp` the certificate it showed. Kept under the id it gives,
  * which is copied to `id_out`. Joining one we are in already updates it. 0, or -1 if the answer is malformed. */

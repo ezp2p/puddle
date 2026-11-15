@@ -1,5 +1,7 @@
 #include "core/ponds.h"
 
+#include "base/encoding.h"
+#include "base/hash.h"
 #include "base/log.h"
 #include "base/text.h"
 #include "core/profile.h"
@@ -56,6 +58,8 @@ struct Pond {
     int64_t offer = 0;                 /* a role it offers us, waiting for the owner's answer; 0 for none */
     std::string offer_role;
     std::vector<std::string> features;
+    std::string key; /* the Pond's public key, hex, as its /info says (protocol 3); its id is base32(SHA-256(key)) */
+    bool signs = false; /* it signs receipts (feature `receipts`, with a key): checked on every answer, and never pinned again */
     std::string me;
     std::vector<Channel> channels;
     std::map<std::string, Member> members;
@@ -242,6 +246,12 @@ static void parse_protocol(puddle_span all, Pond &pd)
     }
 }
 
+/* Does an Info answer offer receipts: a key, and the feature? */
+static bool offers_receipts(const Pond &pd)
+{
+    return !pd.key.empty() && std::find(pd.features.begin(), pd.features.end(), "receipts") != pd.features.end();
+}
+
 /* The pond, me and channels of an Info answer into `pd` (its id must match unless `pd` is new). */
 static bool parse_info(puddle_ponds *p, const char *json, size_t len, Pond &pd, std::vector<Channel> &channels, std::string &me_id,
                        Member &me)
@@ -254,6 +264,19 @@ static bool parse_info(puddle_ponds *p, const char *json, size_t len, Pond &pd, 
         pd.cursor < 0 || !member(all, "me", &mev) || !parse_member(p, mev, me_id, me) || !member(all, "channels", &chans))
         return false;
     pd.id = id;
+    /* the Pond's key, if it says it (protocol 3): only one whose hash is the Pond's id, so it can't be anyone else's */
+    std::string key;
+    pd.key.clear();
+    if (get_text(pond, "key", 64, 0, key)) {
+        unsigned char pub[32], h[32];
+        char hid[PUDDLE_USER_ID_LEN + 8];
+        if (key.size() != 64 || puddle_hex_decode(key.c_str(), pub, 32) != 0)
+            return false;
+        puddle_sha256(pub, 32, h);
+        if (puddle_base32_encode(h, 32, hid, sizeof hid) != PUDDLE_USER_ID_LEN || id != hid)
+            return false;
+        pd.key = key;
+    }
     parse_protocol(all, pd);
     parse_files_max(pond, pd);
     parse_offer(all, pd);
@@ -443,6 +466,8 @@ static void save_pond(puddle_ponds *p, const Pond &pd)
         puddle_jw_str(w, "id", pd.id.c_str());
         puddle_jw_str(w, "name", pd.name.c_str());
         puddle_jw_str(w, "description", pd.description.c_str());
+        if (!pd.key.empty())
+            puddle_jw_str(w, "key", pd.key.c_str());
         write_files_max(w, pd);
         puddle_jw_end_object(w);
         puddle_jw_key(w, "me");
@@ -458,6 +483,7 @@ static void save_pond(puddle_ponds *p, const Pond &pd)
         write_offer(w, pd);
         puddle_jw_str(w, "address", pd.address.c_str());
         puddle_jw_str(w, "tls_fp", pd.tls_fp.c_str());
+        puddle_jw_flag(w, "signs", pd.signs);
         puddle_jw_num(w, "joined", pd.joined);
         puddle_jw_key(w, "filled");
         puddle_jw_array(w);
@@ -527,6 +553,8 @@ static void load_one(puddle_ponds *p, const std::string &id)
         return;
     }
     get_int(all, "joined", &pd.joined);
+    puddle_span sv;
+    pd.signs = !pd.key.empty() && member(all, "signs", &sv) && sv.len == 4 && !memcmp(sv.p, "true", 4);
     pd.channels = std::move(channels);
     pd.members[pd.me] = me;
     if (member(all, "filled", &filled)) {
@@ -615,6 +643,21 @@ int puddle_ponds_conn(puddle_ponds *p, const char *id, puddle_pond_conn *out)
     snprintf(out->id, sizeof out->id, "%s", id);
     snprintf(out->tls_fp, sizeof out->tls_fp, "%s", it->second.tls_fp.c_str());
     out->cursor = it->second.cursor;
+    out->signs = it->second.signs && puddle_hex_decode(it->second.key.c_str(), out->key, 32) == 0;
+    return 0;
+}
+
+int puddle_ponds_set_tls_fp(puddle_ponds *p, const char *id, const char *tls_fp)
+{
+    std::lock_guard<std::mutex> g(p->mu);
+    auto it = p->ponds.find(id);
+    if (it == p->ponds.end() || strlen(tls_fp) != 64)
+        return -1;
+    if (it->second.tls_fp != tls_fp) {
+        puddle_log(PUDDLE_LOG_INFO, "ponds: %.12s… proved a new certificate (%.16s…)", id, tls_fp);
+        it->second.tls_fp = tls_fp;
+        save_pond(p, it->second);
+    }
     return 0;
 }
 
@@ -634,8 +677,11 @@ int puddle_ponds_add(puddle_ponds *p, const puddle_address *addr, const char *tl
                 c.recent = std::move(old->recent), c.filled = old->filled, c.complete = old->complete;
         pd.members = std::move(it->second.members);
     }
+    if (it != p->ponds.end() && it->second.signs && pd.key != it->second.key)
+        return -1; /* a Pond's key never changes: this is not the Pond we are in */
     pd.address = addr->address;
     pd.tls_fp = tls_fp;
+    pd.signs = offers_receipts(pd) || (it != p->ponds.end() && it->second.signs);
     pd.joined = puddle_wall_ms();
     pd.channels = std::move(channels);
     sort_channels(pd.channels);
@@ -660,6 +706,8 @@ int puddle_ponds_info(puddle_ponds *p, const char *id, const char *info, size_t 
     std::vector<Channel> channels;
     if (!parse_info(p, info, len, fresh, channels, fresh.me, me) || fresh.me != pd.me)
         return -1;
+    if (!pd.key.empty() && fresh.key != pd.key)
+        return -1; /* a Pond's key never changes */
     for (auto &c : channels) {
         Channel *old = find_channel(pd, c.id);
         if (old && !reset)
@@ -674,6 +722,12 @@ int puddle_ponds_info(puddle_ponds *p, const char *id, const char *info, size_t 
         puddle_log(PUDDLE_LOG_INFO, "ponds: %s now speaks protocol %lld", pd.id.c_str(), (long long)fresh.protocol);
     pd.protocol = fresh.protocol;
     pd.features = std::move(fresh.features);
+    if (pd.key.empty())
+        pd.key = fresh.key; /* a Pond we joined before it had receipts, telling us its key over the certificate pinned then */
+    if (!pd.signs && offers_receipts(pd)) {
+        pd.signs = true; /* and once it signs, never again unsigned: nothing can talk us back into pinning */
+        puddle_log(PUDDLE_LOG_INFO, "ponds: %.12s… signs its answers now", pd.id.c_str());
+    }
     pd.files_max = fresh.files_max;
     pd.offer = fresh.offer, pd.offer_role = fresh.offer_role;
     if (reset) /* otherwise the events since our cursor are still to come, and say what changed */

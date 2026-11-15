@@ -311,7 +311,7 @@ Pane {
                         }
                         // it cannot be reached, or no longer has us
                         Rectangle {
-                            visible: pondIcon.model.status === "unreachable" || pondIcon.model.status === "removed" || pondIcon.model.status === "certificate_changed"
+                            visible: pondIcon.model.status === "unreachable" || pondIcon.model.status === "removed" || pondIcon.model.status === "certificate_changed" || pondIcon.model.status === "not_proven"
                             anchors.right: parent.right; anchors.bottom: parent.bottom
                             anchors.rightMargin: -2; anchors.bottomMargin: -2
                             width: 14; height: 14; radius: 7
