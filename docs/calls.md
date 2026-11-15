@@ -18,7 +18,7 @@ Decided with the owner:
 ## The path
 
     window ──(in process)── Puddle A ══ WebRTC: DTLS-SRTP over UDP ══ Puddle B ──(in process)── window
-                                                                          └──(its own leg, 8.3)── phone
+                                                                          └══ WebRTC, its own leg ══ phone
 
 A Puddle doesn't decode anything: it forwards Opus frames between its owner's device and the friend's Puddle. Only the
 devices record and play.
@@ -94,6 +94,11 @@ computer's own microphone or speaker.
 | `POST /api/v1/calls/{call}/accept` | |
 | `POST /api/v1/calls/{call}/decline` | |
 | `POST /api/v1/calls/{call}/end` | hang up, or give up ringing |
+| `POST /api/v1/calls/{call}/media` | a phone's leg: `{sdp}` its offer, answered `{sdp, udp}` ("On a phone") |
+
+Each call says which of the owner's devices has it (`device`): `null` for the window, or the phone (`{id, name}`) that
+started or answered it. A friend's call rings on all of them; the first to answer has it, and the others show where it is
+and can hang it up, but have no sound of it.
 
 The window hands frames to its Puddle and gets them back through a C interface (`federation/calls.h`), since it runs
 the Puddle in its own process. It asks `GET /api/v1/calls?limit=1` every 0.7 s and reads further only when `version`
@@ -108,10 +113,36 @@ has moved.
 - Each call is a note in the chat among the messages ("You called Bob · 3:12", "Missed call from Bob"), shown once the
   messages around it are loaded.
 
+## On a phone
+
+A phone is a thin client (`identity.md`, "Devices"), so its Puddle carries its calls as it does the window's, and the
+phone has a WebRTC leg of its own to its Puddle for the sound:
+
+1. The phone starts a call or answers one, signed by its device key like everything it asks. The Puddle notes that phone
+   as the call's `device`.
+2. It makes an offer (one Opus audio track, `sendrecv`, complete with its candidates) and sends it in
+   `POST /api/v1/calls/{call}/media`. Only that phone may, and only while the call is going on.
+3. The Puddle answers with its own description and its calls port: `{sdp, udp}`. The leg uses the same UDP port as every
+   other call, so nothing more needs to be open. The phone adds the Puddle's address, the one it reaches the Puddle at, as
+   a candidate at that port.
+4. Once the call is active, the Puddle passes Opus frames between the friend's connection and the phone's leg as they
+   come. Each is re-stamped with that connection's own RTP clock, keeping any gap the frames had, so the jitter buffer at
+   the far end still sees a lost frame as lost.
+
+Both descriptions name their DTLS fingerprints and travel in a request the phone signed and an answer the Puddle signed
+(with its receipt), so the leg is bound to the pairing just as a friend's call is bound to the stream. No STUN and no TURN
+here either: a phone that reaches its Puddle's HTTPS port reaches its calls port beside it.
+
+Asking again replaces the leg, for a phone that moved to another network. The call ends (`failed`, for the friend too) if
+the leg doesn't connect within 20 seconds, if it drops for 10, or if the phone stops asking how the call stands (the app
+asks every 0.7 s while it is open) for 10 seconds or is removed. That last check notices a phone that went away much
+sooner than the leg's own connection would.
+
+In the app (`src/gui/app/callleg.*`), the phone uses the window's microphone, speaker and jitter buffer (`callaudio.*`),
+fed from the leg instead of from the Puddle in its own process.
+
 ## Later steps
 
-- **Phones (8.3):** the phone's Puddle carries the call, and the phone sets up a WebRTC leg of its own with its Puddle,
-  signalled over the device API and bound to the device key.
 - **Group calls (8.4):** a group call is a call per pair of members (a mesh), over the group's connections, so it suits
   small groups.
 - **Video (8.5):** a video track beside the audio, from the window's camera (and the phone's).

@@ -3,6 +3,7 @@
 
 #include "base/encoding.h"
 #include "base/log.h"
+#include "core/devices.h"
 #include "core/link.h"
 #include "core/streams.h"
 #include "platform/fsutil.h"
@@ -24,8 +25,9 @@ puddle_calls *puddle_calls_start(puddle_ctx *, const puddle_outbox_hooks *, char
     return NULL;
 }
 void puddle_calls_stop(puddle_calls *) {}
-int puddle_call_start(puddle_ctx *, const char *, char *, const char **code) { return *code = "no_calls", -1; }
-int puddle_call_accept(puddle_ctx *, const char *, const char **code) { return *code = "no_calls", -1; }
+int puddle_call_start(puddle_ctx *, const char *, const char *, char *, const char **code) { return *code = "no_calls", -1; }
+int puddle_call_accept(puddle_ctx *, const char *, const char *, const char **code) { return *code = "no_calls", -1; }
+int puddle_call_media(puddle_ctx *, const char *, const char *, const char *, char **, int *, const char **code) { return *code = "no_calls", -1; }
 int puddle_call_decline(puddle_ctx *, const char *, const char **code) { return *code = "no_calls", -1; }
 int puddle_call_end(puddle_ctx *, const char *, const char **code) { return *code = "no_calls", -1; }
 int puddle_calls_write(puddle_ctx *, const char *id, const char *, int, puddle_jw *w)
@@ -76,6 +78,20 @@ const size_t puddle_call_routes_count = sizeof puddle_call_routes / sizeof puddl
 
 namespace {
 
+/* A phone's own leg to this Puddle (docs/calls.md, "On a phone"): the phone offers, we answer, and Opus goes between it and
+ * the friend's connection. */
+struct Leg {
+    std::shared_ptr<rtc::PeerConnection> pc;
+    std::shared_ptr<rtc::Track> track;
+    bool open = false, connected = false;
+    int64_t deadline = 0, lost_since = 0;
+    uint32_t next_ts = 0;  /* our next RTP timestamp to the phone */
+    uint32_t last_in = 0;  /* the friend's last timestamp, to keep their gaps */
+    bool have_in = false;
+};
+
+using LegPtr = std::shared_ptr<Leg>;
+
 struct Call {
     std::string id, peer;
     bool outgoing = false;
@@ -88,6 +104,10 @@ struct Call {
     std::shared_ptr<rtc::RtpPacketizationConfig> rtp;
     bool open = false;      /* the track: media can go */
     uint32_t next_ts = 0;   /* the RTP timestamp of our next frame */
+    uint32_t last_in = 0;   /* the phone's last timestamp, to keep its gaps */
+    bool have_in = false;
+    std::string device;     /* who has the call: "" the owner's device in this process (the window), else a phone's device id */
+    LegPtr leg;             /* that phone's leg, once it has asked for one */
 };
 
 using CallPtr = std::shared_ptr<Call>;
@@ -324,6 +344,11 @@ static void finish(puddle_calls *cs, const CallPtr &call, const char *reason, co
         pc = call->pc;
         if (pc) /* closed by the worker: this may be running in one of the connection's own callbacks */
             cs->tasks.push_back([pc] { pc->close(); });
+        if (call->leg && call->leg->pc) {
+            auto leg_pc = call->leg->pc;
+            call->leg->open = false;
+            cs->tasks.push_back([leg_pc] { leg_pc->close(); });
+        }
         if (tell_reason) {
             std::string peer = call->peer, body = body_of(call->id, "reason", tell_reason);
             cs->tasks.push_back([cs, peer, body] { tell(cs, peer, "/stream/v1/call/end", body); });
@@ -347,14 +372,44 @@ static CallPtr find(puddle_calls *cs, const std::string &id)
     return nullptr;
 }
 
-/* Opus out (packetized, with sender reports) and in (frames handed to the owner's device). */
-static void setup_track(puddle_calls *cs, const std::weak_ptr<Call> &weak, const std::shared_ptr<rtc::Track> &track)
+/* Opus out, packetized with sender reports, and in, as whole frames. */
+static std::shared_ptr<rtc::RtpPacketizationConfig> opus_handler(const std::shared_ptr<rtc::Track> &track)
 {
     auto rtp = std::make_shared<rtc::RtpPacketizationConfig>(random32(), "puddle", OPUS_PT, rtc::OpusRtpPacketizer::DefaultClockRate);
     auto pack = std::make_shared<rtc::OpusRtpPacketizer>(rtp);
     pack->addToChain(std::make_shared<rtc::RtcpSrReporter>(rtp));
     pack->addToChain(std::make_shared<rtc::OpusRtpDepacketizer>());
     track->setMediaHandler(pack);
+    return rtp;
+}
+
+/* The RTP timestamp for a frame passed on, whose own was `in`: ours moves on by a frame, and by as much again as theirs
+ * skipped, so a gap (a lost frame, a pause) stays one for the jitter buffer at the other end. Called with the lock held. */
+static uint32_t stamp(uint32_t &next, uint32_t &last, bool &have, uint32_t in)
+{
+    if (have) {
+        uint32_t d = in - last;
+        if (d > 960 && d <= 96000) /* up to 2 s; anything else is a new start, not a gap */
+            next += d - 960;
+    }
+    last = in, have = true;
+    uint32_t ts = next;
+    next += 960;
+    return ts;
+}
+
+static void send_on(const std::shared_ptr<rtc::Track> &track, const rtc::binary &data, uint32_t ts)
+{
+    try {
+        track->sendFrame(data, rtc::FrameInfo(ts));
+    } catch (const std::exception &) {
+    }
+}
+
+/* The friend's connection: frames go to the owner's device here (the window), or on to the phone that has the call. */
+static void setup_track(puddle_calls *cs, const std::weak_ptr<Call> &weak, const std::shared_ptr<rtc::Track> &track)
+{
+    auto rtp = opus_handler(track);
     std::string id;
     {
         std::lock_guard<std::mutex> g(cs->mu);
@@ -373,26 +428,82 @@ static void setup_track(puddle_calls *cs, const std::weak_ptr<Call> &weak, const
             cs->version++;
         }
     });
-    track->onFrame([cs, id](rtc::binary data, rtc::FrameInfo info) {
-        puddle_call_frame_fn fn;
-        void *user;
+    track->onFrame([cs, weak, id](rtc::binary data, rtc::FrameInfo info) {
+        if (data.empty() || data.size() > PUDDLE_CALL_FRAME_MAX)
+            return;
+        puddle_call_frame_fn fn = nullptr;
+        void *user = nullptr;
+        std::shared_ptr<rtc::Track> phone;
+        uint32_t ts = 0;
         {
             std::lock_guard<std::mutex> g(cs->mu);
-            fn = cs->on_audio, user = cs->on_audio_user;
+            CallPtr call = weak.lock();
+            if (!call)
+                return;
+            if (call->device.empty()) {
+                fn = cs->on_audio, user = cs->on_audio_user;
+            } else if (call->leg && call->leg->open && call->leg->track) {
+                phone = call->leg->track;
+                ts = stamp(call->leg->next_ts, call->leg->last_in, call->leg->have_in, info.timestamp);
+            }
         }
-        if (fn && !data.empty() && data.size() <= PUDDLE_CALL_FRAME_MAX)
+        if (fn)
             fn(user, id.c_str(), (const unsigned char *)data.data(), data.size(), info.timestamp);
+        else if (phone)
+            send_on(phone, data, ts);
     });
 }
 
-static std::shared_ptr<rtc::PeerConnection> make_pc(puddle_calls *cs, const CallPtr &call)
+/* The phone's leg: what it sends goes on to the friend once the call is active. */
+static void setup_leg_track(puddle_calls *cs, const std::weak_ptr<Call> &wcall, const std::weak_ptr<Leg> &wleg,
+                            const std::shared_ptr<rtc::Track> &track)
+{
+    opus_handler(track);
+    {
+        std::lock_guard<std::mutex> g(cs->mu);
+        LegPtr leg = wleg.lock();
+        if (!leg)
+            return;
+        leg->track = track;
+    }
+    track->onOpen([cs, wleg] {
+        std::lock_guard<std::mutex> g(cs->mu);
+        if (LegPtr leg = wleg.lock()) {
+            leg->open = true;
+            cs->version++;
+        }
+    });
+    track->onFrame([cs, wcall, wleg](rtc::binary data, rtc::FrameInfo info) {
+        if (data.empty() || data.size() > PUDDLE_CALL_FRAME_MAX)
+            return;
+        std::shared_ptr<rtc::Track> to;
+        uint32_t ts;
+        {
+            std::lock_guard<std::mutex> g(cs->mu);
+            CallPtr call = wcall.lock();
+            LegPtr leg = wleg.lock();
+            if (!call || !leg || call->leg != leg || call->state != "active" || !call->open || !call->track)
+                return;
+            to = call->track;
+            ts = stamp(call->next_ts, call->last_in, call->have_in, info.timestamp);
+        }
+        send_on(to, data, ts);
+    });
+}
+
+static rtc::Configuration pc_config(puddle_calls *cs)
 {
     rtc::Configuration conf; /* no ICE servers: only the two Puddles' own addresses (docs/calls.md, "Finding a path") */
     conf.enableIceUdpMux = true;
     conf.portRangeBegin = conf.portRangeEnd = cs->port;
     if (!cs->bind.empty())
         conf.bindAddress = cs->bind;
-    auto pc = std::make_shared<rtc::PeerConnection>(conf);
+    return conf;
+}
+
+static std::shared_ptr<rtc::PeerConnection> make_pc(puddle_calls *cs, const CallPtr &call)
+{
+    auto pc = std::make_shared<rtc::PeerConnection>(pc_config(cs));
     std::weak_ptr<Call> weak = call;
     pc->onStateChange([cs, weak](rtc::PeerConnection::State s) {
         CallPtr call = weak.lock();
@@ -423,16 +534,16 @@ static std::shared_ptr<rtc::PeerConnection> make_pc(puddle_calls *cs, const Call
     return pc;
 }
 
-/* Wait until our side of the description is complete (candidates and all: nothing trickles). */
-static bool gathered(const std::shared_ptr<rtc::PeerConnection> &pc, const CallPtr &call, puddle_calls *cs, bool want_track)
+/* Wait until our side of the description is complete (candidates and all: nothing trickles) and the track is there. */
+static bool gathered(const std::shared_ptr<rtc::PeerConnection> &pc, puddle_calls *cs, const std::function<bool()> &has_track)
 {
     for (int i = 0; i < 500; i++) {
         bool track;
         {
             std::lock_guard<std::mutex> g(cs->mu);
-            track = call->track != nullptr;
+            track = has_track();
         }
-        if (pc->gatheringState() == rtc::PeerConnection::GatheringState::Complete && pc->localDescription() && (track || !want_track))
+        if (pc->gatheringState() == rtc::PeerConnection::GatheringState::Complete && pc->localDescription() && track)
             return true;
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
@@ -455,7 +566,51 @@ static void add_their_addresses(puddle_calls *cs, const std::shared_ptr<rtc::Pee
     }
 }
 
+/* The phone's leg: the same port, and only its own addresses and ours (it adds our advertised one itself). */
+static std::shared_ptr<rtc::PeerConnection> make_leg_pc(puddle_calls *cs, const CallPtr &call, const LegPtr &leg)
+{
+    auto pc = std::make_shared<rtc::PeerConnection>(pc_config(cs));
+    std::weak_ptr<Call> wcall = call;
+    std::weak_ptr<Leg> wleg = leg;
+    pc->onStateChange([cs, wcall, wleg](rtc::PeerConnection::State s) {
+        CallPtr call = wcall.lock();
+        LegPtr leg = wleg.lock();
+        if (!call || !leg)
+            return;
+        bool fail = false;
+        {
+            std::lock_guard<std::mutex> g(cs->mu);
+            if (call->state == "ended" || call->leg != leg) /* over, or a newer leg took its place */
+                return;
+            if (s == rtc::PeerConnection::State::Connected) {
+                if (!leg->connected)
+                    puddle_log(PUDDLE_LOG_INFO, "calls: %s: the phone's leg connected", call->id.c_str());
+                leg->connected = true;
+                leg->lost_since = 0;
+                cs->version++;
+            } else if (s == rtc::PeerConnection::State::Disconnected) {
+                leg->lost_since = now_of(cs);
+            } else if (s == rtc::PeerConnection::State::Failed || s == rtc::PeerConnection::State::Closed) {
+                fail = true;
+            }
+        }
+        if (fail)
+            finish(cs, call, "failed", "failed");
+    });
+    return pc;
+}
+
 /* ---- the worker: deadlines, and telling friends a call ended ---- */
+
+/* The phone that has a call asks how it stands every moment it is open (the app's Calls, every 0.7 s). One that has stopped
+ * asking, or was removed, is gone, and the call with it: quicker to notice than the leg's own connection dropping. */
+static bool phone_gone(puddle_calls *cs, const std::string &device, int64_t now)
+{
+    puddle_device dv;
+    if (!cs->ctx->devices || puddle_devices_get(cs->ctx->devices, device.c_str(), &dv) != 0 || dv.state != PUDDLE_DEVICE_ACTIVE)
+        return true;
+    return dv.last_seen_ms && now - dv.last_seen_ms >= LOST_MS;
+}
 
 static void work(puddle_calls *cs)
 {
@@ -487,6 +642,12 @@ static void work(puddle_calls *cs)
             else if (call->state == "connecting")
                 reason = "failed", told = "failed";
         } else if (call && call->lost_since && now - call->lost_since >= LOST_MS) {
+            reason = "failed", told = "failed";
+        } else if (call && call->leg && !call->leg->connected && now >= call->leg->deadline) {
+            reason = "failed", told = "failed"; /* the phone never got through to us */
+        } else if (call && call->leg && call->leg->lost_since && now - call->leg->lost_since >= LOST_MS) {
+            reason = "failed", told = "failed";
+        } else if (call && !call->device.empty() && phone_gone(cs, call->device, now)) {
             reason = "failed", told = "failed";
         }
         lk.unlock();
@@ -561,20 +722,27 @@ void puddle_calls_stop(puddle_calls *cs)
         std::lock_guard<std::mutex> g(cs->mu);
         all.swap(cs->ended);
     }
-    for (auto &c : all)
+    for (auto &c : all) {
         if (c->pc) {
             c->pc->resetCallbacks();
             if (c->track)
                 c->track->resetCallbacks();
             c->pc->close();
         }
+        if (c->leg && c->leg->pc) {
+            c->leg->pc->resetCallbacks();
+            if (c->leg->track)
+                c->leg->track->resetCallbacks();
+            c->leg->pc->close();
+        }
+    }
     all.clear();
     delete cs;
 }
 
 /* ---- the owner's side ---- */
 
-int puddle_call_start(puddle_ctx *ctx, const char *peer, char id_out[PUDDLE_CALL_ID_LEN + 1], const char **code)
+int puddle_call_start(puddle_ctx *ctx, const char *peer, const char *device, char id_out[PUDDLE_CALL_ID_LEN + 1], const char **code)
 {
     puddle_calls *cs = ctx->calls;
     if (!cs)
@@ -585,6 +753,7 @@ int puddle_call_start(puddle_ctx *ctx, const char *peer, char id_out[PUDDLE_CALL
     call->id = new_call_id();
     call->peer = peer;
     call->outgoing = true;
+    call->device = device ? device : "";
     call->state = "calling";
     call->created = now_of(cs);
     if (call->id.empty())
@@ -609,7 +778,7 @@ int puddle_call_start(puddle_ctx *ctx, const char *peer, char id_out[PUDDLE_CALL
         auto track = pc->addTrack(media);
         setup_track(cs, call, track);
         pc->setLocalDescription();
-        if (gathered(pc, call, cs, true))
+        if (gathered(pc, cs, [&] { return call->track != nullptr; }))
             sdp = std::string(*pc->localDescription());
     } catch (const std::exception &e) {
         puddle_log(PUDDLE_LOG_WARN, "calls: cannot set a call up: %s", e.what());
@@ -637,7 +806,7 @@ int puddle_call_start(puddle_ctx *ctx, const char *peer, char id_out[PUDDLE_CALL
     return 0;
 }
 
-int puddle_call_accept(puddle_ctx *ctx, const char *id, const char **code)
+int puddle_call_accept(puddle_ctx *ctx, const char *id, const char *device, const char **code)
 {
     puddle_calls *cs = ctx->calls;
     if (!cs)
@@ -651,6 +820,7 @@ int puddle_call_accept(puddle_ctx *ctx, const char *id, const char **code)
         if (!call || call->id != id || call->outgoing || call->state != "ringing")
             return *code = "no_call", -1;
         call->state = "connecting";
+        call->device = device ? device : "";
         call->deadline = now_of(cs) + cs->connect_ms;
         offer = call->remote_sdp, udp = call->remote_udp;
         cs->version++;
@@ -666,7 +836,7 @@ int puddle_call_accept(puddle_ctx *ctx, const char *id, const char **code)
         pc->onTrack([cs, weak](std::shared_ptr<rtc::Track> track) { setup_track(cs, weak, track); });
         pc->setRemoteDescription(rtc::Description(offer, "offer")); /* the answer is made from it */
         add_their_addresses(cs, pc, call->peer, udp);
-        if (gathered(pc, call, cs, true))
+        if (gathered(pc, cs, [&] { return call->track != nullptr; }))
             sdp = std::string(*pc->localDescription());
     } catch (const std::exception &e) {
         puddle_log(PUDDLE_LOG_WARN, "calls: cannot answer %.12s…'s call: %s", call->peer.c_str(), e.what());
@@ -715,7 +885,70 @@ int puddle_call_end(puddle_ctx *ctx, const char *id, const char **code)
     return 0;
 }
 
-static void write_call(puddle_jw *w, const Call &c)
+int puddle_call_media(puddle_ctx *ctx, const char *id, const char *device, const char *offer, char **answer_out, int *udp_out,
+                      const char **code)
+{
+    puddle_calls *cs = ctx->calls;
+    if (!cs)
+        return *code = "no_calls", -1;
+    if (!device || !*device)
+        return *code = "no_call", -1;
+    CallPtr call;
+    {
+        std::lock_guard<std::mutex> g(cs->mu);
+        call = cs->current;
+        if (!call || call->id != id || call->device != device)
+            return *code = "no_call", -1;
+    }
+    auto leg = std::make_shared<Leg>();
+    leg->next_ts = random32();
+    std::string sdp;
+    std::shared_ptr<rtc::PeerConnection> pc;
+    try {
+        pc = make_leg_pc(cs, call, leg);
+        leg->pc = pc;
+        std::weak_ptr<Call> wcall = call;
+        std::weak_ptr<Leg> wleg = leg;
+        pc->onTrack([cs, wcall, wleg](std::shared_ptr<rtc::Track> track) { setup_leg_track(cs, wcall, wleg, track); });
+        pc->setRemoteDescription(rtc::Description(offer, "offer"));
+        if (gathered(pc, cs, [&] { return leg->track != nullptr; }))
+            sdp = std::string(*pc->localDescription());
+    } catch (const std::exception &e) {
+        puddle_log(PUDDLE_LOG_INFO, "calls: the phone's offer for %s can't be used: %s", id, e.what());
+    }
+    if (sdp.empty()) {
+        if (pc) {
+            pc->resetCallbacks();
+            pc->close();
+        }
+        return *code = "bad_sdp", -1;
+    }
+    {
+        std::lock_guard<std::mutex> g(cs->mu);
+        if (call->state == "ended" || call->device != device) {
+            pc->resetCallbacks();
+            cs->tasks.push_back([pc] { pc->close(); });
+            cs->wake.notify_all();
+            return *code = "no_call", -1;
+        }
+        if (call->leg && call->leg->pc) { /* the phone asked again (a new network, say): the new leg takes over */
+            auto old = call->leg->pc;
+            cs->tasks.push_back([old] { old->close(); });
+            cs->wake.notify_all();
+        }
+        leg->deadline = now_of(cs) + cs->connect_ms;
+        call->leg = leg;
+        cs->version++;
+    }
+    *answer_out = strdup(sdp.c_str());
+    *udp_out = cs->port;
+    if (!*answer_out)
+        return *code = "internal", -1;
+    puddle_log(PUDDLE_LOG_INFO, "calls: %s: the phone %.12s… set up its leg", id, device);
+    return 0;
+}
+
+static void write_call(puddle_ctx *ctx, puddle_jw *w, const Call &c)
 {
     puddle_jw_object(w);
     puddle_jw_str(w, "id", c.id.c_str());
@@ -727,7 +960,22 @@ static void write_call(puddle_jw *w, const Call &c)
         puddle_jw_string(w, c.reason.c_str());
     else
         puddle_jw_null(w);
-    puddle_jw_flag(w, "media", c.open);
+    puddle_jw_flag(w, "media", c.open && (c.device.empty() || (c.leg && c.leg->open && c.leg->connected)));
+    puddle_jw_key(w, "device");
+    puddle_device dv;
+    if (c.device.empty()) {
+        puddle_jw_null(w);
+    } else if (ctx->devices && puddle_devices_get(ctx->devices, c.device.c_str(), &dv) == 0) {
+        puddle_jw_object(w);
+        puddle_jw_str(w, "id", dv.id);
+        puddle_jw_str(w, "name", dv.name);
+        puddle_jw_end_object(w);
+    } else {
+        puddle_jw_object(w);
+        puddle_jw_str(w, "id", c.device.c_str());
+        puddle_jw_str(w, "name", "");
+        puddle_jw_end_object(w);
+    }
     puddle_jw_num(w, "created", c.created);
     puddle_jw_key(w, "answered");
     c.answered ? puddle_jw_int(w, c.answered) : puddle_jw_null(w);
@@ -745,6 +993,8 @@ static void write_record(puddle_jw *w, const Record &r)
     puddle_jw_str(w, "state", "ended");
     puddle_jw_str(w, "reason", r.reason.c_str());
     puddle_jw_flag(w, "media", 0);
+    puddle_jw_key(w, "device");
+    puddle_jw_null(w);
     puddle_jw_num(w, "created", r.created);
     puddle_jw_key(w, "answered");
     r.answered ? puddle_jw_int(w, r.answered) : puddle_jw_null(w);
@@ -769,7 +1019,7 @@ int puddle_calls_write(puddle_ctx *ctx, const char *id, const char *user, int li
     std::lock_guard<std::mutex> g(cs->mu);
     if (id) {
         if (cs->current && cs->current->id == id)
-            return write_call(w, *cs->current), 0;
+            return write_call(ctx, w, *cs->current), 0;
         for (auto it = cs->history.rbegin(); it != cs->history.rend(); ++it)
             if (it->id == id)
                 return write_record(w, *it), 0;
@@ -781,7 +1031,7 @@ int puddle_calls_write(puddle_ctx *ctx, const char *id, const char *user, int li
     puddle_jw_array(w);
     int n = 0;
     if (cs->current && (!user || cs->current->peer == user))
-        write_call(w, *cs->current), n++;
+        write_call(ctx, w, *cs->current), n++;
     for (auto it = cs->history.rbegin(); it != cs->history.rend() && n < limit && w->len + 600 < w->cap; ++it)
         if (!user || it->peer == user)
             write_record(w, *it), n++;
@@ -809,7 +1059,7 @@ int puddle_call_send_audio(puddle_calls *cs, const char *id, const unsigned char
     {
         std::lock_guard<std::mutex> g(cs->mu);
         CallPtr call = cs->current;
-        if (!call || call->id != id || call->state != "active" || !call->open || !call->track)
+        if (!call || call->id != id || call->state != "active" || !call->open || !call->track || !call->device.empty())
             return -1;
         track = call->track;
         ts = call->next_ts;

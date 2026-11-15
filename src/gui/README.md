@@ -16,6 +16,7 @@ src/gui/
     ponds.*           the Ponds for the rail, and the open one's channels, members and messages (chats.ponds)
     callmodel.*       the call going on, from the owner API (chats.calls), and how a call is described in a chat
     callaudio.*       a call's sound: the microphone, Opus, the jitter buffer and the speaker; the Backend plays it (docs/calls.md)
+    callleg.*         a phone's own WebRTC leg to its Puddle for the call it has (docs/calls.md, "On a phone")
     composer.*        the files waiting to go with a message (QML: import Puddle.Files): their type, size and tiny preview,
                       photos with Qt's image reading and videos from their first frame (Qt Multimedia)
     dock*             macOS Dock visibility

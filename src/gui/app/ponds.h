@@ -53,6 +53,7 @@ public:
     bool joining() const { return joining_; }
 
     void start() { timer_.start(); refresh(); }
+    void stop() { timer_.stop(); }
     void setInterval(int ms) { timer_.setInterval(ms); }
 
     Q_INVOKABLE void refresh();

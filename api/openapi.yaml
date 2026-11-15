@@ -735,6 +735,7 @@ paths:
       description: |
         The call comes back as it stands: `calling` while it rings at theirs, or already `ended` with why (`unreachable`, `busy`,
         `no_calls` on their side, `failed`). `409 no_stream` (not a friend with an active stream), `409 busy` (a call is going on here).
+        From a phone, the phone has the call (its `device`), and sets up its leg next with `media`.
       requestBody: { content: { application/json: { schema: { type: object, required: [user], properties: { user: { $ref: "wire/ids.yaml#/$defs/UserId" } } } } } }
       responses:
         "201": { description: OK, content: { application/json: { schema: { $ref: "objects/call.yaml" } } } }
@@ -744,7 +745,22 @@ paths:
     get: { tags: [calls], summary: One call, responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "objects/call.yaml" } } } }, "404": { $ref: "#/components/responses/NotFound" } } }
   /api/v1/calls/{call}/accept:
     parameters: [{ name: call, in: path, required: true, schema: { type: string, pattern: "^[a-z2-7]{26}$" } }]
-    post: { tags: [calls], summary: "Answer a call that is ringing here (`404 no_call` otherwise)", responses: { "200": { description: "It, `connecting`", content: { application/json: { schema: { $ref: "objects/call.yaml" } } } } } }
+    post: { tags: [calls], summary: "Answer a call that is ringing here (`404 no_call` otherwise). A phone that answers has the call, and sets up its leg next with `media`", responses: { "200": { description: "It, `connecting`", content: { application/json: { schema: { $ref: "objects/call.yaml" } } } } } }
+  /api/v1/calls/{call}/media:
+    parameters: [{ name: call, in: path, required: true, schema: { type: string, pattern: "^[a-z2-7]{26}$" } }]
+    post:
+      tags: [calls]
+      summary: A phone's own leg for the call it has (docs/calls.md, "On a phone")
+      description: |
+        Only from a phone, and only the one that started or answered the call: `400 not_a_phone` with the owner token, `404 no_call`
+        from any other phone or once the call is over. The offer comes complete with its candidates, and so does the answer; the
+        phone adds this Puddle's address (the one it reaches it at) at `udp`. Asking again replaces the leg (a new network, say).
+        `400 bad_sdp` if the offer can't be used.
+      requestBody: { content: { application/json: { schema: { type: object, required: [sdp], properties: { sdp: { type: string, maxLength: 16384, description: "The phone's WebRTC offer: one Opus audio track" } } } } } }
+      responses:
+        "200": { description: The Puddle's answer, content: { application/json: { schema: { type: object, required: [sdp, udp], properties: { sdp: { type: string }, udp: { type: integer, description: "The UDP port this Puddle's calls use (`calls.port`)" } } } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/v1/calls/{call}/decline:
     parameters: [{ name: call, in: path, required: true, schema: { type: string, pattern: "^[a-z2-7]{26}$" } }]
     post: { tags: [calls], summary: "Turn down a call that is ringing here", responses: { "200": { description: "It, ended `declined`", content: { application/json: { schema: { $ref: "objects/call.yaml" } } } } } }

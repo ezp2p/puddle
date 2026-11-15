@@ -5,7 +5,9 @@ import "../components"
 import "../theme"
 
 // The call going on (docs/calls.md), floating over the top of the page whatever is open: a friend ringing (answer or
-// decline), ours ringing at theirs, connecting, or the call itself with how long it has run, mute and hang up.
+// decline), ours ringing at theirs, connecting, or the call itself with how long it has run, mute and hang up. A friend
+// rings on every device of the owner's; once one of them answers or starts a call, the others say where it is (on a phone,
+// on the computer) and can only hang it up.
 Card {
     id: bar
 
@@ -46,11 +48,12 @@ Card {
                 font.pixelSize: 12
                 opacity: bar.state === "" ? 1 : 0.7
                 color: bar.state === "" ? Theme.danger : palette.windowText
-                text: bar.state === "ringing" ? qsTr("is calling you")
+                readonly property string what: bar.state === "ringing" ? qsTr("is calling you")
                     : bar.state === "calling" ? qsTr("Ringing…")
                     : bar.state === "connecting" ? qsTr("Connecting…")
                     : bar.state === "active" ? bar.length()
                     : bar.calls.error
+                text: bar.calls.elsewhere !== "" ? what + " · " + bar.calls.elsewhere : what
             }
         }
 
@@ -73,7 +76,7 @@ Card {
         // in a call (or ringing theirs): mute, hang up
         ToolButton {
             objectName: "muteButton"
-            visible: bar.state === "active" || bar.state === "connecting"
+            visible: (bar.state === "active" || bar.state === "connecting") && bar.calls.here
             checkable: true
             checked: bar.calls.muted
             icon.source: Theme.icon(bar.calls.muted ? "microphone-off" : "microphone")

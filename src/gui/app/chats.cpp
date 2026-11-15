@@ -145,6 +145,7 @@ bool Chats::attachDevice(const QUrl &base, const QString &puddleId, const QByteA
     timer_.start();
     refresh();
     ponds_.start(); /* through its Puddle, like everything else */
+    calls_.setDevice(ApiClient::deviceIdOf(deviceSeed), base.host()); /* its calls have a leg of their own to the Puddle */
     calls_.start();
     return true;
 }

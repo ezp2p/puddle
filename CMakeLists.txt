@@ -176,7 +176,7 @@ if(PUDDLE_CALLS)
 endif()
 if(PUDDLE_CALLS AND LibDataChannel_FOUND)
   target_link_libraries(puddle_federation PUBLIC LibDataChannel::LibDataChannel)
-  target_compile_definitions(puddle_federation PRIVATE PUDDLE_HAVE_CALLS)
+  target_compile_definitions(puddle_federation PUBLIC PUDDLE_HAVE_CALLS) # PUBLIC: the app sets up a phone's leg too
   message(STATUS "calls: with libdatachannel")
 else()
   message(STATUS "calls: none (libdatachannel not found, or PUDDLE_CALLS off)")
@@ -222,6 +222,8 @@ if(PUDDLE_BUILD_GUI)
       src/gui/app/qrimage.h
       src/gui/app/callmodel.cpp
       src/gui/app/callmodel.h
+      src/gui/app/callleg.cpp
+      src/gui/app/callleg.h
       src/gui/app/callaudio.cpp
       src/gui/app/callaudio.h)
     # a call's sound (callaudio.h): Opus. Without libopus a call still connects, in silence.
@@ -325,7 +327,7 @@ if(PUDDLE_BUILD_GUI)
 
     # The first-run state machine, against the real core, with no window (needs the offscreen platform).
     add_executable(backend_test tests/backend_test.cpp src/gui/app/backend.cpp src/gui/app/backend.h src/gui/app/chats.cpp src/gui/app/chats.h
-      src/gui/app/apiclient.cpp src/gui/app/apiclient.h src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h src/gui/app/callmodel.cpp src/gui/app/callmodel.h
+      src/gui/app/apiclient.cpp src/gui/app/apiclient.h src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h src/gui/app/callmodel.cpp src/gui/app/callmodel.h src/gui/app/callleg.cpp src/gui/app/callleg.h
       src/gui/app/phone.cpp src/gui/app/phone.h)
     target_include_directories(backend_test PRIVATE src/gui/app)
     target_sources(backend_test PRIVATE src/gui/app/callaudio.cpp src/gui/app/callaudio.h)
@@ -338,14 +340,14 @@ if(PUDDLE_BUILD_GUI)
 
     # The app's view of a Puddle (owner API over pinned TLS), against two real Puddles talking to each other.
     add_executable(chats_test tests/chats_test.cpp src/gui/app/chats.cpp src/gui/app/chats.h src/gui/app/apiclient.cpp src/gui/app/apiclient.h
-      src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h src/gui/app/callmodel.cpp src/gui/app/callmodel.h)
+      src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h src/gui/app/callmodel.cpp src/gui/app/callmodel.h src/gui/app/callleg.cpp src/gui/app/callleg.h)
     set_target_properties(chats_test PROPERTIES AUTOMOC ON)
     target_link_libraries(chats_test PRIVATE puddle_service Qt6::Core Qt6::Gui Qt6::Network Qt6::Test)
     add_test(NAME chats COMMAND chats_test)
 
     # The app as a phone: pairing with a real Puddle, then using it as a thin client (docs/identity.md, "Devices").
     add_executable(phone_test tests/phone_test.cpp src/gui/app/chats.cpp src/gui/app/chats.h src/gui/app/apiclient.cpp src/gui/app/apiclient.h
-      src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h src/gui/app/callmodel.cpp src/gui/app/callmodel.h src/gui/app/phone.cpp src/gui/app/phone.h)
+      src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h src/gui/app/callmodel.cpp src/gui/app/callmodel.h src/gui/app/callleg.cpp src/gui/app/callleg.h src/gui/app/phone.cpp src/gui/app/phone.h)
     set_target_properties(phone_test PROPERTIES AUTOMOC ON)
     target_link_libraries(phone_test PRIVATE puddle_service Qt6::Core Qt6::Gui Qt6::Network Qt6::Test)
     add_test(NAME phone COMMAND phone_test)
@@ -353,7 +355,7 @@ if(PUDDLE_BUILD_GUI)
 
     # The window, driven with real mouse and key events against two real Puddles.
     add_executable(ui_test tests/ui_test.cpp src/gui/app/backend.cpp src/gui/app/backend.h src/gui/app/chats.cpp src/gui/app/chats.h
-      src/gui/app/apiclient.cpp src/gui/app/apiclient.h src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h src/gui/app/callmodel.cpp src/gui/app/callmodel.h src/gui/app/composer.cpp src/gui/app/composer.h
+      src/gui/app/apiclient.cpp src/gui/app/apiclient.h src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h src/gui/app/callmodel.cpp src/gui/app/callmodel.h src/gui/app/callleg.cpp src/gui/app/callleg.h src/gui/app/composer.cpp src/gui/app/composer.h
       src/gui/app/phone.cpp src/gui/app/phone.h)
     set_target_properties(ui_test PROPERTIES AUTOMOC ON)
     target_include_directories(ui_test PRIVATE src/gui/app)

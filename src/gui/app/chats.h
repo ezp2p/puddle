@@ -108,6 +108,10 @@ public:
     // Start talking to the Puddle at `base`, reading its token and certificate from the files.
     bool attach(const QUrl &base, const QString &tokenFile, const QString &certFile);
     void setInterval(int ms) { timer_.setInterval(ms); }
+    // Ask the Puddle nothing more (the app is going away), or start asking again. A phone's call ends with it: its Puddle
+    // ends a call whose phone has gone quiet.
+    void pause() { timer_.stop(); ponds_.stop(); calls_.stop(); }
+    void resume() { timer_.start(); ponds_.start(); calls_.start(); }
     bool peopleLoaded() const { return peopleLoaded_; } // the first list has come: requests after this are new
     void setPageSize(int n) { pageSize_ = n; } // how many of a list to ask for at a time (for tests; the Puddle caps it at 100 or 200)
 

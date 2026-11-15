@@ -554,7 +554,12 @@ to one in the window first, then phones, group calls and video.
   ways over real UDP, declining, busy, no answer, hanging up, and that only a friend can ring.
 - [x] **8.2 Calls in the window.** Recording and playing with Qt Multimedia and libopus, a jitter buffer, ringing, the
   call bar (mute, hang up), and a note of each call in the chat.
-- [ ] **8.3 Calls on the phone.** A WebRTC leg between the phone and its Puddle, signalled over the device API.
+- [x] **8.3 Calls on the phone.** A phone that starts or answers a call has it (the call's `device`), and sets up a WebRTC
+  leg of its own to its Puddle with `POST /api/v1/calls/{call}/media`, signed like all it asks; the Puddle passes Opus
+  frames between the leg and the friend, on the same UDP port. Every device rings; the others show where the call is and
+  can hang it up. A phone that stops asking for 10 seconds, or whose leg fails, ends the call. `app/callleg.*`; tested in
+  `phone_test` against two real Puddles: answering on the phone, ringing from it, frames both ways, the computer showing
+  where the call went, and a phone that goes quiet.
 - [ ] **8.4 Group calls.** A call per pair of members, over the group's connections.
 - [ ] **8.5 Video.** A video track beside the voice, from the camera.
 

@@ -40,14 +40,23 @@ void puddle_calls_stop(puddle_calls *c);
 
 /* ---- the owner's side (the courier's call_* entries) ----
  * Each returns 0, or -1 with `code`: no_calls, no_stream (not a friend with an active stream), busy (a call is going on),
- * no_call (no such call, or not in a state for this). */
-int puddle_call_start(puddle_ctx *ctx, const char *peer, char id[PUDDLE_CALL_ID_LEN + 1], const char **code);
-int puddle_call_accept(puddle_ctx *ctx, const char *id, const char **code);
+ * no_call (no such call, or not in a state for this).
+ * `device` is who starts or answers: NULL for the owner's device in this process (the window), or the id of the phone that
+ * asked. That one has the call: the friend's frames go to it, and only it sends. */
+int puddle_call_start(puddle_ctx *ctx, const char *peer, const char *device, char id[PUDDLE_CALL_ID_LEN + 1], const char **code);
+int puddle_call_accept(puddle_ctx *ctx, const char *id, const char *device, const char **code);
 int puddle_call_decline(puddle_ctx *ctx, const char *id, const char **code);
 int puddle_call_end(puddle_ctx *ctx, const char *id, const char **code);
 /* `id` NULL: {"version": n, "items": [the current call, then up to `limit` ended ones, newest first]}, only those with `user`
  * if it is given. `version` changes whenever a call does. Otherwise that call: 0, or 1 if there is none. */
 int puddle_calls_write(puddle_ctx *ctx, const char *id, const char *user, int limit, puddle_jw *w);
+
+/* ---- media: a phone's leg (docs/calls.md, "On a phone") ----
+ * The phone `device` that has call `id` offers a WebRTC leg of its own (`sdp`, complete with candidates); the answer, also
+ * complete, is put in `*answer` (free() it), with the UDP port it is on. Asking again replaces the leg. 0, or -1 with
+ * `code`: no_calls, no_call (no such call, or another device has it), bad_sdp. */
+int puddle_call_media(puddle_ctx *ctx, const char *id, const char *device, const char *sdp, char **answer, int *udp,
+                      const char **code);
 
 /* ---- media: the owner's device, in this process (the window) ---- */
 

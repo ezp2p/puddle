@@ -72,12 +72,14 @@ typedef struct {
     int (*pond_fetch)(puddle_ctx *ctx, const char *pond, int64_t channel, int64_t message, const char *file, const char **code);
     int (*pond_admin)(puddle_ctx *ctx, const char *pond, const char *method, const char *target, const char *body, size_t len, int *status,
                       char **reply, size_t *reply_len, const char **code);
-    /* calls (docs/calls.md): ring a friend, answer, decline, hang up, and what is going on */
-    int (*call_start)(puddle_ctx *ctx, const char *peer, char id[27], const char **code);
-    int (*call_accept)(puddle_ctx *ctx, const char *id, const char **code);
+    /* calls (docs/calls.md): ring a friend, answer, decline, hang up, and what is going on. `device`: the phone that asked,
+     * NULL for the owner's device in this process; a phone then sets up its leg with call_media */
+    int (*call_start)(puddle_ctx *ctx, const char *peer, const char *device, char id[27], const char **code);
+    int (*call_accept)(puddle_ctx *ctx, const char *id, const char *device, const char **code);
     int (*call_decline)(puddle_ctx *ctx, const char *id, const char **code);
     int (*call_end)(puddle_ctx *ctx, const char *id, const char **code);
     int (*calls_write)(puddle_ctx *ctx, const char *id, const char *user, int limit, puddle_jw *w);
+    int (*call_media)(puddle_ctx *ctx, const char *id, const char *device, const char *sdp, char **answer, int *udp, const char **code);
 } puddle_courier;
 
 /* What handlers can reach. */

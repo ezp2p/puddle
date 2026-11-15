@@ -39,15 +39,71 @@ void Calls::take(const QJsonObject &call)
     user_ = live ? call.value("user").toString() : QString();
     incoming_ = live && call.value("direction").toString() == QLatin1String("incoming");
     answered_ = live ? qint64(call.value("answered").toDouble()) : 0;
+    const QJsonObject dev = call.value("device").toObject();
+    const QString wasDevice = device_;
+    device_ = live ? dev.value("id").toString() : QString();
+    deviceName_ = live ? dev.value("name").toString() : QString();
+    const bool wasHere = here_;
+    here_ = live && device_ == myDevice_;
     if (!live && muted_) {
         muted_ = false;
         emit mutedChanged();
     }
-    if (state_ != was || id_ != wasId) {
+    followLeg();
+    if (state_ != was || id_ != wasId || device_ != wasDevice || here_ != wasHere) {
         emit changed();
         if (state_ == QLatin1String("ringing") && (was != QLatin1String("ringing") || id_ != wasId))
             emit ringing(user_);
     }
+}
+
+void Calls::setDevice(const QString &id, const QString &host)
+{
+    myDevice_ = id;
+    host_ = host;
+    if (!leg_)
+        leg_ = new CallLeg(this);
+}
+
+QString Calls::elsewhere() const
+{
+    if (state_.isEmpty() || here_ || state_ == QLatin1String("ringing"))
+        return QString();
+    if (device_.isEmpty())
+        return tr("on the computer");
+    return deviceName_.isEmpty() ? tr("on a phone") : tr("on %1").arg(deviceName_);
+}
+
+// A phone: the call it has needs a leg, set up once (again if the call changed); any other call, or none, needs none.
+void Calls::followLeg()
+{
+    if (!leg_)
+        return;
+    const bool want = here_ && (state_ == QLatin1String("calling") || state_ == QLatin1String("connecting") || state_ == QLatin1String("active"));
+    if (!want) {
+        if (!leg_->callId().isEmpty())
+            leg_->close();
+        return;
+    }
+    if (leg_->callId() == id_)
+        return;
+    const QString id = id_;
+    leg_->open(id, [this, id](const QString &sdp) {
+        if (id != id_)
+            return;
+        if (sdp.isEmpty()) {
+            setError(CallLeg::built() ? tr("Couldn't set up the sound for this call.") : tr("This phone was built without call sound."));
+            return;
+        }
+        api_->post(QStringLiteral("/api/v1/calls/") + id + QStringLiteral("/media"), { { "sdp", sdp } },
+                   [this, id](int status, const QJsonDocument &json) {
+                       if (id != id_ || leg_->callId() != id)
+                           return;
+                       const QJsonObject o = json.object();
+                       if (status != 200 || !leg_->answer(o.value("sdp").toString(), host_, o.value("udp").toInt()))
+                           setError(tr("Couldn't set up the sound for this call."));
+                   });
+    });
 }
 
 void Calls::setError(const QString &e)

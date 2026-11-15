@@ -4,7 +4,7 @@ description: |
   A call with a friend (docs/calls.md). The Puddles carry it; the owner's device records and plays. GET /api/v1/calls lists the
   call going on, if any, then the last few that ended, newest first.
 type: object
-required: [id, user, direction, state, reason, media, created, answered, ended]
+required: [id, user, direction, state, reason, media, device, created, answered, ended]
 properties:
   id: { type: string, pattern: "^[a-z2-7]{26}$" }
   user: { $ref: "../wire/ids.yaml#/$defs/UserId", description: The friend }
@@ -17,7 +17,18 @@ properties:
     type: [string, "null"]
     enum: [hung_up, declined, cancelled, no_answer, missed, busy, failed, unreachable, no_calls, null]
     description: How it ended; null until it has
-  media: { type: boolean, description: Media can flow (the audio track is open) }
+  media: { type: boolean, description: "Media can flow: the audio track to the friend is open, and the phone's leg too if a phone has the call" }
+  device:
+    oneOf:
+      - type: "null"
+      - type: object
+        required: [id, name]
+        properties:
+          id: { type: string, description: The phone's device id }
+          name: { type: string, description: What the owner called it }
+    description: |
+      Which of the owner's devices has the call: null for the one in the Puddle's own process (the window), and for a call
+      ringing here that nobody has answered yet; otherwise the phone that started or answered it. Always null once ended.
   created: { $ref: "../wire/ids.yaml#/$defs/Timestamp" }
   answered: { oneOf: [{ $ref: "../wire/ids.yaml#/$defs/Timestamp" }, { type: "null" }], description: When it connected }
   ended: { oneOf: [{ $ref: "../wire/ids.yaml#/$defs/Timestamp" }, { type: "null" }] }
@@ -25,3 +36,4 @@ x-methods:
   accept: POST /api/v1/calls/{call}/accept
   decline: POST /api/v1/calls/{call}/decline
   end: POST /api/v1/calls/{call}/end
+  media: POST /api/v1/calls/{call}/media
