@@ -1,5 +1,6 @@
 // A call's sound without any devices (src/gui/app/callaudio.h): the jitter buffer's order, gaps, late frames, wrapping
-// timestamps and catching up; and Opus there and back, through the speaker's side, with a frame lost on the way.
+// timestamps and catching up; Opus there and back, through the speaker's side, with a frame lost on the way; and the echo
+// canceller taking a room's echo of the speaker out of the microphone, and leaving the voice at this end in.
 #include "callaudio.h"
 
 #include <QCoreApplication>
@@ -7,6 +8,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <vector>
 
 static int failures;
 #define CHECK(cond) do { if (!(cond)) { fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); failures++; } } while (0)
@@ -39,6 +41,32 @@ static double loudness(const char *pcm, qint64 bytes)
     for (qint64 i = 0; i < bytes / 2; i++)
         sum += double(s[i]) * s[i];
     return bytes ? std::sqrt(sum / double(bytes / 2)) : 0;
+}
+
+// Something like a voice: harmonics of a pitch that wanders, in syllables of about 200 ms with pauses between
+static std::vector<int16_t> voice(int samples, double pitch, double syllable, double level)
+{
+    std::vector<int16_t> v(static_cast<size_t>(samples));
+    double phase = 0;
+    for (int i = 0; i < samples; i++) {
+        const double t = i / 48000.0;
+        const double f0 = pitch * (1 + 0.15 * std::sin(2 * M_PI * 0.7 * t));
+        phase += 2 * M_PI * f0 / 48000.0;
+        double x = 0;
+        for (int h = 1; h <= 12; h++)
+            x += std::sin(h * phase) / h;
+        const double env = std::max(0.0, std::sin(2 * M_PI * syllable * t)); // half the time talking
+        v[size_t(i)] = int16_t(qBound(-32767.0, level * env * x, 32767.0));
+    }
+    return v;
+}
+
+static double energy(const std::vector<int16_t> &v, int from, int to)
+{
+    double e = 1;
+    for (int i = from; i < to; i++)
+        e += double(v[size_t(i)]) * v[size_t(i)];
+    return e;
 }
 
 int main(int argc, char **argv)
@@ -94,6 +122,70 @@ int main(int argc, char **argv)
         while (popTag(b, &k) == -1 && k == JitterBuffer::Lost)
             lost++;
         CHECK(k == JitterBuffer::Frame && lost == 0);
+    }
+
+    /* ---- the echo: the friend's voice from the speaker, back in the microphone 30 ms later through the room; then this end's
+       own voice, alone and over the friend's. With a speaker that takes its sound in big gulps (PipeWire) and one that takes
+       a little at a time and keeps 80 ms queued; the microphone's 20 ms come 5 ms late now and then ---- */
+    if (EchoCanceller::built()) {
+        struct Speaker { const char *name; int gulp, low; };
+        for (Speaker sp : {Speaker{"gulps of 170 ms", 8192, 1024}, Speaker{"80 ms queued", 480, 3840}}) {
+            const int C = EchoCanceller::kChunk, N = 14 * 48000;
+            const std::vector<int16_t> far = voice(N + 48000, 140, 2.3, 6000);
+            std::vector<int16_t> near = voice(N, 210, 1.7, 5000);
+            for (int i = 0; i < 9 * 48000; i++) /* this end says nothing for the first 9 s, then talks */
+                near[size_t(i)] = 0;
+            std::vector<int16_t> mic(static_cast<size_t>(N)), out(mic);
+            for (int i = 0; i < N; i++) {
+                auto at = [&](int k) { return k >= 0 ? double(far[size_t(k)]) : 0.0; };
+                const double room = 0.5 * at(i - 1440) + 0.25 * at(i - 1500) - 0.1 * at(i - 1700); /* 30 ms, two reflections */
+                mic[size_t(i)] = int16_t(qBound(-32767.0, room + near[size_t(i)], 32767.0));
+            }
+            EchoCanceller ec;
+            int handed = 0;
+            uint32_t rnd = 1;
+            for (int i = 0; i < N; i += 2 * C) { /* i: where the speaker is playing, and the microphone recording */
+                while (handed - i < sp.low + 2 * C) { /* running low: takes another gulp */
+                    ec.played(far.data() + handed, sp.gulp);
+                    handed += sp.gulp;
+                }
+                rnd = rnd * 1103515245u + 12345u;
+                if ((rnd >> 16) % 4 == 0) /* late: the speaker moved on by 5 ms before this was processed */
+                    while (handed - i < sp.low + 2 * C + 240) {
+                        ec.played(far.data() + handed, sp.gulp);
+                        handed += sp.gulp;
+                    }
+                std::copy(mic.begin() + i, mic.begin() + i + 2 * C, out.begin() + i);
+                ec.process(out.data() + i, 2 * C);
+            }
+            /* only the friend talking (from 4 s, once it has settled, to 9 s): most of the echo gone */
+            const double erle = 10 * std::log10(energy(mic, 4 * 48000, 9 * 48000) / energy(out, 4 * 48000, 9 * 48000));
+            /* this end talking over the friend (from 10 s): its own voice still there. By loudness, as the canceller's filters
+               shift the waveform a little: what is left of the echo is far below this (see above) */
+            const double nearKept = std::sqrt(energy(out, 10 * 48000, N) / energy(near, 10 * 48000, N)); /* 1 = all of it */
+            printf("callaudio_test: echo canceller %s, speaker %s: echo down %.1f dB, near voice kept %.2f, moved %d\n",
+                   EchoCanceller::kind(), sp.name, erle, nearKept, ec.resyncs());
+            CHECK(erle > 15);
+            CHECK(nearKept > 0.5 && nearKept < 1.5);
+            CHECK(ec.resyncs() <= 1); /* settles within the first gulp, and stays */
+        }
+        /* the reference never passes what the speaker was handed; and catches up when it stays well behind */
+        EchoCanceller drift;
+        int16_t chunk[EchoCanceller::kChunk] = {}, sound[EchoCanceller::kChunk] = {};
+        for (int i = 0; i < 10; i++) {
+            drift.played(sound, EchoCanceller::kChunk);
+            drift.process(chunk, EchoCanceller::kChunk);
+        }
+        CHECK(drift.resyncs() == 0);
+        for (int i = 0; i < 20; i++) /* the speaker took 200 ms more and keeps it */
+            drift.played(sound, EchoCanceller::kChunk);
+        for (int i = 0; i < 700; i++) {
+            drift.played(sound, EchoCanceller::kChunk);
+            drift.process(chunk, EchoCanceller::kChunk);
+        }
+        CHECK(drift.resyncs() == 1);
+    } else {
+        printf("callaudio_test: built without an echo canceller: not tested\n");
     }
 
     if (!CallAudio::built()) {

@@ -85,6 +85,27 @@ and gets silence when there is nothing (a sink that reads nothing stops). Muting
 window still builds and calls connect, in silence. Tests set `PUDDLE_TEST_NO_AUDIO` so that no test opens the
 computer's own microphone or speaker.
 
+### Echo
+
+On speakers, the friend's voice comes back into the microphone, and without help the friend hears themself a moment
+later. So the microphone's sound passes through an echo canceller (`EchoCanceller` in `callaudio.*`) before it is
+encoded: WebRTC's own (the webrtc-audio-processing library, as packaged by Linux distributions for PipeWire and
+PulseAudio), with its noise suppression and high-pass filter; or, where that library isn't packaged (Homebrew), speexdsp's
+echo canceller and preprocessor. CMake picks whichever it finds (`-DPUDDLE_ECHO=auto|webrtc|speex|off`); with neither,
+calls still work, without cancelling. It runs only when there is both a speaker and a microphone, and keeps running while
+muted so it stays in step with the room.
+
+An echo canceller needs, beside each 10 ms from the microphone, what the speaker was playing then or a little before. The
+speaker's side hands it every sample it gives the speaker. A speaker takes its sound in gulps just before it runs out (170
+ms at a time on PipeWire, a few ms elsewhere), so what it was handed rises in stairs whose foot is where it is playing,
+and the reference runs along that foot: 10 ms a chunk, never past what was handed, and moved up if it has stayed more than
+20 ms below for 3 s (the microphone's and speaker's clocks drift apart; 0.15% on the machine this was tried on). Qt's own
+measure of the speaker's queue isn't used: it moves in the same steps and says nothing in between.
+
+`callaudio_test` plays a voice-like sound, puts its echo in the microphone 30 ms later with two reflections, through a
+speaker that gulps 170 ms and one that keeps 80 ms queued: WebRTC's canceller takes about 46 dB off the echo, speexdsp's 17
+to 22, and both keep this end's own voice when it talks over the friend.
+
 ## The owner's side
 
 | route | |

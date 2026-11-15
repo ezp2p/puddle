@@ -6,10 +6,21 @@
 #include <QAudioSource>
 #include <QMediaDevices>
 
+#include <cstdlib>
 #include <cstring>
 
 #ifdef PUDDLE_HAVE_OPUS
 #include <opus.h>
+#endif
+#if defined(PUDDLE_HAVE_WEBRTC_APM)
+#if __has_include(<modules/audio_processing/include/audio_processing.h>)
+#include <modules/audio_processing/include/audio_processing.h>
+#else
+#include <api/audio/audio_processing.h>
+#endif
+#elif defined(PUDDLE_HAVE_SPEEXDSP)
+#include <speex/speex_echo.h>
+#include <speex/speex_preprocess.h>
 #endif
 
 static constexpr int kRate = 48000, kFrameSamples = 960; // 20 ms
@@ -88,6 +99,131 @@ int JitterBuffer::depth() const
     return int(frames_.size());
 }
 
+// ---- the echo ----
+
+#if defined(PUDDLE_HAVE_WEBRTC_APM)
+struct EchoCanceller::Impl {
+    rtc::scoped_refptr<webrtc::AudioProcessing> apm;
+    Impl()
+    {
+        apm = webrtc::AudioProcessingBuilder().Create();
+        webrtc::AudioProcessing::Config c;
+        c.echo_canceller.enabled = true;
+        c.high_pass_filter.enabled = true;
+        c.noise_suppression.enabled = true;
+        c.noise_suppression.level = webrtc::AudioProcessing::Config::NoiseSuppression::kModerate;
+        apm->ApplyConfig(c);
+    }
+    void run(int16_t *pcm, int16_t *ref)
+    {
+        const webrtc::StreamConfig sc(kRate, 1);
+        apm->ProcessReverseStream(ref, sc, sc, ref);
+        apm->set_stream_delay_ms(0); // the reference is lined up already (see the header)
+        apm->ProcessStream(pcm, sc, sc, pcm);
+    }
+};
+const char *EchoCanceller::kind() { return "webrtc"; }
+#elif defined(PUDDLE_HAVE_SPEEXDSP)
+struct EchoCanceller::Impl {
+    SpeexEchoState *echo;
+    SpeexPreprocessState *pre;
+    Impl()
+    {
+        echo = speex_echo_state_init(kChunk, kRate / 5); // an echo up to 200 ms long
+        int rate = kRate, on = 1;
+        speex_echo_ctl(echo, SPEEX_ECHO_SET_SAMPLING_RATE, &rate);
+        pre = speex_preprocess_state_init(kChunk, kRate);
+        speex_preprocess_ctl(pre, SPEEX_PREPROCESS_SET_ECHO_STATE, echo); // and what the filter leaves of it, suppressed
+        speex_preprocess_ctl(pre, SPEEX_PREPROCESS_SET_DENOISE, &on);
+    }
+    ~Impl()
+    {
+        speex_preprocess_state_destroy(pre);
+        speex_echo_state_destroy(echo);
+    }
+    void run(int16_t *pcm, int16_t *ref)
+    {
+        int16_t out[kChunk];
+        speex_echo_cancellation(echo, pcm, ref, out);
+        speex_preprocess_run(pre, out);
+        memcpy(pcm, out, sizeof out);
+    }
+};
+const char *EchoCanceller::kind() { return "speex"; }
+#else
+struct EchoCanceller::Impl {
+    void run(int16_t *, int16_t *) {}
+};
+const char *EchoCanceller::kind() { return "none"; }
+#endif
+
+bool EchoCanceller::built()
+{
+#if defined(PUDDLE_HAVE_WEBRTC_APM) || defined(PUDDLE_HAVE_SPEEXDSP)
+    return true;
+#else
+    return false;
+#endif
+}
+
+EchoCanceller::EchoCanceller() : d_(std::make_unique<Impl>()), ring_(kRate, 0) {}
+EchoCanceller::~EchoCanceller() = default;
+
+void EchoCanceller::played(const int16_t *mono, int samples)
+{
+    std::lock_guard<std::mutex> g(mu_);
+    const int64_t n = int64_t(ring_.size());
+    for (int i = 0; i < samples; i++)
+        ring_[size_t((count_ + i) % n)] = mono[i];
+    count_ += samples;
+}
+
+int64_t EchoCanceller::playedCount() const
+{
+    std::lock_guard<std::mutex> g(mu_);
+    return count_;
+}
+
+// The kChunk samples played before `end` (silence for any not played yet, or long gone)
+void EchoCanceller::reference(int16_t *out, int64_t end)
+{
+    std::lock_guard<std::mutex> g(mu_);
+    const int64_t n = int64_t(ring_.size());
+    for (int i = 0; i < kChunk; i++) {
+        const int64_t at = end - kChunk + i;
+        out[i] = at >= 0 && at < count_ && at >= count_ - n ? ring_[size_t(at % n)] : 0;
+    }
+}
+
+void EchoCanceller::process(int16_t *pcm, int samples)
+{
+    const int64_t handed = playedCount();
+    for (int c = 0; c < samples / kChunk; c++) {
+        if (next_ < 0) {
+            next_ = handed;
+        } else if (next_ > handed) { // the speaker can't be past what it was given: back to the floor
+            if (next_ - handed > 2 * kChunk)
+                resyncs_++;
+            next_ = handed;
+        } else {
+            // well under the floor the whole window (the speaker's clock a little faster than the microphone's): up to it
+            low_ = std::min(low_, handed - next_);
+            if (--left_ <= 0) {
+                if (low_ > 2 * kChunk) {
+                    next_ += low_;
+                    resyncs_++;
+                }
+                low_ = INT64_MAX;
+                left_ = kWindow;
+            }
+        }
+        int16_t ref[kChunk];
+        reference(ref, next_);
+        next_ += kChunk;
+        d_->run(pcm + c * kChunk, ref);
+    }
+}
+
 // ---- the speaker's side ----
 
 Playout::Playout(JitterBuffer *buffer, int channels, QObject *parent) : QIODevice(parent), buffer_(buffer), channels_(channels)
@@ -139,6 +275,14 @@ qint64 Playout::readData(char *data, qint64 maxlen)
         decodeNext();
     memcpy(data, pcm_.constData(), size_t(maxlen));
     pcm_.remove(0, maxlen);
+    if (echo_) { // what the speaker gets, for the echo canceller: one channel is enough (they are all the same)
+        const auto *s = reinterpret_cast<const int16_t *>(data);
+        const int n = int(maxlen / frame);
+        std::vector<int16_t> mono(static_cast<size_t>(n));
+        for (int i = 0; i < n; i++)
+            mono[size_t(i)] = s[i * channels_];
+        echo_->played(mono.data(), n);
+    }
     return maxlen;
 }
 
@@ -198,8 +342,7 @@ void CallAudio::start(Send send)
         sink_ = new QAudioSink(out, f, this);
         sink_->setBufferSize(f.bytesForDuration(80000));
         playout_ = new Playout(&buffer_, f.channelCount(), this);
-        playout_->open(QIODevice::ReadOnly);
-        sink_->start(playout_);
+        playout_->open(QIODevice::ReadOnly); // started below, once the echo canceller is known
     }
     // the microphone: 48 kHz mono Int16 if it gives that, else what it prefers, turned into that here
     const QAudioDevice in = QMediaDevices::defaultAudioInput();
@@ -216,6 +359,13 @@ void CallAudio::start(Send send)
             if (mic_)
                 connect(mic_, &QIODevice::readyRead, this, &CallAudio::readMicrophone);
         }
+    }
+    // the echo canceller, when there is both a speaker to echo and a microphone to hear it
+    if (EchoCanceller::built() && playout_ && mic_)
+        echo_ = new EchoCanceller;
+    if (sink_) {
+        playout_->setEcho(echo_);
+        sink_->start(playout_);
     }
 }
 
@@ -234,6 +384,8 @@ void CallAudio::stop()
     }
     delete playout_;
     playout_ = nullptr;
+    delete echo_; // after the speaker, which tells it what it played
+    echo_ = nullptr;
 #ifdef PUDDLE_HAVE_OPUS
     if (encoder_)
         opus_encoder_destroy(static_cast<OpusEncoder *>(encoder_));
@@ -272,8 +424,10 @@ void CallAudio::readMicrophone()
     }
     resampleAt_ -= double(frames);
     while (captured_.size() >= kFrameSamples * 2) {
-        const QByteArray pcm = captured_.left(kFrameSamples * 2);
+        QByteArray pcm = captured_.left(kFrameSamples * 2);
         captured_.remove(0, kFrameSamples * 2);
+        if (echo_) // even when muted, so it stays in step with the room
+            echo_->process(reinterpret_cast<int16_t *>(pcm.data()), kFrameSamples);
         if (muted_ || !send_)
             continue;
 #ifdef PUDDLE_HAVE_OPUS

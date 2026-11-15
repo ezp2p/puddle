@@ -8,11 +8,13 @@
 #include <QIODevice>
 #include <QObject>
 
+#include <climits>
 #include <cstdint>
 #include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <vector>
 
 class QAudioSink;
 class QAudioSource;
@@ -45,6 +47,51 @@ private:
     int64_t lastUnwrapped_ = 0;
 };
 
+// Takes the speaker's sound back out of the microphone's (docs/calls.md, "Echo"), so a friend on the far end doesn't hear
+// themself from this computer's speakers. With webrtc-audio-processing (PUDDLE_HAVE_WEBRTC_APM), WebRTC's own echo canceller
+// with its noise suppression and high-pass filter; else with speexdsp (PUDDLE_HAVE_SPEEXDSP) its echo canceller and
+// preprocessor; else nothing (built() is false and process() leaves the sound as it is).
+//
+// The speaker's side tells it each sample it hands the speaker (played(), any thread); the microphone's side passes each
+// 10 ms of mono 48 kHz Int16 through process(). The canceller needs, beside each 10 ms from the microphone, what the speaker
+// was playing then or a little before: a reference a little ahead of the echo, never behind it. Nothing says exactly where a
+// speaker is (Qt's own measure of its queue moves in steps), but it can't be past what it was handed, and a speaker takes
+// its sound in gulps (170 ms at a time on PipeWire, a few ms on others) just before it runs out, so the handed count rises
+// in stairs whose foot is where the speaker is. The reference advances 10 ms a chunk, steadily; when it would pass what
+// was handed it comes back to it (so it runs along the stairs' foot), and when it has stayed more than 20 ms below them for
+// 3 s (the two clocks drifting apart) it moves up to them.
+class EchoCanceller {
+public:
+    static constexpr int kChunk = 480; // 10 ms at 48 kHz
+
+    EchoCanceller();
+    ~EchoCanceller();
+    EchoCanceller(const EchoCanceller &) = delete;
+    EchoCanceller &operator=(const EchoCanceller &) = delete;
+
+    static bool built();
+    static const char *kind(); // "webrtc", "speex" or "none"
+
+    void played(const int16_t *mono, int samples);
+    int64_t playedCount() const;
+    // `pcm` holds a whole number of 10 ms chunks, just recorded; changed in place
+    void process(int16_t *pcm, int samples);
+    int resyncs() const { return resyncs_; } // times the reference was moved more than 20 ms (for tests)
+
+private:
+    void reference(int16_t *out, int64_t end);
+    struct Impl;
+    std::unique_ptr<Impl> d_;
+    mutable std::mutex mu_;
+    std::vector<int16_t> ring_; // the last second the speaker was handed
+    int64_t count_ = 0;
+    static constexpr int kWindow = 300; // chunks: 3 s
+    int64_t next_ = -1; // where the next chunk's reference ends
+    int64_t low_ = INT64_MAX; // the lowest (handed - next_) this window
+    int left_ = kWindow;
+    int resyncs_ = 0;
+};
+
 // What the speaker reads: decoded audio from the jitter buffer, silence when there is none (a sink that reads nothing stops).
 class Playout : public QIODevice {
 public:
@@ -54,9 +101,12 @@ public:
     qint64 writeData(const char *, qint64) override { return -1; }
     qint64 bytesAvailable() const override { return 48000 * channels_ * 2 + QIODevice::bytesAvailable(); }
     bool isSequential() const override { return true; }
+    // Tell `echo` each sample handed to the speaker (null: none). Set before the speaker starts reading.
+    void setEcho(EchoCanceller *echo) { echo_ = echo; }
 
 private:
     void decodeNext();
+    EchoCanceller *echo_ = nullptr;
     JitterBuffer *buffer_;
     int channels_;
     QByteArray pcm_; // decoded, Int16, interleaved for `channels_`
@@ -82,6 +132,7 @@ public:
     void setMuted(bool muted) { muted_ = muted; }
     bool hasInput() const { return source_ != nullptr; }
     bool hasOutput() const { return sink_ != nullptr; }
+    bool cancelsEcho() const { return echo_ != nullptr; } // both devices open, and built with an echo canceller
 
     // For tests: encode 20 ms of mono 48 kHz Int16 (960 samples) as the microphone would, and decode a frame.
     static QByteArray encodeForTest(const QByteArray &pcm);
@@ -95,6 +146,7 @@ private:
     QAudioSink *sink_ = nullptr;
     QIODevice *mic_ = nullptr;
     Playout *playout_ = nullptr;
+    EchoCanceller *echo_ = nullptr;
     QByteArray captured_; // mono Int16 at 48 kHz, waiting to make a frame
     int micChannels_ = 1, micRate_ = 48000;
     bool micFloat_ = false;
