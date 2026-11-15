@@ -9,6 +9,7 @@
 
 #include "apiclient.h"
 #include "jsonlistmodel.h"
+#include "callmodel.h"
 #include "ponds.h"
 
 // What the window shows, kept fresh from the owner API of our own Puddle: the people (friends and requests), the
@@ -47,6 +48,7 @@ class Chats : public QObject {
     Q_PROPERTY(qint64 pairingExpires READ pairingExpires NOTIFY pairingChanged)  // UTC ms
     Q_PROPERTY(QString problem READ problem NOTIFY connectedChanged)             // a phone: why the Puddle's answers are not believed, "" if they are
     Q_PROPERTY(QObject *ponds READ ponds CONSTANT)                  // the Ponds we are in, and the one that is open (ponds.h)
+    Q_PROPERTY(QObject *calls READ calls CONSTANT)                  // the call going on (callmodel.h)
 public:
     explicit Chats(QObject *parent = nullptr);
 
@@ -100,6 +102,8 @@ public:
     ApiClient *api() { return &api_; }
     QObject *ponds() { return &ponds_; }
     Ponds *pondList() { return &ponds_; }
+    QObject *calls() { return &calls_; }
+    Calls *callModel() { return &calls_; }
 
     // Start talking to the Puddle at `base`, reading its token and certificate from the files.
     bool attach(const QUrl &base, const QString &tokenFile, const QString &certFile);
@@ -235,6 +239,7 @@ private:
 
     ApiClient api_;
     Ponds ponds_{ &api_ };
+    Calls calls_{ &api_ };
     QTimer timer_;
     JsonListModel people_, conversations_, messages_, blocked_, profiles_, invites_, members_, sidebar_, devices_;
     int pendingDevices_ = 0;
@@ -264,6 +269,8 @@ private:
     // id, so scrolling back never leaves a gap however many messages arrive meanwhile. The server cuts a page short when messages are long.
     QHash<QString, QJsonObject> msgs_;      // every message read so far
     QHash<QString, QJsonObject> notices_;   // and what happened to the group, by event id
+    QHash<QString, QJsonObject> callNotes_; // and the calls with this friend (a DM), by call id
+    void refreshCallNotes();
     qint64 olderNext_ = -1;                 // the offset of the next page back; -1 when there is none
     bool loadedOlder_ = false, loadingOlder_ = false;
     void renderMessages();

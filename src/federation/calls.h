@@ -24,7 +24,8 @@ extern "C" {
 #define PUDDLE_CALL_RING_MS 45000      /* the caller gives up after this */
 #define PUDDLE_CALL_RING_IN_MS 60000   /* the callee, if the caller's word never comes */
 #define PUDDLE_CALL_CONNECT_MS 20000   /* from accepting to a connection */
-#define PUDDLE_CALL_KEEP_ENDED 10      /* ended calls remembered for the owner */
+#define PUDDLE_CALL_KEEP_ENDED 10      /* ended calls whose connections are kept a while */
+#define PUDDLE_CALL_HISTORY 500        /* ended calls the owner's history keeps (state/calls.jsonl) */
 #define PUDDLE_CALL_FRAME_MAX 1500     /* the largest Opus frame passed on */
 
 /* Was this Puddle built with calls? */
@@ -44,8 +45,9 @@ int puddle_call_start(puddle_ctx *ctx, const char *peer, char id[PUDDLE_CALL_ID_
 int puddle_call_accept(puddle_ctx *ctx, const char *id, const char **code);
 int puddle_call_decline(puddle_ctx *ctx, const char *id, const char **code);
 int puddle_call_end(puddle_ctx *ctx, const char *id, const char **code);
-/* `id` NULL: {"items": [the current call, then the ended ones, newest first]}. Otherwise that call: 0, or 1 if there is none. */
-int puddle_calls_write(puddle_ctx *ctx, const char *id, puddle_jw *w);
+/* `id` NULL: {"version": n, "items": [the current call, then up to `limit` ended ones, newest first]}, only those with `user`
+ * if it is given. `version` changes whenever a call does. Otherwise that call: 0, or 1 if there is none. */
+int puddle_calls_write(puddle_ctx *ctx, const char *id, const char *user, int limit, puddle_jw *w);
 
 /* ---- media: the owner's device, in this process (the window) ---- */
 

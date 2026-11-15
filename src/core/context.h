@@ -77,7 +77,7 @@ typedef struct {
     int (*call_accept)(puddle_ctx *ctx, const char *id, const char **code);
     int (*call_decline)(puddle_ctx *ctx, const char *id, const char **code);
     int (*call_end)(puddle_ctx *ctx, const char *id, const char **code);
-    int (*calls_write)(puddle_ctx *ctx, const char *id, puddle_jw *w);
+    int (*calls_write)(puddle_ctx *ctx, const char *id, const char *user, int limit, puddle_jw *w);
 } puddle_courier;
 
 /* What handlers can reach. */

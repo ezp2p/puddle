@@ -1,5 +1,7 @@
 #include "backend.h"
 
+#include "federation/calls.h"
+
 #include <QStandardPaths>
 
 #include <QClipboard>
@@ -65,6 +67,8 @@ Backend::Backend(QObject *parent) : QObject(parent)
         return;
     }
     haveConfig_ = true;
+    connect(chats_.callModel(), &Calls::changed, this, &Backend::followCall);
+    connect(chats_.callModel(), &Calls::mutedChanged, this, [this] { audio_.setMuted(chats_.callModel()->muted()); });
 
     // No identity, or one whose phrase was shown but never confirmed: setup comes first, and the
     // server stays off until the owner has written the phrase down.
@@ -72,6 +76,33 @@ Backend::Backend(QObject *parent) : QObject(parent)
     needsSetup_ = setupRedo_ || !puddle_identity_exists(cfg_.data_dir);
     if (!needsSetup_)
         startServer();
+}
+
+// Frames from the friend, on one of the Puddle's network threads: into the jitter buffer, which is safe for that.
+static void onCallFrame(void *user, const char *, const unsigned char *frame, size_t len, uint32_t rtpTs)
+{
+    static_cast<CallAudio *>(user)->received(rtpTs, QByteArray(reinterpret_cast<const char *>(frame), qsizetype(len)));
+}
+
+void Backend::followCall()
+{
+    Calls *calls = chats_.callModel();
+    puddle_calls *engine = puddle_server_calls(srv_);
+    const bool live = calls->state() == QLatin1String("active") && engine;
+    if (live && !audio_.running()) {
+        const QByteArray id = calls->callId().toUtf8();
+        puddle_calls_on_audio(engine, onCallFrame, &audio_);
+        audio_.setMuted(calls->muted());
+        audio_.start([engine, id](const QByteArray &frame) {
+            puddle_call_send_audio(engine, id.constData(), reinterpret_cast<const unsigned char *>(frame.constData()), size_t(frame.size()));
+        });
+        append(QStringLiteral("info: call: sound on (microphone %1, speaker %2%3)")
+                .arg(audio_.hasInput() ? QStringLiteral("yes") : QStringLiteral("none"), audio_.hasOutput() ? QStringLiteral("yes") : QStringLiteral("none"),
+                     CallAudio::built() ? QString() : QStringLiteral("; built without Opus, so silent")));
+    } else if (!live && audio_.running()) {
+        puddle_calls_on_audio(engine, nullptr, nullptr);
+        audio_.stop();
+    }
 }
 
 bool Backend::canDrawQr() const
@@ -140,6 +171,8 @@ void Backend::loadTheme()
 Backend::~Backend()
 {
     if (srv_) {
+        puddle_calls_on_audio(puddle_server_calls(srv_), nullptr, nullptr); // no more frames for a speaker that is going
+        audio_.stop();
         chats_.setTakeFile({}, nullptr);
         takePool_.waitForDone();
         puddle_server_stop(srv_);

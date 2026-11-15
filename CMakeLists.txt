@@ -219,7 +219,22 @@ if(PUDDLE_BUILD_GUI)
       src/gui/app/phone.cpp
       src/gui/app/phone.h
       src/gui/app/qrimage.cpp
-      src/gui/app/qrimage.h)
+      src/gui/app/qrimage.h
+      src/gui/app/callmodel.cpp
+      src/gui/app/callmodel.h
+      src/gui/app/callaudio.cpp
+      src/gui/app/callaudio.h)
+    # a call's sound (callaudio.h): Opus. Without libopus a call still connects, in silence.
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+      pkg_check_modules(OPUS IMPORTED_TARGET opus)
+    endif()
+    if(OPUS_FOUND)
+      target_compile_definitions(puddle PRIVATE PUDDLE_HAVE_OPUS)
+      target_link_libraries(puddle PRIVATE PkgConfig::OPUS)
+    else()
+      message(WARNING "libopus not found: calls in the window will be silent")
+    endif()
     # the QR code of a pairing link; without libqrencode the link is shown as text only
     find_library(QRENCODE_LIBRARY qrencode)
     find_path(QRENCODE_INCLUDE qrencode.h)
@@ -240,6 +255,7 @@ if(PUDDLE_BUILD_GUI)
         src/gui/qml/Main.qml
         src/gui/qml/setup/Setup.qml
         src/gui/qml/setup/Pair.qml
+        src/gui/qml/shell/CallBar.qml
         src/gui/qml/shell/Shell.qml
         src/gui/qml/shell/Sidebar.qml
         src/gui/qml/shell/SidebarRow.qml
@@ -309,10 +325,11 @@ if(PUDDLE_BUILD_GUI)
 
     # The first-run state machine, against the real core, with no window (needs the offscreen platform).
     add_executable(backend_test tests/backend_test.cpp src/gui/app/backend.cpp src/gui/app/backend.h src/gui/app/chats.cpp src/gui/app/chats.h
-      src/gui/app/apiclient.cpp src/gui/app/apiclient.h src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h
+      src/gui/app/apiclient.cpp src/gui/app/apiclient.h src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h src/gui/app/callmodel.cpp src/gui/app/callmodel.h
       src/gui/app/phone.cpp src/gui/app/phone.h)
     target_include_directories(backend_test PRIVATE src/gui/app)
-    target_link_libraries(backend_test PRIVATE puddle_service Qt6::Gui Qt6::Network)
+    target_sources(backend_test PRIVATE src/gui/app/callaudio.cpp src/gui/app/callaudio.h)
+    target_link_libraries(backend_test PRIVATE puddle_service Qt6::Gui Qt6::Network Qt6::Multimedia)
     if(APPLE)
       target_sources(backend_test PRIVATE src/gui/app/dock_mac.mm)
       target_link_libraries(backend_test PRIVATE "-framework AppKit" "-framework UserNotifications")
@@ -321,14 +338,14 @@ if(PUDDLE_BUILD_GUI)
 
     # The app's view of a Puddle (owner API over pinned TLS), against two real Puddles talking to each other.
     add_executable(chats_test tests/chats_test.cpp src/gui/app/chats.cpp src/gui/app/chats.h src/gui/app/apiclient.cpp src/gui/app/apiclient.h
-      src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h)
+      src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h src/gui/app/callmodel.cpp src/gui/app/callmodel.h)
     set_target_properties(chats_test PROPERTIES AUTOMOC ON)
     target_link_libraries(chats_test PRIVATE puddle_service Qt6::Core Qt6::Gui Qt6::Network Qt6::Test)
     add_test(NAME chats COMMAND chats_test)
 
     # The app as a phone: pairing with a real Puddle, then using it as a thin client (docs/identity.md, "Devices").
     add_executable(phone_test tests/phone_test.cpp src/gui/app/chats.cpp src/gui/app/chats.h src/gui/app/apiclient.cpp src/gui/app/apiclient.h
-      src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h src/gui/app/phone.cpp src/gui/app/phone.h)
+      src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h src/gui/app/callmodel.cpp src/gui/app/callmodel.h src/gui/app/phone.cpp src/gui/app/phone.h)
     set_target_properties(phone_test PROPERTIES AUTOMOC ON)
     target_link_libraries(phone_test PRIVATE puddle_service Qt6::Core Qt6::Gui Qt6::Network Qt6::Test)
     add_test(NAME phone COMMAND phone_test)
@@ -336,12 +353,30 @@ if(PUDDLE_BUILD_GUI)
 
     # The window, driven with real mouse and key events against two real Puddles.
     add_executable(ui_test tests/ui_test.cpp src/gui/app/backend.cpp src/gui/app/backend.h src/gui/app/chats.cpp src/gui/app/chats.h
-      src/gui/app/apiclient.cpp src/gui/app/apiclient.h src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h src/gui/app/composer.cpp src/gui/app/composer.h
+      src/gui/app/apiclient.cpp src/gui/app/apiclient.h src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h src/gui/app/callmodel.cpp src/gui/app/callmodel.h src/gui/app/composer.cpp src/gui/app/composer.h
       src/gui/app/phone.cpp src/gui/app/phone.h)
     set_target_properties(ui_test PROPERTIES AUTOMOC ON)
     target_include_directories(ui_test PRIVATE src/gui/app)
     target_compile_definitions(ui_test PRIVATE PUDDLE_GUI_DIR="${CMAKE_SOURCE_DIR}/src/gui/qml")
     target_link_libraries(ui_test PRIVATE puddle_service Qt6::Quick Qt6::QuickControls2 Qt6::Network Qt6::Multimedia Qt6::Test)
+    target_sources(ui_test PRIVATE src/gui/app/callaudio.cpp src/gui/app/callaudio.h)
+    if(OPUS_FOUND)
+      foreach(t backend_test ui_test)
+        target_compile_definitions(${t} PRIVATE PUDDLE_HAVE_OPUS)
+        target_link_libraries(${t} PRIVATE PkgConfig::OPUS)
+      endforeach()
+    endif()
+
+    # A call's sound without devices: the jitter buffer, and Opus there and back (callaudio.h).
+    add_executable(callaudio_test tests/callaudio_test.cpp src/gui/app/callaudio.cpp src/gui/app/callaudio.h)
+    set_target_properties(callaudio_test PROPERTIES AUTOMOC ON)
+    target_include_directories(callaudio_test PRIVATE src/gui/app)
+    target_link_libraries(callaudio_test PRIVATE Qt6::Core Qt6::Multimedia)
+    if(OPUS_FOUND)
+      target_compile_definitions(callaudio_test PRIVATE PUDDLE_HAVE_OPUS)
+      target_link_libraries(callaudio_test PRIVATE PkgConfig::OPUS)
+    endif()
+    add_test(NAME callaudio COMMAND callaudio_test)
     if(APPLE)
       target_sources(ui_test PRIVATE src/gui/app/dock_mac.mm)
       target_link_libraries(ui_test PRIVATE "-framework AppKit" "-framework UserNotifications")

@@ -7,6 +7,7 @@
 #include <memory>
 #include <thread>
 
+#include "callaudio.h"
 #include "chats.h"
 #include "phone.h"
 
@@ -112,6 +113,7 @@ private:
     void startServer();
     void setError(const QString &message);
     void loadTheme();
+    void followCall(); // the call's sound starts when it connects, and stops when it ends
 
     QVariantMap theme_;
     QString themePath_;
@@ -129,4 +131,5 @@ private:
     puddle_server *srv_ = nullptr;
     std::thread worker_;
     QThreadPool takePool_;    // files handed to the Puddle (Chats::setTakeFile), one at a time
+    CallAudio audio_;         // a call's microphone and speaker; its frames go through the Puddle (federation/calls.h)
 };

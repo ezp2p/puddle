@@ -3,7 +3,9 @@
 
 #include "base/encoding.h"
 #include "base/log.h"
+#include "core/link.h"
 #include "core/streams.h"
+#include "platform/fsutil.h"
 #include "federation/sender.h"
 
 #include <stdio.h>
@@ -26,11 +28,12 @@ int puddle_call_start(puddle_ctx *, const char *, char *, const char **code) { r
 int puddle_call_accept(puddle_ctx *, const char *, const char **code) { return *code = "no_calls", -1; }
 int puddle_call_decline(puddle_ctx *, const char *, const char **code) { return *code = "no_calls", -1; }
 int puddle_call_end(puddle_ctx *, const char *, const char **code) { return *code = "no_calls", -1; }
-int puddle_calls_write(puddle_ctx *, const char *id, puddle_jw *w)
+int puddle_calls_write(puddle_ctx *, const char *id, const char *, int, puddle_jw *w)
 {
     if (id)
         return 1;
     puddle_jw_object(w);
+    puddle_jw_num(w, "version", 0);
     puddle_jw_key(w, "items");
     puddle_jw_array(w);
     puddle_jw_end_array(w);
@@ -89,6 +92,13 @@ struct Call {
 
 using CallPtr = std::shared_ptr<Call>;
 
+/* An ended call, as the owner's history keeps it (<data_dir>/state/calls.jsonl, one per line, oldest first). */
+struct Record {
+    std::string id, peer, reason;
+    bool outgoing = false;
+    int64_t created = 0, answered = 0, ended = 0;
+};
+
 } // namespace
 
 struct puddle_calls {
@@ -98,7 +108,9 @@ struct puddle_calls {
     std::string bind;
     std::mutex mu;
     CallPtr current;                 /* the call going on, if any */
-    std::deque<CallPtr> ended;       /* newest first */
+    std::deque<CallPtr> ended;       /* newest first: their connections, until the worker lets them go */
+    std::deque<Record> history;      /* every ended call kept, oldest first (PUDDLE_CALL_HISTORY) */
+    std::string history_path, state_dir;
     std::deque<std::function<void()>> tasks; /* for the worker: telling the friend a call ended */
     std::condition_variable wake;
     bool stopping = false;
@@ -201,6 +213,96 @@ static std::string error_of(const std::string &json)
     return e;
 }
 
+/* ---- the history ---- */
+
+static std::string record_line(const Record &r)
+{
+    char buf[512];
+    puddle_jw w;
+    puddle_jw_init(&w, buf, sizeof buf);
+    puddle_jw_object(&w);
+    puddle_jw_str(&w, "id", r.id.c_str());
+    puddle_jw_str(&w, "user", r.peer.c_str());
+    puddle_jw_str(&w, "direction", r.outgoing ? "outgoing" : "incoming");
+    puddle_jw_str(&w, "reason", r.reason.c_str());
+    puddle_jw_num(&w, "created", r.created);
+    puddle_jw_num(&w, "answered", r.answered);
+    puddle_jw_num(&w, "ended", r.ended);
+    puddle_jw_end_object(&w);
+    size_t n = puddle_jw_finish(&w);
+    return n ? std::string(buf, n) + "\n" : "";
+}
+
+static bool record_parse(const char *line, size_t len, Record &r)
+{
+    puddle_span v;
+    char s[64];
+    int64_t n;
+    auto str = [&](const char *key, std::string &out, size_t max) {
+        if (puddle_json_member(line, len, key, &v) != 0 || puddle_json_string(v, s, sizeof s) != 0 || strlen(s) > max)
+            return false;
+        out = s;
+        return true;
+    };
+    auto num = [&](const char *key, int64_t &out) {
+        return puddle_json_member(line, len, key, &v) == 0 && puddle_json_int64(v, &n) == 0 && (out = n, true);
+    };
+    std::string dir;
+    if (!puddle_json_valid_object(line, len) || !str("id", r.id, PUDDLE_CALL_ID_LEN) || !str("user", r.peer, PUDDLE_USER_ID_LEN) ||
+        !str("direction", dir, 8) || !str("reason", r.reason, 16) || !num("created", r.created) || !num("answered", r.answered) ||
+        !num("ended", r.ended) || !puddle_id_valid(r.peer.c_str()))
+        return false;
+    r.outgoing = dir == "outgoing";
+    return true;
+}
+
+/* Read what was kept; written again, shorter, when it has grown to twice what is kept. */
+static void load_history(puddle_calls *cs)
+{
+    FILE *f = fopen(cs->history_path.c_str(), "rb");
+    if (!f)
+        return;
+    char line[1024];
+    size_t lines = 0;
+    while (fgets(line, sizeof line, f)) {
+        size_t len = strcspn(line, "\r\n");
+        Record r;
+        lines++;
+        if (record_parse(line, len, r)) {
+            cs->history.push_back(std::move(r));
+            if (cs->history.size() > PUDDLE_CALL_HISTORY)
+                cs->history.pop_front();
+        }
+    }
+    fclose(f);
+    if (lines > 2 * PUDDLE_CALL_HISTORY) {
+        std::string all;
+        for (auto &r : cs->history)
+            all += record_line(r);
+        if (puddle_write_file_atomic(cs->state_dir.c_str(), cs->history_path.c_str(), all.data(), all.size()) != 0)
+            puddle_log(PUDDLE_LOG_WARN, "calls: cannot shorten %s", cs->history_path.c_str());
+    }
+}
+
+/* Called with the lock held. */
+static void remember(puddle_calls *cs, const Call &c)
+{
+    Record r;
+    r.id = c.id, r.peer = c.peer, r.reason = c.reason, r.outgoing = c.outgoing;
+    r.created = c.created, r.answered = c.answered, r.ended = c.ended;
+    cs->history.push_back(r);
+    if (cs->history.size() > PUDDLE_CALL_HISTORY)
+        cs->history.pop_front();
+    if (cs->history_path.empty())
+        return;
+    std::string line = record_line(r);
+    FILE *f = fopen(cs->history_path.c_str(), "ab");
+    if (!f || fwrite(line.data(), 1, line.size(), f) != line.size())
+        puddle_log(PUDDLE_LOG_WARN, "calls: cannot keep a note of the call in %s", cs->history_path.c_str());
+    if (f)
+        fclose(f);
+}
+
 /* ---- a call's end ---- */
 
 /* End `call` with `reason` (if it hasn't ended), and tell the friend `tell_reason` unless it is NULL. */
@@ -218,6 +320,7 @@ static void finish(puddle_calls *cs, const CallPtr &call, const char *reason, co
         if (cs->current == call)
             cs->current.reset();
         cs->ended.push_front(call);
+        remember(cs, *call);
         pc = call->pc;
         if (pc) /* closed by the worker: this may be running in one of the connection's own callbacks */
             cs->tasks.push_back([pc] { pc->close(); });
@@ -419,6 +522,12 @@ puddle_calls *puddle_calls_start(puddle_ctx *ctx, const puddle_outbox_hooks *hoo
     std::string addr = ctx->config->address;
     if (addr != "::" && addr != "0.0.0.0" && !addr.empty())
         cs->bind = addr;
+    if (ctx->config->data_dir[0]) {
+        cs->state_dir = std::string(ctx->config->data_dir) + "/state";
+        cs->history_path = cs->state_dir + "/calls.jsonl";
+        puddle_mkdir_p(cs->state_dir.c_str());
+        load_history(cs);
+    }
     try {
         cs->worker = std::thread(work, cs);
     } catch (const std::system_error &) {
@@ -627,13 +736,30 @@ static void write_call(puddle_jw *w, const Call &c)
     puddle_jw_end_object(w);
 }
 
-int puddle_calls_write(puddle_ctx *ctx, const char *id, puddle_jw *w)
+static void write_record(puddle_jw *w, const Record &r)
+{
+    puddle_jw_object(w);
+    puddle_jw_str(w, "id", r.id.c_str());
+    puddle_jw_str(w, "user", r.peer.c_str());
+    puddle_jw_str(w, "direction", r.outgoing ? "outgoing" : "incoming");
+    puddle_jw_str(w, "state", "ended");
+    puddle_jw_str(w, "reason", r.reason.c_str());
+    puddle_jw_flag(w, "media", 0);
+    puddle_jw_num(w, "created", r.created);
+    puddle_jw_key(w, "answered");
+    r.answered ? puddle_jw_int(w, r.answered) : puddle_jw_null(w);
+    puddle_jw_num(w, "ended", r.ended);
+    puddle_jw_end_object(w);
+}
+
+int puddle_calls_write(puddle_ctx *ctx, const char *id, const char *user, int limit, puddle_jw *w)
 {
     puddle_calls *cs = ctx->calls;
     if (!cs) {
         if (id)
             return 1;
         puddle_jw_object(w);
+        puddle_jw_num(w, "version", 0);
         puddle_jw_key(w, "items");
         puddle_jw_array(w);
         puddle_jw_end_array(w);
@@ -644,18 +770,21 @@ int puddle_calls_write(puddle_ctx *ctx, const char *id, puddle_jw *w)
     if (id) {
         if (cs->current && cs->current->id == id)
             return write_call(w, *cs->current), 0;
-        for (auto &c : cs->ended)
-            if (c->id == id)
-                return write_call(w, *c), 0;
+        for (auto it = cs->history.rbegin(); it != cs->history.rend(); ++it)
+            if (it->id == id)
+                return write_record(w, *it), 0;
         return 1;
     }
     puddle_jw_object(w);
+    puddle_jw_num(w, "version", (int64_t)cs->version.load());
     puddle_jw_key(w, "items");
     puddle_jw_array(w);
-    if (cs->current)
-        write_call(w, *cs->current);
-    for (auto &c : cs->ended)
-        write_call(w, *c);
+    int n = 0;
+    if (cs->current && (!user || cs->current->peer == user))
+        write_call(w, *cs->current), n++;
+    for (auto it = cs->history.rbegin(); it != cs->history.rend() && n < limit && w->len + 600 < w->cap; ++it)
+        if (!user || it->peer == user)
+            write_record(w, *it), n++;
     puddle_jw_end_array(w);
     puddle_jw_end_object(w);
     return 0;

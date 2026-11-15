@@ -27,7 +27,7 @@ static Error failure(const char *code)
 /* The call `id` as it stands now. */
 static int one(const puddle_call *c, puddle_jw *w, const char *id, int status = 200)
 {
-    if (courier(c).calls_write(c->ctx, id, w) != 0)
+    if (courier(c).calls_write(c->ctx, id, nullptr, 0, w) != 0)
         throw Error::notFound("no_call");
     return status;
 }
@@ -40,9 +40,14 @@ static const char *call_param(const puddle_call *c)
     return id;
 }
 
+/* ?user=<id>: only the calls with that friend (a chat shows them). ?limit=: how many ended ones, 50 unless said, up to 200. */
 static int list_calls(const puddle_call *c, puddle_jw *w)
 {
-    courier(c).calls_write(c->ctx, nullptr, w);
+    std::string user;
+    Page p = paging(c, 200, "user", &user);
+    if (!user.empty() && !puddle_id_valid(user.c_str()))
+        throw Error::badRequest("bad_query");
+    courier(c).calls_write(c->ctx, nullptr, user.empty() ? nullptr : user.c_str(), (int)p.limit, w);
     return 200;
 }
 
@@ -76,8 +81,8 @@ const puddle_route puddle_call_api_routes[] = {
     { "GET",  "/api/v1/calls",                       PUDDLE_AUTH_OWNER, 0,   list_calls,                          NULL },
     { "POST", "/api/v1/calls/start",                 PUDDLE_AUTH_OWNER, 256, start,                               NULL },
     { "GET",  "/api/v1/calls/{call:token}",          PUDDLE_AUTH_OWNER, 0,   get_call,                            NULL },
-    { "POST", "/api/v1/calls/{call:token}/accept",   PUDDLE_AUTH_OWNER, 0,   act<&puddle_courier::call_accept>,   NULL },
-    { "POST", "/api/v1/calls/{call:token}/decline",  PUDDLE_AUTH_OWNER, 0,   act<&puddle_courier::call_decline>,  NULL },
-    { "POST", "/api/v1/calls/{call:token}/end",      PUDDLE_AUTH_OWNER, 0,   act<&puddle_courier::call_end>,      NULL },
+    { "POST", "/api/v1/calls/{call:token}/accept",   PUDDLE_AUTH_OWNER, 64,   act<&puddle_courier::call_accept>,   NULL },
+    { "POST", "/api/v1/calls/{call:token}/decline",  PUDDLE_AUTH_OWNER, 64,   act<&puddle_courier::call_decline>,  NULL },
+    { "POST", "/api/v1/calls/{call:token}/end",      PUDDLE_AUTH_OWNER, 64,   act<&puddle_courier::call_end>,      NULL },
 };
 const size_t puddle_call_api_routes_count = sizeof puddle_call_api_routes / sizeof puddle_call_api_routes[0];

@@ -140,6 +140,20 @@ Pane {
                 PanelToggle { objectName: "sidebarButton"; glyph: "layout-sidebar"; label: qsTr("Conversations"); active: page.sidebarShown; onClicked: page.toggleSidebar() }
                 Avatar { chats: page.chats; name: page.chats.currentName; hash: page.chats.currentAvatar; tint: page.chats.currentColor; size: 28 }
                 Label { text: page.chats.currentName; font.bold: true; font.pixelSize: 16; elide: Text.ElideRight; Layout.fillWidth: true }
+                // ring this friend (docs/calls.md); only one call at a time
+                ToolButton {
+                    objectName: "callButton"
+                    visible: !page.chats.currentIsGroup && page.chats.current !== "" && page.canSend
+                    enabled: page.chats.calls.state === ""
+                    icon.source: Theme.icon("phone")
+                    icon.width: Theme.iconSize
+                    icon.height: Theme.iconSize
+                    display: AbstractButton.IconOnly
+                    Accessible.name: qsTr("Call %1").arg(page.chats.currentName)
+                    ToolTip.text: Accessible.name
+                    ToolTip.visible: hovered
+                    onClicked: page.chats.calls.call(page.chats.current)
+                }
                 PanelToggle {
                     objectName: "contextButton"
                     visible: page.chats.current !== ""

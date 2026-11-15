@@ -13,7 +13,7 @@ signed receipts), the retrying outbox, direct messages with edit and delete, key
 pictures over a stream, and the Qt app (Friends, conversations, chat, delivery state). 32 test suites, including two Puddles
 talking over TLS and the window driven by real clicks and keys.
 
-Group chats (phase 5) are built, and so is proving who answers (phase 6), which replaced certificate pinning for streams. So is joining Ponds' text channels (docs/ponds.md). The phone client is built up to its Android package (phase 7). Calls (phase 8) are under way: a voice call between two Puddles (8.1). Not built: encryption at rest. See "Later" below and `discuss-later.md`.
+Group chats (phase 5) are built, and so is proving who answers (phase 6), which replaced certificate pinning for streams. So is joining Ponds' text channels (docs/ponds.md). The phone client is built up to its Android package (phase 7). Calls (phase 8) are under way: voice calls between two Puddles (8.1), made and answered in the window (8.2). Not built: encryption at rest. See "Later" below and `discuss-later.md`.
 
 ## Order, and why
 
@@ -552,7 +552,7 @@ to one in the window first, then phones, group calls and video.
   signed routes `POST /stream/v1/call/offer|answer|end`, a call's states, the owner's routes (`/api/v1/calls...`), and
   Opus frames in and out through a C interface. Tested with two Puddles in one process: ringing, accepting, frames both
   ways over real UDP, declining, busy, no answer, hanging up, and that only a friend can ring.
-- [ ] **8.2 Calls in the window.** Recording and playing with Qt Multimedia and libopus, a jitter buffer, ringing, the
+- [x] **8.2 Calls in the window.** Recording and playing with Qt Multimedia and libopus, a jitter buffer, ringing, the
   call bar (mute, hang up), and a note of each call in the chat.
 - [ ] **8.3 Calls on the phone.** A WebRTC leg between the phone and its Puddle, signalled over the device API.
 - [ ] **8.4 Group calls.** A call per pair of members, over the group's connections.

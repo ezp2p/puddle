@@ -324,7 +324,7 @@ int main(void)
     CHECK(get(&b, "/api/v1/calls") == 200 && json_has(a.uid) && json_has("\"direction\":\"incoming\""));
     snprintf(path, sizeof path, "/api/v1/calls/%s/accept", id);
     CHECK(post(&a, path, NULL) == 404);                                  /* not Alice's to answer */
-    CHECK(post(&b, path, NULL) == 200);
+    CHECK(post(&b, path, "{}") == 200);                                /* with an empty body, as the window sends it */
     CHECK(wait_call(&a, id, "\"state\":\"active\""));
     CHECK(wait_call(&b, id, "\"state\":\"active\""));
     CHECK(wait_call(&a, id, "\"media\":true") && wait_call(&b, id, "\"media\":true"));
@@ -380,6 +380,26 @@ int main(void)
     node_down(&b);
     CHECK(wait_call(&a, id, "\"state\":\"ended\""));
     CHECK(get(&a, "/api/v1/calls") == 200 && !json_has("\"state\":\"active\""));
+
+    /* ---- the history: per friend, and kept across a restart ---- */
+    snprintf(path, sizeof path, "/api/v1/calls?user=%s", b.uid);
+    CHECK(get(&a, path) == 200 && json_has("\"version\":") && json_has("\"reason\":\"declined\"") && json_has("\"reason\":\"no_answer\"") &&
+          json_has("\"reason\":\"hung_up\"") && json_has("\"reason\":\"cancelled\""));
+    snprintf(path, sizeof path, "/api/v1/calls?user=%s", c.uid);
+    CHECK(get(&a, path) == 200 && json_has("\"items\":[]"));                 /* Alice never called Carol */
+    CHECK(get(&c, "/api/v1/calls") == 200 && json_has("\"reason\":\"busy\""));
+    {
+        CHECK(get(&a, "/api/v1/calls?limit=1") == 200);
+        int n = 0;
+        for (const char *p = resp; (p = strstr(p, "\"direction\":")); p++) n++;
+        CHECK(n == 1);
+    }
+    CHECK(get(&a, "/api/v1/calls?user=nobody") == 400);
+    node_down(&a);
+    CHECK(node_up(&a) == 0);
+    for (int i = 0; i < 100 && !puddle_server_calls(a.srv); i++) usleep(20000);
+    snprintf(path, sizeof path, "/api/v1/calls?user=%s", b.uid);
+    CHECK(get(&a, path) == 200 && json_has("\"reason\":\"declined\"") && json_has("\"reason\":\"no_answer\""));
 
     node_down(&a);
     node_down(&c);

@@ -66,27 +66,47 @@ home router, published in Docker). No STUN, no TURN.
 answer), `no_answer` (nobody answered in 45 seconds; the callee sees it as `missed`), `busy`, `failed` (no path found
 within 20 seconds of accepting, or the connection dropped), `unreachable` (the offer never reached them).
 
-One call at a time for now: an offer while in a call is answered `409 busy`. The last few ended calls are kept in
-memory so the window can show what was missed; a note in the chat comes with the window (8.2).
+One call at a time for now: an offer while in a call is answered `409 busy`. Every call that ends is noted in
+`<data_dir>/state/calls.jsonl` (one line each: id, friend, direction, reason, and when it began, connected and ended; the
+newest 500 are kept), which is how a chat shows its calls.
 
 ## Media
 
-Opus at 48 kHz, mono, 20 ms frames, around 32 kbit/s. Each Puddle sends its owner's frames with libdatachannel's Opus
-packetizer and an RTCP sender report, and hands the frames that arrive to its owner's device as they come; the device
-keeps the jitter buffer and decodes.
+Opus at 48 kHz, mono, 20 ms frames, around 32 kbit/s, with in-band FEC. Each Puddle sends its owner's frames with
+libdatachannel's Opus packetizer and an RTCP sender report, and hands the frames that arrive to its owner's device as they
+come; the device keeps the jitter buffer and decodes.
+
+In the window (`src/gui/app/callaudio.*`): the microphone is read with Qt Multimedia, as 48 kHz mono 16-bit when the
+device gives that, otherwise in its own format, mixed down and resampled here; every 20 ms is encoded and handed to the
+Puddle. What arrives goes into a jitter buffer that starts playing once it holds 60 ms, covers a missing frame with
+Opus's own guess, drops what comes after its moment, skips ahead when it falls more than half a second behind, and
+carries on from what came after a gap of more than 100 ms rather than guessing at all of it. The speaker reads from it
+and gets silence when there is nothing (a sink that reads nothing stops). Muting stops sending. Without libopus the
+window still builds and calls connect, in silence. Tests set `PUDDLE_TEST_NO_AUDIO` so that no test opens the
+computer's own microphone or speaker.
 
 ## The owner's side
 
 | route | |
 |---|---|
-| `GET /api/v1/calls` | the current call, and the last ended ones |
+| `GET /api/v1/calls` | `{version, items}`: the current call, then ended ones, newest first; `?user=` a friend's only, `?limit=` how many (50) |
 | `POST /api/v1/calls/start` | `{user}`: ring a friend |
 | `POST /api/v1/calls/{call}/accept` | |
 | `POST /api/v1/calls/{call}/decline` | |
 | `POST /api/v1/calls/{call}/end` | hang up, or give up ringing |
 
 The window hands frames to its Puddle and gets them back through a C interface (`federation/calls.h`), since it runs
-the Puddle in its own process.
+the Puddle in its own process. It asks `GET /api/v1/calls?limit=1` every 0.7 s and reads further only when `version`
+has moved.
+
+### In the window
+
+- A friend's conversation has a call button in its header (one call at a time, so it is off during one).
+- A bar floats over the top of whatever page is open while a call goes on: a friend ringing (Answer, Decline), ours
+  ringing at theirs, connecting, or the call with how long it has run, mute and hang up. A friend ringing is also a
+  notification.
+- Each call is a note in the chat among the messages ("You called Bob · 3:12", "Missed call from Bob"), shown once the
+  messages around it are loaded.
 
 ## Later steps
 

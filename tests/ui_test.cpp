@@ -171,6 +171,7 @@ int main(int argc, char **argv)
     Chats &B = *bob.chats;
     auto *msgs_b = static_cast<JsonListModel *>(B.messages());
 
+    qputenv("PUDDLE_TEST_NO_AUDIO", "1"); // calls below: not this computer's microphone and speaker
     Backend backend; // the app's own Puddle
     if (backend.needsSetup()) {
         CHECK(!backend.createIdentity().isEmpty());
@@ -319,6 +320,46 @@ int main(int argc, char **argv)
     }
     CHECK(until([&] { return msgs_b->at(0).value("deleted").toBool(); }));
     CHECK(until([&] { return !shows("hello edited") && shows("Message deleted"); }, 5000));
+
+    /* ---- a call (docs/calls.md): from the window to Bob, who answers; mute; hang up; the chat notes it ---- */
+    {
+        Calls &ca = *A.callModel(), &cb = *bob.chats->callModel();
+        auto note = [&](const QString &start) {
+            for (QQuickItem *i : all("groupNotice"))
+                if (i->property("text").toString().startsWith(start))
+                    return true;
+            return false;
+        };
+        CHECK(until([&] { return find("callButton") && find("callButton")->property("enabled").toBool(); }, 5000));
+        CHECK(click(find("callButton")));
+        CHECK(until([&] { return cb.state() == "ringing"; }, 10000));
+        CHECK(until([&] { QQuickItem *s = find("callStatus"); return s && s->property("text").toString() == "Ringing…"; }, 3000));
+        CHECK(!find("callButton")->property("enabled").toBool()); /* one call at a time */
+        cb.accept();
+        CHECK(until([&] { return ca.state() == "active"; }, 15000));
+        CHECK(until([&] { QQuickItem *s = find("callStatus"); return s && s->property("text").toString().startsWith("0:0"); }, 5000));
+        CHECK(click(find("muteButton")));
+        CHECK(until([&] { return ca.muted(); }, 2000));
+        CHECK(click(find("hangUpButton")));
+        CHECK(until([&] { return ca.state().isEmpty() && cb.state().isEmpty(); }, 10000));
+        CHECK(until([&] { return find("callBar") == nullptr && note("You called Bob · 0:0"); }, 5000));
+        CHECK(!ca.muted()); /* the next call starts unmuted */
+
+        /* Bob calls the window: the bar rings; declined */
+        cb.call(backend.myId());
+        CHECK(until([&] { return find("acceptCallButton") != nullptr; }, 10000));
+        CHECK(click(find("declineCallButton")));
+        CHECK(until([&] { return ca.state().isEmpty() && cb.state().isEmpty(); }, 10000));
+        CHECK(until([&] { return note("You declined a call from Bob"); }, 5000));
+        /* and again, answered from the bar, and Bob hangs up */
+        cb.call(backend.myId());
+        CHECK(until([&] { return find("acceptCallButton") != nullptr; }, 10000));
+        CHECK(click(find("acceptCallButton")));
+        CHECK(until([&] { return ca.state() == "active" && cb.state() == "active"; }, 15000));
+        cb.hangUp();
+        CHECK(until([&] { return ca.state().isEmpty(); }, 10000));
+        CHECK(until([&] { return note("Bob called you · 0:0"); }, 5000));
+    }
 
     /* ---- Bob goes offline: the message says so, and goes through when he is back ---- */
     bob.stop();

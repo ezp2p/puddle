@@ -14,6 +14,8 @@ src/gui/
     qrimage.*         "image://qr/<text>": the pairing link as a QR code (only where libqrencode is found)
     jsonlistmodel.*   the list model every ListView reads
     ponds.*           the Ponds for the rail, and the open one's channels, members and messages (chats.ponds)
+    callmodel.*       the call going on, from the owner API (chats.calls), and how a call is described in a chat
+    callaudio.*       a call's sound: the microphone, Opus, the jitter buffer and the speaker; the Backend plays it (docs/calls.md)
     composer.*        the files waiting to go with a message (QML: import Puddle.Files): their type, size and tiny preview,
                       photos with Qt's image reading and videos from their first frame (Qt Multimedia)
     dock*             macOS Dock visibility
@@ -26,6 +28,7 @@ src/gui/
                       HomePage: what shows when nothing is open
                       ContextBar: the panel at the right of an open conversation: members of a group, or a person's profile and what can be done about them.
                       PondSidebar: a Pond's channels, in place of the conversations while it is open. PondMembers: its members, in the right panel
+                      CallBar: the call going on, floating over the page: ringing, connecting, mute, hang up
                       Beside the conversation when the window is at least Theme.contextBreakpoint wide, a drawer over it when not
     chat/             ChatPage: one conversation. PondPage: a Pond's text channel. MessageFiles: a message's photos and videos as a grid (the sender's blurred preview until
                       each is here) and other files as cards. MediaViewer: a photo or a video over the whole window

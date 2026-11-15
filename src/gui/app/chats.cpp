@@ -92,6 +92,8 @@ Chats::Chats(QObject *parent)
     fileCacheDir_ = QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + "/files";
     timer_.setInterval(2000);
     connect(&timer_, &QTimer::timeout, this, &Chats::refresh);
+    calls_.setNameOf([this](const QString &u) { return nameOf(u); });
+    connect(&calls_, &Calls::historyChanged, this, &Chats::refreshCallNotes);
 }
 
 bool Chats::attach(const QUrl &base, const QString &tokenFile, const QString &certFile)
@@ -105,6 +107,7 @@ bool Chats::attach(const QUrl &base, const QString &tokenFile, const QString &ce
     timer_.start();
     refresh();
     ponds_.start();
+    calls_.start();
     return true;
 }
 
@@ -142,6 +145,7 @@ bool Chats::attachDevice(const QUrl &base, const QString &puddleId, const QByteA
     timer_.start();
     refresh();
     ponds_.start(); /* through its Puddle, like everything else */
+    calls_.start();
     return true;
 }
 
@@ -803,6 +807,12 @@ void Chats::renderMessages()
             continue;
         items.append(n);
     }
+    // a call older than every message held waits until the page it falls in is loaded, so that loading it adds one run above
+    // what is there (the list keeps its place) rather than messages among notes already shown
+    const double oldest = list.isEmpty() ? 0 : list.first().value("ts").toDouble();
+    for (const QJsonObject &n : callNotes_)
+        if (olderNext_ < 0 || n.value("ts").toDouble() >= oldest)
+            items.append(n);
     std::stable_sort(items.begin(), items.end(), [](const QJsonObject &a, const QJsonObject &b) { return a.value("ts").toDouble() < b.value("ts").toDouble(); });
     QJsonObject prev;
     for (QJsonObject m : items) {
@@ -860,6 +870,7 @@ void Chats::open(const QString &userId, const QString &kind)
     currentKind_ = userId.isEmpty() ? QStringLiteral("dm") : kind;
     msgs_.clear();
     notices_.clear();
+    callNotes_.clear();
     olderNext_ = -1;
     loadedOlder_ = loadingOlder_ = bridging_ = false;
     messages_.clear();
@@ -874,6 +885,41 @@ void Chats::open(const QString &userId, const QString &kind)
         return;
     markRead();
     refreshMessages();
+    refreshCallNotes();
+}
+
+// The calls with the friend whose chat is open, as notes among the messages: "You called Bob · 3:12", "Missed call from Bob".
+void Chats::refreshCallNotes()
+{
+    if (current_.isEmpty() || currentIsGroup()) {
+        callNotes_.clear();
+        return;
+    }
+    const QString user = current_;
+    api_.get(QStringLiteral("/api/v1/calls?limit=200&user=") + user, [this, user](int status, const QJsonDocument &doc) {
+        if (status != 200 || user != current_)
+            return;
+        QHash<QString, QJsonObject> notes;
+        for (const QJsonValue &v : doc.object().value("items").toArray()) {
+            const QJsonObject c = v.toObject();
+            if (c.value("state").toString() != QLatin1String("ended"))
+                continue;
+            const qint64 answered = qint64(c.value("answered").toDouble()), ended = qint64(c.value("ended").toDouble());
+            const QString id = QStringLiteral("call:") + c.value("id").toString();
+            QJsonObject n;
+            n.insert("id", id);
+            n.insert("kind", QStringLiteral("notice"));
+            n.insert("call", true);
+            n.insert("ts", c.value("created"));
+            n.insert("noticeText", calls_.describe(c.value("reason").toString(), c.value("direction").toString() == QLatin1String("incoming"), nameOf(user),
+                                                   answered > 0 && ended > answered ? (ended - answered) / 1000 : 0));
+            notes.insert(id, n);
+        }
+        if (notes.keys() == callNotes_.keys())
+            return;
+        callNotes_ = notes;
+        renderMessages();
+    });
 }
 
 void Chats::updateCurrentInfo()

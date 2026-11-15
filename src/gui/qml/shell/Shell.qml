@@ -194,6 +194,14 @@ Pane {
                 onToggleSidebar: shell.toggleSidebar()
                 onToggleContext: shell.toggleContext()
             }
+            // the call going on, over whatever page is open
+            CallBar {
+                chats: shell.chats
+                z: 10
+                anchors.top: parent.top
+                anchors.topMargin: Theme.headerHeight + 8
+                anchors.horizontalCenter: parent.horizontalCenter
+            }
         }
 
         // the right card, beside the conversation

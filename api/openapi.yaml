@@ -722,8 +722,12 @@ paths:
   /api/v1/calls:
     get:
       tags: [calls]
-      summary: The call going on, then the last few that ended, newest first
-      responses: { "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "objects/call.yaml" } } } } } } } }
+      summary: The call going on, then those that ended, newest first
+      description: "`version` changes whenever a call does, so asking often costs little. Ended calls are kept in the Puddle's data folder (the newest 500)."
+      parameters:
+        - { name: user, in: query, schema: { $ref: "wire/ids.yaml#/$defs/UserId" }, description: Only the calls with this friend }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 }, description: How many ended ones }
+      responses: { "200": { description: OK, content: { application/json: { schema: { type: object, properties: { version: { type: integer }, items: { type: array, items: { $ref: "objects/call.yaml" } } } } } } } }
   /api/v1/calls/start:
     post:
       tags: [calls]
