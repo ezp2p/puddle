@@ -9,7 +9,9 @@
 #include <errno.h>
 #include <chrono>
 #include <condition_variable>
+#include <map>
 #include <mutex>
+#include <string>
 #include <new>
 #include <system_error>
 #include <thread>
@@ -45,6 +47,7 @@ struct puddle_outbox {
     uint64_t next_seq;
     std::thread thread;
     int running, stop;
+    std::map<std::string, int64_t> heard; /* when each peer last woke its waiting items (puddle_outbox_heard_from) */
 };
 
 typedef struct {
@@ -739,6 +742,33 @@ int puddle_outbox_retry_now(puddle_outbox *ob, const char *peer)
     if (n)
         ob->wake.notify_all();
     ob->mu.unlock();
+    return n;
+}
+
+int puddle_outbox_heard_from(puddle_outbox *ob, const char *peer)
+{
+    int n = 0;
+    int64_t now = now_of(ob);
+    std::lock_guard<std::mutex> g(ob->mu);
+    auto h = ob->heard.find(peer);
+    if (h != ob->heard.end() && now - h->second < PUDDLE_OUTBOX_HEARD_GAP_MS)
+        return 0;
+    for (size_t i = 0; i < ob->n; i++) {
+        puddle_ob_item *o = &ob->items[i];
+        /* only what waits on the offline schedule; first_offline stays, so if they still can't be reached the waits grow on */
+        if (o->state == PUDDLE_OB_QUEUED && o->first_offline_ms && o->next_ms > now && !strcmp(o->peer, peer)) {
+            o->next_ms = now;
+            save_item(ob, o);
+            n++;
+        }
+    }
+    if (n) {
+        ob->heard[peer] = now;
+        if (ob->heard.size() > 4096) /* forget the ones past the gap rather than grow: it is only a rate limit */
+            for (auto it = ob->heard.begin(); it != ob->heard.end();)
+                it = now - it->second >= PUDDLE_OUTBOX_HEARD_GAP_MS ? ob->heard.erase(it) : std::next(it);
+        ob->wake.notify_all();
+    }
     return n;
 }
 

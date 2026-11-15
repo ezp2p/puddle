@@ -124,6 +124,12 @@ int puddle_outbox_rewrite(puddle_outbox *ob, uint64_t seq, const char *body, siz
 /* Try this peer's waiting items now, not at the next scheduled time. Returns how many were waiting. */
 int puddle_outbox_retry_now(puddle_outbox *ob, const char *peer);
 
+/* A request from `peer` just arrived, so they are up: what waits for them on the offline schedule (they couldn't be reached)
+ * is tried now rather than minutes from now. At most once every PUDDLE_OUTBOX_HEARD_GAP_MS per peer, so a peer that can
+ * reach us but not be reached (behind NAT) isn't dialled on every request it sends. Returns how many were woken. */
+#define PUDDLE_OUTBOX_HEARD_GAP_MS 30000
+int puddle_outbox_heard_from(puddle_outbox *ob, const char *peer);
+
 /* Give an item that failed another go: it is queued again, to be tried now, as if new. 0, or 1 if there is no such failed item. */
 int puddle_outbox_requeue(puddle_outbox *ob, uint64_t seq);
 

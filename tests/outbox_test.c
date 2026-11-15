@@ -345,13 +345,31 @@ int main(void)
     }
     ndone = 0;
 
-    /* ...and when they come back, everything goes, oldest first, at once */
+    /* hearing from them (a request of theirs arrived) tries what waits for them now, not at the schedule; at most once in
+     * PUDDLE_OUTBOX_HEARD_GAP_MS, so a peer we can't reach that keeps calling us isn't dialled each time */
+    CHECK(puddle_outbox_heard_from(ob, B) == 0);                                                   /* nothing of B's waits */
+    CHECK(puddle_outbox_heard_from(ob, A) == 2);
+    {
+        puddle_ob_item i0;
+        CHECK(get_item(ob, 0, &i0) && i0.next_ms == clock_now && i0.first_offline_ms == t_off);   /* the waits still grow */
+        free(i0.body);
+    }
+    puddle_outbox_poll(ob);                                                                        /* still away: tried, and waits */
+    {
+        puddle_ob_item i0;
+        CHECK(get_item(ob, 0, &i0) && i0.state == PUDDLE_OB_QUEUED && i0.next_ms == clock_now + 30 * MIN);
+        free(i0.body);
+    }
+    CHECK(puddle_outbox_heard_from(ob, A) == 0);                                                   /* too soon after the last */
+
+    /* ...and when they come back, everything goes, oldest first, at once: here because they called us */
     {
         char dd[700];
         snprintf(dd, sizeof dd, "%s/srv", root);
         CHECK(ts_start(&srv, dd, port_a) == 0);
         ts_set(&srv, TS_NORMAL, 200, "{}", 0);
-        clock_now += 30 * MIN;
+        clock_now += PUDDLE_OUTBOX_HEARD_GAP_MS;
+        CHECK(puddle_outbox_heard_from(ob, A) == 2);
         puddle_outbox_poll(ob);
         CHECK(srv.requests == 2 && ndone == 2 && !strcmp(done_log[0].kind, "o1") && !strcmp(done_log[1].kind, "o2"));
         CHECK(count(ob, PUDDLE_OB_QUEUED) == 0);

@@ -390,6 +390,8 @@ size_t puddle_router_handle_big(const puddle_router *r, const puddle_request *re
             *status = puddle_fail(&w, 503, "busy");
         } else {
             memcpy(sender, sig.id, sizeof sender);
+            if (rt->auth == PUDDLE_AUTH_PEER && ctx->outbox) /* a friend we couldn't reach is up after all */
+                puddle_outbox_heard_from(ctx->outbox, sender);
             if (rt->auth == PUDDLE_AUTH_OWNER)
                 call.device = sender; /* the owner, on one of their phones */
             else
