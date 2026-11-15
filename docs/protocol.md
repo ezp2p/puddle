@@ -17,14 +17,12 @@ Puddle is the **reference implementation**: the protocol's test vectors were mad
 | 02 answer receipts, handshake | built (roadmap phase 6) | `src/http/reqsig.cpp`, `src/http/router.cpp`, `src/federation/sender.cpp` |
 | 03 streams | built | `src/federation/`, `api/federation.yaml`, `docs/streams.md` |
 | 04 devices (phone clients) | built (roadmap phase 7) | `src/api/devices.cpp`, `src/gui/app/apiclient.cpp`, `docs/identity.md` "Devices" |
-| 05 ponds, member side | built; pins a Pond's certificate until Ponds sign receipts | `src/federation/ponds.cpp`, `docs/ponds.md` |
-| 05 receipts from Ponds | not yet (proposed in the protocol) | |
+| 05 ponds, member side | built | `src/federation/ponds.cpp`, `docs/ponds.md` |
+| 05 receipts from Ponds | built: checked for a Pond with `receipts`, whose certificate is then never pinned | `src/federation/ponds.cpp`, `docs/ponds.md` "Proving who answers" |
 | 06 Levee | not yet: the address record's `levee` field and custody receipts are specified, not built | `docs/levee.md` (draft) |
 
 ## What Puddle has to do next for the protocol
 
-- **Ponds that sign receipts** (spec 05): check them when a Pond lists the feature `receipts`, and stop pinning that
-  Pond's certificate.
 - **Levee** (spec 06): sign receipts over the Levee's certificate for answers that came through it; read the `levee`
   field of address records and accept that Levee's custody receipts as "waiting at their Levee".
 - **More vectors** for what the protocol does not cover yet: key chains, address records.

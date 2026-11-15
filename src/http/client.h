@@ -9,8 +9,8 @@
  * us to them; a Puddle's answer carries a signed receipt, which proves them to us. Given the key we hold for the peer
  * (`peer_pub`), the receipt is checked here, including that it names the certificate this connection showed, so
  * someone in the middle passing things on is caught. Given a certificate already proven to be theirs (`expect_fp`),
- * nothing is sent on a connection that shows another. A Pond does not sign receipts (yet), so for a Pond the
- * certificate is still pinned: `fingerprint_ok` is asked before anything is sent.
+ * nothing is sent on a connection that shows another. A Pond that signs receipts is called the same way, with its key; one
+ * that does not is pinned to its certificate: `fingerprint_ok` is asked before anything is sent.
  *
  * Addresses come from strangers (a link, a request), so the ones that can only be a mistake or a probe are
  * refused before connecting: unspecified, multicast, broadcast and link-local (which includes the cloud

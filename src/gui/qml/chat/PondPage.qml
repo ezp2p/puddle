@@ -119,7 +119,7 @@ Pane {
         Rectangle {
             objectName: "pondStatus"
             readonly property string status: page.ponds.currentStatus
-            visible: status === "unreachable" || status === "removed" || status === "certificate_changed"
+            visible: status === "unreachable" || status === "removed" || status === "certificate_changed" || status === "not_proven"
             Layout.fillWidth: true
             implicitHeight: statusLabel.implicitHeight + 12
             color: status === "removed" ? Theme.danger : Theme.banner
@@ -132,6 +132,7 @@ Pane {
                 color: "white"
                 text: parent.status === "removed" ? qsTr("You are no longer a member of %1. You can still read what was kept.").arg(page.ponds.currentName)
                       : parent.status === "certificate_changed" ? qsTr("%1's certificate changed, so your Puddle has stopped talking to it.").arg(page.ponds.currentName)
+                      : parent.status === "not_proven" ? qsTr("Something at %1's address answered without proving it's %1, so your Puddle isn't talking to it. Trying again…").arg(page.ponds.currentName)
                       : qsTr("Can't reach %1. Trying again…").arg(page.ponds.currentName)
             }
         }

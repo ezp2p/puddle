@@ -58,6 +58,8 @@ QString Ponds::why(int status, const QJsonDocument &json, const QString &doing) 
         return tr("You're sending messages too quickly. Wait a moment.");
     if (code == QLatin1String("certificate_changed"))
         return tr("The Pond's certificate changed, so nothing was sent.");
+    if (code == QLatin1String("not_proven"))
+        return tr("Something answered for the Pond without proving it's the Pond, so nothing was sent.");
     return tr("Couldn't %1.").arg(doing);
 }
 

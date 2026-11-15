@@ -11,8 +11,11 @@ properties:
   description: { type: string }
   address: { type: string, description: "host[:port] it is reached at" }
   status:
-    enum: [connecting, connected, unreachable, removed, certificate_changed]
-    description: "`removed`: the Pond no longer has the owner as a member; what was kept can still be read until they leave"
+    enum: [connecting, connected, unreachable, removed, certificate_changed, not_proven]
+    description: |
+      `removed`: the Pond no longer has the owner as a member; what was kept can still be read until they leave.
+      `certificate_changed`: a Pond without receipts showed a certificate other than the one pinned at join.
+      `not_proven`: a Pond that signs its answers didn't prove what answered (docs/ponds.md, "Proving who answers").
   protocol: { type: integer, minimum: 1, description: "Which additions to /pond/v1 the Pond said it has, at its last /info" }
   features: { type: array, items: { type: string, pattern: "^[a-z0-9_-]{1,32}$" }, description: Optional parts the Pond said it has }
   files:
