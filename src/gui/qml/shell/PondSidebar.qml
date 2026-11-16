@@ -6,9 +6,9 @@ import "../theme"
 
 // The left-hand list while a Pond is open: its name, which drops down the Pond's menu (Server Settings for an operator or
 // administrator, how you appear there, your id, leaving), a role the Pond offers you if it does, then its channels. A voice
-// channel (docs/ponds.md, "Voice channels") has a speaker, and who is in it underneath, lit while they talk; clicking it
-// joins, with nothing to answer. While you are in one, in any Pond, a bar at the bottom says which, with mute, deafen and
-// leave.
+// channel (docs/ponds.md, "Voice channels") has a speaker, and who is in it underneath, lit while they talk; clicking it shows
+// its messages, like any channel, and the phone beside it joins its voice (nothing to answer), or leaves it. While you are in
+// one, in any Pond, a bar at the bottom says which, with mute, deafen and leave.
 Rectangle {
     id: bar
 
@@ -180,12 +180,11 @@ Rectangle {
                 readonly property bool selected: model.id === bar.ponds.channel
                 readonly property bool voice: model.kind === "voice"
                 readonly property var people: model.voice || []
-                // a voice channel: join it (nothing to answer) and show its messages; a text one: show its messages
-                function openIt() {
-                    if (voice)
-                        bar.ponds.joinVoice(model.id)
-                    bar.ponds.openChannel(model.id)
-                }
+                // we are in this one's voice (connecting, or connected)
+                readonly property bool here: voice && bar.ponds.voicePond === bar.ponds.current && bar.ponds.voiceChannel === model.id
+                                             && bar.ponds.voiceState !== "" && bar.ponds.voiceState !== "ended"
+                // any channel: show its messages (a voice channel's too: joining its voice is the button beside it)
+                function openIt() { bar.ponds.openChannel(model.id) }
                 objectName: "channel_" + model.name
                 width: ListView.view.width
                 height: head.height + (people.length ? inVoice.implicitHeight + 4 : 0)
@@ -207,6 +206,24 @@ Rectangle {
                         spacing: 6
                         Icon { glyph: row.voice ? "volume" : "hash"; size: 18; opacity: row.selected ? 1 : 0.6 }
                         Label { text: row.model.name; Layout.fillWidth: true; elide: Text.ElideRight; opacity: row.selected ? 1 : 0.8; font.bold: row.selected }
+                        // a voice channel: join its voice (nothing to answer), or leave it if we are in it
+                        ToolButton {
+                            objectName: "voiceJoin_" + row.model.name
+                            visible: row.voice
+                            implicitWidth: 26
+                            implicitHeight: 26
+                            padding: 4
+                            icon.source: Theme.icon(row.here ? "phone-off" : "phone")
+                            icon.width: 16
+                            icon.height: 16
+                            icon.color: row.here ? Theme.danger : Theme.primary
+                            display: AbstractButton.IconOnly
+                            onClicked: row.here ? bar.ponds.leaveVoice() : bar.ponds.joinVoice(row.model.id)
+                            Accessible.name: row.here ? qsTr("Leave voice in %1").arg(row.model.name) : qsTr("Join voice in %1").arg(row.model.name)
+                            ToolTip.text: row.here ? qsTr("Leave voice") : qsTr("Join voice")
+                            ToolTip.visible: hovered
+                            ToolTip.delay: 300
+                        }
                     }
                     ToolTip.text: row.model.topic
                     ToolTip.visible: rowHover.hovered && row.model.topic !== ""

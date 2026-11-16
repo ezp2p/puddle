@@ -225,7 +225,8 @@ The owner's routes: `POST /api/v1/ponds/{pond}/channels/{channel}/voice/join`, `
 voice channel who is in it (`voice`).
 
 In the window (`PondSidebar.qml`), a voice channel has a speaker instead of `#`, and who is in it underneath, ringed while
-they talk; clicking it joins and shows its messages (a voice channel takes text too). While in one, in any Pond, a bar at the
+they talk. Clicking it shows its messages, as for any channel (a voice channel takes text too); the phone beside it joins
+its voice, with nothing to answer, and while in it becomes a red one to leave. While in one, in any Pond, a bar at the
 bottom of the channel list says which, with mute, deafen and leave. Who is talking comes from the frames arriving (the Mixer
 in `callaudio.*`: anyone heard from in the last 300 ms), and this end from its own microphone. How the microphone goes is
 the owner's choice in Settings (`TalkGate`): voice activation (the default: sent while louder than a threshold, held 300 ms
