@@ -14,6 +14,8 @@ Card {
 
     required property var chats
     property var video: null        // the call's video (CallVideo); none, no camera button
+    property var view: null         // the shell's video pane state (popping it out)
+    signal openRequested()          // the name was clicked: the call's chat
     readonly property var calls: chats.calls
     readonly property string state: calls.state
     readonly property bool ringingHere: state === "ringing"
@@ -45,7 +47,19 @@ Card {
         Avatar { visible: bar.state !== ""; chats: bar.chats; name: bar.calls.name; hash: ""; size: 28 }
         ColumnLayout {
             spacing: 0
-            Label { visible: bar.state !== ""; text: bar.calls.name; font.bold: true; elide: Text.ElideRight; Layout.maximumWidth: 220 }
+            Label {
+                objectName: "callName"
+                visible: bar.state !== ""
+                text: bar.calls.name
+                font.bold: true
+                font.underline: callNameHover.hovered
+                elide: Text.ElideRight
+                Layout.maximumWidth: 220
+                HoverHandler { id: callNameHover; cursorShape: Qt.PointingHandCursor }
+                TapHandler { onTapped: bar.openRequested() }
+                Accessible.role: Accessible.Link
+                Accessible.name: qsTr("Go to %1").arg(text)
+            }
             Label {
                 objectName: "callStatus"
                 font.pixelSize: 12
@@ -104,6 +118,20 @@ Card {
             ToolTip.text: Accessible.name
             ToolTip.visible: hovered
             onClicked: bar.calls.toggleCamera()
+        }
+        // the video in a window of its own
+        ToolButton {
+            objectName: "callPopOut"
+            visible: bar.state === "active" && bar.calls.here && bar.view !== null && bar.video !== null && bar.video.built
+            highlighted: bar.view !== null && bar.view.popped
+            icon.source: Theme.icon("external-link")
+            icon.width: Theme.iconSize
+            icon.height: Theme.iconSize
+            display: AbstractButton.IconOnly
+            Accessible.name: bar.view !== null && bar.view.popped ? qsTr("Put the video back") : qsTr("Video in its own window")
+            ToolTip.text: Accessible.name
+            ToolTip.visible: hovered
+            onClicked: { bar.view.popped = !bar.view.popped; bar.view.full = false }
         }
         // share the screen (in the window; a call a phone has carries none yet)
         ToolButton {

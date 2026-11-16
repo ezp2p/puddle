@@ -18,23 +18,30 @@ Rectangle {
     property var backend: null          // who is talking, and the order chosen
     property var nameOf: key => key     // a sender's name, by the key their frames come with
     property bool inWindow: false       // this is the popped-out window's
+    property var people: []             // who else is in it (ids, in the order they came): a tile each, video or not
+    property var chats: null            // for pictures (Avatar)
     readonly property bool active: visible && video !== null && video.running
 
-    // the tiles: everyone's, as they came, then this end's
+    // the tiles: each person in it (their camera, or their picture while it is off), then anyone else's video and every
+    // screen shared, as they came, then this end (its camera or picture, and its screen)
     readonly property var keys: {
         if (!active)
             return []
-        let all = video.sources.slice()
+        let all = people.slice()
+        for (const k of video.sources)
+            if (all.indexOf(k) < 0)
+                all.push(k)
         if (backend && backend.videoOrder === "speaking") { /* those talking first, the rest as they came */
             const talking = k => backend.speaking.indexOf(k.endsWith("/screen") ? "" : k) >= 0
             all = all.filter(talking).concat(all.filter(k => !talking(k)))
         }
-        if (video.cameraOn)
-            all.push("self")
+        all.push("self")
         if (video.screenOn)
             all.push("self/screen")
         return all
     }
+    // whose video is coming in now (a tile without shows a picture)
+    function hasVideo(key) { return key === "self" ? video.cameraOn : key === "self/screen" ? video.screenOn : video.sources.indexOf(key) >= 0 }
     readonly property string pinned: keys.indexOf(view.pinned) >= 0 ? view.pinned : ""
 
     function title(key) {
@@ -63,14 +70,25 @@ Rectangle {
         required property string key
         property bool small: false
         readonly property bool screen: key.endsWith("/screen")
+        readonly property bool live: pane.video !== null && pane.hasVideo(key)
         objectName: "videoTile_" + key
         color: "#111"
         radius: 6
         clip: true
         border.width: pane.talking(key) ? 3 : 0
         border.color: Theme.primary
+        // no video from them: their picture
+        Avatar {
+            visible: !tile.live
+            anchors.centerIn: parent
+            chats: pane.chats
+            name: tile.key === "self" && pane.chats ? pane.chats.myName : pane.title(tile.key)
+            hash: tile.key === "self" && pane.chats ? pane.chats.myAvatar : ""
+            size: Math.max(32, Math.min(96, Math.min(tile.width, tile.height) * 0.4))
+        }
         VideoOutput {
             id: out
+            visible: tile.live
             anchors.fill: parent
             anchors.margins: tile.border.width
             fillMode: tile.screen ? VideoOutput.PreserveAspectFit : VideoOutput.PreserveAspectCrop
@@ -169,13 +187,6 @@ Rectangle {
         }
     }
 
-    Label {
-        visible: pane.active && pane.keys.length === 0
-        anchors.centerIn: parent
-        color: "white"
-        opacity: 0.7
-        text: qsTr("Nobody's camera or screen is on.")
-    }
 
     // full size, pop out (or, in the window, put back): at the bottom, clear of a call's bar floating over the top of the page
     Row {

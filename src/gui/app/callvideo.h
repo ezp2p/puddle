@@ -163,5 +163,6 @@ private:
     };
     QHash<QString, Source> sources_;
     QPointer<QVideoSink> self_;
+    QHash<QString, QPointer<QVideoSink>> wanted_;        // a tile's sink, by key, kept for when that sender's video comes
     QTimer sweep_;
 };

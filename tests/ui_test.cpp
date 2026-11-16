@@ -453,10 +453,19 @@ int main(int argc, char **argv)
             bobShares(5);
             CHECK(until([&] { return find("videoPane") != nullptr && !(popped && popped->isVisible()); }, 3000));
 
-            /* the camera off: its tile goes; Bob's go once his pictures stop, and the pane with them */
+            /* the camera off: everyone keeps a tile for the whole call, with their picture while no video comes; Bob's
+             * screen tile goes once his pictures stop */
             CHECK(click(find("cameraButton")));
-            CHECK(until([&] { return !ca.camera() && !video->cameraOn() && find("videoTile_self") == nullptr; }, 2000)); /* (find: the visible only) */
-            CHECK(until([&] { return find("videoTile_" + bob.uid) == nullptr && find("videoPane") == nullptr; }, 6000));
+            CHECK(until([&] { return !ca.camera() && !video->cameraOn() && find("videoTile_self") && !find("videoTile_self")->property("live").toBool(); }, 2000));
+            CHECK(until([&] { return find("videoTile_" + bobScreen) == nullptr && find("videoTile_" + bob.uid) &&
+                                     !find("videoTile_" + bob.uid)->property("live").toBool(); }, 6000));
+            CHECK(find("videoPane") != nullptr && find("videoSplit") != nullptr); /* the chat, split: video above, messages below */
+
+            /* elsewhere, the call's name in the bar takes you back to its chat */
+            CHECK(clickName("settingsButton"));
+            CHECK(until([&] { return find("videoPane") == nullptr; }, 2000));
+            CHECK(click(find("callName")));
+            CHECK(until([&] { return A.current() == bob.uid && find("videoPane") != nullptr; }, 3000));
         }
         CHECK(click(find("hangUpButton")));
         CHECK(until([&] { return ca.state().isEmpty() && cb.state().isEmpty(); }, 10000));

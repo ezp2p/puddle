@@ -31,6 +31,7 @@ Pane {
         property bool full: false      // covers the messages
         property bool popped: false    // in a window of its own
         property string pinned: ""     // the tile shown large
+        property real share: 0.5       // how much of the page it takes, above the messages
     }
     // the call's chat is open, so its video is in that chat's pane
     readonly property bool videoInPage: page === "chat" && chats.calls.state === "active" &&
@@ -63,6 +64,9 @@ Pane {
             video: shell.backend.video
             view: videoView
             backend: shell.backend
+            chats: shell.chats
+            people: shell.backend.phone ? [] : shell.chats.calls.state !== "" ? shell.chats.calls.people
+                                                                                : shell.chats.ponds.voicePeople.filter(id => id !== shell.backend.myId)
             nameOf: key => shell.videoName(key)
         }
     }
@@ -248,21 +252,28 @@ Pane {
                 id: callBar
                 chats: shell.chats
                 video: shell.backend.video
+                view: videoView
                 z: 10
                 anchors.top: parent.top
                 anchors.topMargin: Theme.headerHeight + 8
                 anchors.horizontalCenter: parent.horizontalCenter
+                onOpenRequested: shell.chats.calls.group !== "" ? shell.openChat(shell.chats.calls.group, "group") : shell.openChat(shell.chats.calls.user, "dm")
             }
-            // and its video, under it
-            CallVideoView {
+            // the Pond voice channel you are in, likewise (never with a call: one at a time)
+            VoiceToast {
                 chats: shell.chats
                 video: shell.backend.video
-                // a call's video when its chat isn't open (there, it is in the chat's video pane), and not popped out
-                hidden: shell.chats.calls.state === "" || videoView.popped || shell.videoInPage
+                view: videoView
                 z: 10
-                anchors.top: callBar.bottom
-                anchors.topMargin: 8
+                anchors.top: callBar.visible ? callBar.bottom : parent.top
+                anchors.topMargin: callBar.visible ? 8 : Theme.headerHeight + 8
                 anchors.horizontalCenter: parent.horizontalCenter
+                onOpenRequested: {
+                    const pond = shell.ponds.voicePond, channel = shell.ponds.voiceChannel
+                    if (shell.page !== "pond" || shell.ponds.current !== pond)
+                        shell.openPond(pond)
+                    shell.ponds.openChannel(channel)
+                }
             }
         }
 
@@ -426,6 +437,7 @@ Pane {
                 chats: shell.chats
                 backend: shell.backend
                 onSettingsRequested: pondSettings.show("overview")
+                onAppSettingsRequested: shell.openLog()
                 onNotice: text => toast.show(text)
                 onLeaveRequested: leaveConfirm.ask(qsTr("Leave %1?").arg(shell.ponds.currentName),
                                                    qsTr("You will need a new invite to join again. What your Puddle kept of it is forgotten."),

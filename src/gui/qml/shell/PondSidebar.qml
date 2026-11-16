@@ -8,7 +8,7 @@ import "../theme"
 // administrator, how you appear there, your id, leaving), a role the Pond offers you if it does, then its channels. A voice
 // channel (docs/ponds.md, "Voice channels") has a speaker, and who is in it underneath, lit while they talk; clicking it shows
 // its messages, like any channel, and the phone beside it joins its voice (nothing to answer), or leaves it. While you are in
-// one, in any Pond, a bar at the bottom says which, with mute, deafen and leave.
+// one, a bar floats over the page (VoiceToast.qml). Your own row at the bottom has the app's Settings.
 Rectangle {
     id: bar
 
@@ -20,6 +20,7 @@ Rectangle {
     readonly property var speaking: backend ? backend.speaking : []
     signal leaveRequested()
     signal settingsRequested()
+    signal appSettingsRequested()      // the app's Settings (not the Pond's)
     signal notice(string text)
 
     // Alt+Up and Alt+Down walk through the channels
@@ -282,88 +283,27 @@ Rectangle {
             text: bar.ponds.currentStatus === "connecting" ? qsTr("Connecting…") : qsTr("This Pond has no channels yet.")
         }
 
-        // the voice channel we are in, whichever Pond it is in
+        // you: who you are here, and the settings (reachable whatever is going on, a voice channel too)
         Rectangle {
-            objectName: "voiceBar"
-            visible: bar.ponds.voiceState !== ""
+            objectName: "pondSelf"
             Layout.fillWidth: true
-            implicitHeight: voiceRow.implicitHeight + 16
-            color: Theme.tint(Theme.text, 0.04)
-            Rectangle { anchors.top: parent.top; width: parent.width; height: 1; color: Theme.hairline }
+            implicitHeight: 56
+            color: "transparent"
+            Rectangle { width: parent.width; height: 1; color: Theme.hairline }
             RowLayout {
-                id: voiceRow
                 anchors.fill: parent
-                anchors.leftMargin: 12
+                anchors.leftMargin: 8
                 anchors.rightMargin: 8
-                spacing: 4
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: 0
-                    Label {
-                        objectName: "voiceStatus"
-                        font.bold: true
-                        font.pixelSize: 13
-                        color: bar.ponds.voiceState === "active" ? Theme.primary : bar.ponds.voiceState === "ended" ? Theme.danger : palette.windowText
-                        text: bar.ponds.voiceState === "active" ? qsTr("Voice connected")
-                              : bar.ponds.voiceState === "connecting" ? qsTr("Connecting…")
-                              : bar.ponds.voiceReason === "removed" ? qsTr("Disconnected by the Pond") : qsTr("Voice disconnected")
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        elide: Text.ElideRight
-                        font.pixelSize: 12
-                        opacity: 0.7
-                        text: bar.ponds.voiceName + (bar.ponds.voicePondName !== "" ? " / " + bar.ponds.voicePondName : "")
-                    }
-                }
+                spacing: 8
+                Avatar { chats: bar.chats; name: bar.chats.myName; hash: bar.chats.myAvatar; size: 32 }
+                Label { text: bar.chats.myName !== "" ? bar.chats.myName : qsTr("You"); font.bold: true; elide: Text.ElideRight; Layout.fillWidth: true }
                 ToolButton {
-                    objectName: "voiceMute"
-                    visible: bar.ponds.voiceState !== "ended"
-                    icon.source: Theme.icon(bar.ponds.voiceMuted ? "microphone-off" : "microphone")
-                    highlighted: bar.ponds.voiceMuted
-                    onClicked: bar.ponds.setVoiceMuted(!bar.ponds.voiceMuted)
-                    Accessible.name: bar.ponds.voiceMuted ? qsTr("Unmute") : qsTr("Mute")
-                    ToolTip.text: Accessible.name
-                    ToolTip.visible: hovered
-                }
-                // our camera, and our screen shared, in the voice channel
-                ToolButton {
-                    objectName: "voiceCamera"
-                    visible: bar.ponds.voiceState === "active" && bar.backend !== null && bar.backend.video.built
-                    icon.source: Theme.icon(bar.ponds.voiceCamera ? "video" : "video-off")
-                    highlighted: bar.ponds.voiceCamera
-                    onClicked: bar.ponds.setVoiceCamera(!bar.ponds.voiceCamera)
-                    Accessible.name: bar.ponds.voiceCamera ? qsTr("Turn the camera off") : qsTr("Turn the camera on")
-                    ToolTip.text: Accessible.name
-                    ToolTip.visible: hovered
-                }
-                ToolButton {
-                    objectName: "voiceScreen"
-                    visible: bar.ponds.voiceState === "active" && bar.backend !== null && bar.backend.video.built
-                    icon.source: Theme.icon(bar.ponds.voiceScreen ? "screen-share-off" : "screen-share")
-                    highlighted: bar.ponds.voiceScreen
-                    onClicked: bar.ponds.setVoiceScreen(!bar.ponds.voiceScreen)
-                    Accessible.name: bar.ponds.voiceScreen ? qsTr("Stop sharing your screen") : qsTr("Share your screen")
-                    ToolTip.text: Accessible.name
-                    ToolTip.visible: hovered
-                }
-                ToolButton {
-                    objectName: "voiceDeafen"
-                    visible: bar.ponds.voiceState !== "ended"
-                    icon.source: Theme.icon(bar.ponds.voiceDeafened ? "headphones-off" : "headphones")
-                    highlighted: bar.ponds.voiceDeafened
-                    onClicked: bar.ponds.setVoiceDeafened(!bar.ponds.voiceDeafened)
-                    Accessible.name: bar.ponds.voiceDeafened ? qsTr("Undeafen") : qsTr("Deafen")
-                    ToolTip.text: Accessible.name
-                    ToolTip.visible: hovered
-                }
-                ToolButton {
-                    objectName: "voiceLeave"
-                    icon.source: Theme.icon(bar.ponds.voiceState === "ended" ? "x" : "phone-off")
-                    onClicked: bar.ponds.leaveVoice()
-                    Accessible.name: bar.ponds.voiceState === "ended" ? qsTr("Dismiss") : qsTr("Leave the voice channel")
-                    ToolTip.text: Accessible.name
-                    ToolTip.visible: hovered
+                    objectName: "pondSettingsButton"
+                    icon.source: Theme.icon("settings"); icon.width: Theme.iconSize; icon.height: Theme.iconSize
+                    display: AbstractButton.IconOnly
+                    Accessible.name: qsTr("Settings")
+                    ToolTip.text: qsTr("Settings"); ToolTip.visible: hovered
+                    onClicked: bar.appSettingsRequested()
                 }
             }
         }

@@ -191,17 +191,42 @@ Pane {
             readonly property var calls: page.chats.calls
             readonly property bool here: calls.state === "active" && calls.here &&
                                          page.chats.current === (calls.group !== "" ? calls.group : calls.user)
-            visible: here && page.video !== null && page.view !== null && !page.view.popped &&
-                     (page.video.sources.length > 0 || page.video.cameraOn || page.video.screenOn)
+            visible: here && page.video !== null && page.view !== null && !page.view.popped
             video: page.video
             view: page.view
             backend: page.backend
+            chats: page.chats
+            people: page.backend && page.backend.phone ? [] : calls.people   /* a phone's keys are its leg's, not ids */
             nameOf: key => key === "" ? calls.name : key.startsWith("slot:") ? page.chats.nameOf(calls.slotUser(parseInt(key.substring(5))))
                                                                               : page.chats.nameOf(key)
             Layout.fillWidth: true
-            Layout.margins: 8
-            Layout.preferredHeight: Math.max(200, page.height * 0.42)
+            Layout.leftMargin: 8
+            Layout.rightMargin: 8
+            Layout.topMargin: 8
+            Layout.preferredHeight: page.view ? Math.max(160, page.height * page.view.share) : 0
             Layout.fillHeight: page.view !== null && page.view.full
+        }
+        // the split between the video and the messages: dragged to make either bigger
+        Rectangle {
+            objectName: "videoSplit"
+            visible: videoPane.visible && !page.view.full
+            Layout.fillWidth: true
+            implicitHeight: 7
+            color: splitDrag.containsMouse || splitDrag.pressed ? Theme.tint(Theme.text, Theme.hover) : "transparent"
+            Rectangle { anchors.centerIn: parent; width: 40; height: 3; radius: 2; color: Theme.hairline }
+            MouseArea {
+                id: splitDrag
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.SplitVCursor
+                property real startY: 0
+                property real startShare: 0
+                onPressed: mouse => { startY = mapToItem(page, 0, mouse.y).y; startShare = page.view.share }
+                onPositionChanged: mouse => {
+                    if (pressed)
+                        page.view.share = Math.max(0.2, Math.min(0.8, startShare + (mapToItem(page, 0, mouse.y).y - startY) / page.height))
+                }
+            }
         }
 
         // the messages

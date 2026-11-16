@@ -1,6 +1,8 @@
 #include "ponds.h"
 
 #include <QDateTime>
+
+#include <algorithm>
 #include <QJsonArray>
 #include <QUrl>
 
@@ -110,12 +112,25 @@ void Ponds::refresh()
             for (const QJsonValue &c : po.value("channels").toArray())
                 names.insert(QString::number(qint64(c.toObject().value("id").toDouble())), c.toObject().value("name").toString());
             channelNames_.insert(po.value("id").toString(), names);
+            QHash<QString, QStringList> in;
+            for (const QJsonValue &c : po.value("channels").toArray()) {
+                QList<QPair<int, QString>> bySlot;
+                for (const QJsonValue &v : c.toObject().value("voice").toArray())
+                    bySlot.append({ v.toObject().value("slot").toInt(), v.toObject().value("member").toString() });
+                std::sort(bySlot.begin(), bySlot.end());
+                QStringList ids;
+                for (auto &[slot, id] : bySlot)
+                    ids << id;
+                in.insert(QString::number(qint64(c.toObject().value("id").toDouble())), ids);
+            }
+            voiceIn_.insert(po.value("id").toString(), in);
             pondNames_.insert(po.value("id").toString(), po.value("name").toString());
             rows.append({ { "id", po.value("id") }, { "name", po.value("name") }, { "status", po.value("status") }, { "address", po.value("address") } });
             if (po.value("id").toString() == current_)
                 stillThere = true;
         }
         list_.setItems(rows);
+        updateVoicePeople();
         if (!current_.isEmpty() && !stillThere) { // we left it (here or on another device)
             close();
             return;
@@ -521,6 +536,17 @@ void Ponds::takeVoice(const QJsonObject &voice)
     if (voice == voice_)
         return;
     voice_ = voice;
+    voicePeople_ = voiceIn_.value(voicePond()).value(voiceChannel());
+    emit voiceChanged();
+}
+
+// who is in our voice channel, as the Pond last said (slots are given in turn, so by slot is about the order they came)
+void Ponds::updateVoicePeople()
+{
+    const QStringList now = voiceIn_.value(voicePond()).value(voiceChannel());
+    if (now == voicePeople_)
+        return;
+    voicePeople_ = now;
     emit voiceChanged();
 }
 

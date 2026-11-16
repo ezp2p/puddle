@@ -43,6 +43,7 @@ class Ponds : public QObject {
     Q_PROPERTY(bool voiceDeafened READ voiceDeafened NOTIFY voiceChanged)
     Q_PROPERTY(bool voiceCamera READ voiceCamera NOTIFY voiceChanged)       // our camera, in the voice channel
     Q_PROPERTY(bool voiceScreen READ voiceScreen NOTIFY voiceChanged)       // the screen we share there
+    Q_PROPERTY(QStringList voicePeople READ voicePeople NOTIFY voiceChanged) // who is in our voice channel, by id, in the order they came (us too)
 public:
     explicit Ponds(ApiClient *api, QObject *parent = nullptr);
 
@@ -75,6 +76,7 @@ public:
     bool voiceDeafened() const { return voice_.value("deafened").toBool(); }
     bool voiceCamera() const { return voice_.value("camera").toBool(); }
     bool voiceScreen() const { return voice_.value("screen").toBool(); }
+    QStringList voicePeople() const { return voicePeople_; }
 
     void start() { timer_.start(); refresh(); }
     void stop() { timer_.stop(); }
@@ -155,6 +157,9 @@ private:
     QHash<QString, QHash<QString, QString>> channelNames_; // pond id -> channel id -> name, of every Pond (for the voice bar)
     QHash<QString, QString> pondNames_;
     bool busyVoice_ = false;
+    QStringList voicePeople_;
+    QHash<QString, QHash<QString, QStringList>> voiceIn_; // pond id -> channel id -> who is in it (by slot), from the list
+    void updateVoicePeople();
     int voiceGen_ = 0;                             // the owner changed something since a request for it went out: drop its answer
     QList<QJsonObject> loaded_;                    // the open channel's messages, oldest first, as the API gives them
     bool hasOlder_ = false, joining_ = false, busyList_ = false, busyMessages_ = false, busyOlder_ = false;

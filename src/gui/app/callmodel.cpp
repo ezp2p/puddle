@@ -65,6 +65,12 @@ void Calls::take(const QJsonObject &call)
     group_ = live ? call.value("group").toString() : QString();
     others_ = live ? int(call.value("members").toArray().size()) : 0;
     slots_.clear();
+    people_.clear();
+    if (live && group_.isEmpty())
+        people_ << user_;
+    for (const QJsonValue &m : call.value("members").toArray())
+        if (live && !m.toObject().value("user").toString().isEmpty())
+            people_ << m.toObject().value("user").toString();
     for (const QJsonValue &m : call.value("members").toArray())
         if (live && m.toObject().value("slot").toInt() > 0)
             slots_.insert(m.toObject().value("slot").toInt(), m.toObject().value("user").toString());

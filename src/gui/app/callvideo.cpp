@@ -586,6 +586,8 @@ void CallVideo::deliver(const QString &key, const Picture &picture)
         return;
     Source &s = sources_[key];
     const bool fresh = s.last == 0;
+    if (!s.sink && wanted_.contains(key))
+        s.sink = wanted_.value(key); /* its tile was there first */
     if (fresh && !order_.contains(key))
         order_.append(key);
     s.last = nowMs();
@@ -633,6 +635,7 @@ void CallVideo::attach(const QString &key, QObject *videoSink)
         selfScreen_ = sink;
         return;
     }
+    wanted_.insert(key, sink);
     auto it = sources_.find(key);
     if (it == sources_.end())
         return;

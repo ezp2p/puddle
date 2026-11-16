@@ -26,6 +26,7 @@ class Calls : public QObject {
     Q_PROPERTY(QString user READ user NOTIFY changed)           // the friend; who started it, in a group call
     Q_PROPERTY(QString group READ group NOTIFY changed)         // the group, in a group call; "" with a friend
     Q_PROPERTY(int others READ others NOTIFY changed)           // in a group call: how many others are in it
+    Q_PROPERTY(QStringList people READ people NOTIFY changed)   // the others in the call, by id: the friend, or the members in it
     Q_PROPERTY(QString name READ name NOTIFY changed)           // the friend's name, or the group's
     Q_PROPERTY(bool incoming READ incoming NOTIFY changed)
     Q_PROPERTY(qint64 answeredAt READ answeredAt NOTIFY changed) // ms since the epoch, 0 until it connected
@@ -43,6 +44,7 @@ public:
     QString user() const { return user_; }
     QString group() const { return group_; }
     int others() const { return others_; }
+    QStringList people() const { return people_; }
     QString name() const { return nameOf_ ? nameOf_(group_.isEmpty() ? user_ : group_) : user_; }
     bool incoming() const { return incoming_; }
     qint64 answeredAt() const { return answered_; }
@@ -109,6 +111,7 @@ private:
     quint64 version_ = 0;
     bool busy_ = false;
     QString state_, id_, user_, group_, error_;
+    QStringList people_;
     int others_ = 0;
     QHash<QString, int> groupCalls_;
     bool incoming_ = false, muted_ = false, camera_ = false, screen_ = false;
