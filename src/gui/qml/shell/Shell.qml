@@ -23,6 +23,49 @@ Pane {
 
     required property var backend
     readonly property var chats: backend.chats
+
+    // the video pane's (VideoPane.qml): shared by the page it is in and the window it pops out to
+    QtObject {
+        id: videoView
+        objectName: "videoView"
+        property bool full: false      // covers the messages
+        property bool popped: false    // in a window of its own
+        property string pinned: ""     // the tile shown large
+    }
+    // the call's chat is open, so its video is in that chat's pane
+    readonly property bool videoInPage: page === "chat" && chats.calls.state === "active" &&
+                                        chats.current === (chats.calls.group !== "" ? chats.calls.group : chats.calls.user)
+    // whose a tile is, wherever the pane is: a Pond voice channel's member, or a call's friend or member
+    function videoName(key) {
+        if (chats.ponds.voiceState === "active" && chats.calls.state === "")
+            return chats.ponds.nameOf(key)
+        if (key === "")
+            return chats.calls.name
+        if (key.startsWith("slot:"))
+            return chats.nameOf(chats.calls.slotUser(parseInt(key.substring(5))))
+        return chats.nameOf(key)
+    }
+    // the pane, popped out
+    Window {
+        id: videoWindow
+        objectName: "videoWindow"
+        title: qsTr("Puddle: video")
+        width: 960
+        height: 600
+        color: "black"
+        visible: videoView.popped && shell.backend.video.running
+        onClosing: videoView.popped = false
+        // put back (or the call over): the main window has the keyboard again
+        onVisibleChanged: if (!visible && shell.Window.window) shell.Window.window.requestActivate()
+        VideoPane {
+            anchors.fill: parent
+            inWindow: true
+            video: shell.backend.video
+            view: videoView
+            backend: shell.backend
+            nameOf: key => shell.videoName(key)
+        }
+    }
     readonly property var ponds: chats.ponds
     readonly property bool wide: width >= Theme.wideBreakpoint
     // "home" (nothing open), "chat", "pond" (a Pond's channel) or "log" (the settings, for now)
@@ -173,6 +216,9 @@ Pane {
                 onToggleSidebar: shell.toggleSidebar()
             }
             PondPage {
+                video: shell.backend.video
+                backend: shell.backend
+                view: videoView
                 objectName: "pondPage"
                 anchors.fill: parent
                 visible: shell.page === "pond"
@@ -184,6 +230,9 @@ Pane {
                 onToggleContext: shell.toggleContext()
             }
             ChatPage {
+                video: shell.backend.video
+                backend: shell.backend
+                view: videoView
                 objectName: "chatPage"
                 anchors.fill: parent
                 visible: shell.page === "chat"
@@ -208,6 +257,8 @@ Pane {
             CallVideoView {
                 chats: shell.chats
                 video: shell.backend.video
+                // a call's video when its chat isn't open (there, it is in the chat's video pane), and not popped out
+                hidden: shell.chats.calls.state === "" || videoView.popped || shell.videoInPage
                 z: 10
                 anchors.top: callBar.bottom
                 anchors.topMargin: 8

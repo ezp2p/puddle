@@ -372,7 +372,7 @@ static int leave_voice(const puddle_call *c, puddle_jw *)
     return 204;
 }
 
-/* {muted?, deafened?}: each a boolean */
+/* {muted?, deafened?, camera?, screen?}: each a boolean */
 static int voice_state(const puddle_call *c, puddle_jw *w)
 {
     Body b(c);
@@ -386,9 +386,9 @@ static int voice_state(const puddle_call *c, puddle_jw *w)
             return 0;
         throw Error::badRequest();
     };
-    int muted = flag("muted"), deafened = flag("deafened");
+    int muted = flag("muted"), deafened = flag("deafened"), camera = flag("camera"), screen = flag("screen");
     const char *code = "failed";
-    if (voiceCourier(c).voice_state(c->ctx, muted, deafened, &code) != 0)
+    if (voiceCourier(c).voice_state(c->ctx, muted, deafened, camera, screen, &code) != 0)
         throw voiceFailure(code);
     return writeVoice(c, w);
 }

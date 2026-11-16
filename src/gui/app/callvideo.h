@@ -27,6 +27,7 @@
 
 class QCamera;
 class QMediaCaptureSession;
+class QScreenCapture;
 class QVideoSink;
 
 // A decoded picture, I420 (Y, then U and V at half size each way), tightly packed.
@@ -37,8 +38,10 @@ struct Picture {
     QVideoFrame toFrame() const;
 };
 
-// I420 at `w`x`h` from any image: scaled to cover, the middle kept.
+// I420 at `w`x`h` from any image: scaled to cover, the middle kept (a camera's picture).
 Picture pictureOf(const QImage &image, int w, int h);
+// I420 at `w`x`h` from any image: scaled to fit, all of it kept, black around it (a screen: nothing may be cut off).
+Picture pictureFitted(const QImage &image, int w, int h);
 
 class H264Encoder {
 public:
@@ -72,11 +75,17 @@ class CallVideo : public QObject {
     Q_PROPERTY(bool built READ built CONSTANT)                    // with OpenH264: video at all
     Q_PROPERTY(bool running READ running NOTIFY runningChanged)   // in a call with sound here
     Q_PROPERTY(bool cameraOn READ cameraOn NOTIFY cameraChanged)  // this end is sending
-    Q_PROPERTY(QStringList sources READ sources NOTIFY sourcesChanged) // those whose video is coming in now
+    Q_PROPERTY(bool screenOn READ screenOn NOTIFY screenChanged)  // this end shares its screen
+    Q_PROPERTY(bool canShareScreen READ canShareScreen NOTIFY runningChanged) // this call can carry a shared screen (a phone's can't yet)
+    // those whose video is coming in now, in the order they came (so nobody moves when someone else comes or goes): a sender's
+    // camera by their key, their screen as "<key>/screen"
+    Q_PROPERTY(QStringList sources READ sources NOTIFY sourcesChanged)
 public:
     using Send = std::function<void(const QByteArray &au)>;
     static constexpr int kWidth = 640, kHeight = 480, kFps = 15, kBitrate = 600000;
-    static constexpr int kGoneMs = 2000; // a sender with no frame for this long has stopped
+    // a shared screen: bigger, fewer frames, more bits (text must stay sharp)
+    static constexpr int kScreenWidth = 1280, kScreenHeight = 720, kScreenFps = 10, kScreenBitrate = 2500000;
+    static constexpr int kGoneMs = 2500; // a sender with no frame for this long has stopped
 
     explicit CallVideo(QObject *parent = nullptr);
     ~CallVideo() override;
@@ -84,23 +93,30 @@ public:
     static bool isBuilt();
     bool built() const { return isBuilt(); }
 
-    // In a call: `send` takes each access unit. stop() closes the camera and forgets every sender.
-    void start(Send send);
+    // In a call: `send` takes each access unit of the camera, `sendScreen` of the shared screen (none: this call can't carry
+    // one). stop() closes the camera and the screen, and forgets every sender.
+    void start(Send send, Send sendScreen = nullptr);
     void stop();
     bool running() const { return running_; }
     // The camera on or off. PUDDLE_TEST_NO_AUDIO in the environment never opens one (the tests feed() instead).
     void setCamera(bool on);
     bool cameraOn() const { return cameraOn_; }
+    // Share the screen, or stop. Asks the system which screen (and for leave) where it must. PUDDLE_TEST_NO_AUDIO: never really.
+    void setScreen(bool on);
+    bool screenOn() const { return screenOn_; }
+    bool canShareScreen() const { return running_ && sendScreen_ != nullptr; }
     // A sender's access unit: any thread.
     void received(const QString &from, uint32_t ts, const QByteArray &au);
     QStringList sources() const;
     Q_INVOKABLE void attach(const QString &key, QObject *videoSink);
-    // A picture as if the camera took it (tests).
+    // A picture as if the camera took it, or the screen (tests).
     void feed(const QImage &image);
+    void feedScreen(const QImage &image);
 
 signals:
     void runningChanged();
     void cameraChanged();
+    void screenChanged();
     void sourcesChanged();
     void cameraFailed(const QString &why);
 
@@ -108,6 +124,9 @@ private:
     void post(std::function<void()> job);
     void work();
     void encodeLater(const QImage &image);
+    void encodeScreenLater(const QImage &image);
+    void openScreen();
+    void closeScreen();
     void deliver(const QString &key, const Picture &picture);
     void openCamera();
     void closeCamera();
@@ -120,12 +139,19 @@ private:
     bool quit_ = false;
     std::thread worker_;
     std::unique_ptr<H264Encoder> encoder_;               // worker only
+    std::unique_ptr<H264Encoder> screenEncoder_;         // worker only
     QHash<QString, std::shared_ptr<H264Decoder>> decoders_; // worker only
-    Send send_;                                          // set under mu_
-    int pending_ = 0;                                    // pictures waiting to be encoded (under mu_): more than one, drop
+    Send send_, sendScreen_;                             // set under mu_
+    int pending_ = 0, screenPending_ = 0;                // pictures waiting to be encoded (under mu_): more than one, drop
 
     // the window's thread's
-    bool running_ = false, cameraOn_ = false;
+    bool running_ = false, cameraOn_ = false, screenOn_ = false;
+    QScreenCapture *screen_ = nullptr;
+    QMediaCaptureSession *screenSession_ = nullptr;
+    QVideoSink *screenSink_ = nullptr;
+    qint64 lastScreenShot_ = 0;
+    QPointer<QVideoSink> selfScreen_;
+    QStringList order_;                                  // the senders, in the order they came
     QCamera *camera_ = nullptr;
     QMediaCaptureSession *session_ = nullptr;
     QVideoSink *camSink_ = nullptr;

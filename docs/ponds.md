@@ -234,9 +234,17 @@ after so word endings aren't cut off; the Settings show how loud you are against
 the owner's choosing is held, while the window is in front). Between, nothing is sent at all, which is how the others see
 who is talking. A call sends the microphone always, unless muted.
 
+**Cameras and screens.** The connection to the Pond also carries the owner's camera (`video`) and shared screen (`screen`),
+sent while on (`/voice/state {camera, screen}`, which the Pond tells everyone), and 16 tracks that only come in, `v1` to
+`v16`. The Puddle watches everyone else's camera and screen by itself (`POST /pond/v1/voice/{session}/watch`): each new one
+takes the first free track and keeps it until it goes, so nobody's picture moves, up to 16 at once. They reach the device
+as from the member's id, or `<id>/screen`. In the window the video pane (as in calls: `docs/calls.md`, "The video pane")
+sits above the voice channel's messages while you are in it and someone's camera or screen is on; full size and pop out
+work the same, and the voice bar has the camera and screen buttons.
+
 Tested in `pondvoice_test` (a real Puddle and its window models against a stand-in Pond that speaks the voice routes with
-libdatachannel), `callaudio_test` (the gate, and who is talking), and the pond repository's `e2e_test` (two real Puddles in
-a real Pond's voice channel).
+libdatachannel: also cameras and screens both ways, and watching), `callaudio_test` (the gate, and who is talking), and the
+pond repository's `e2e_test` (two real Puddles in a real Pond's voice channel).
 
 ## In the app
 
@@ -260,7 +268,7 @@ open channel instead of the open chat.
 - Asking again, refusals and the other notes between Puddles (`docs/files.md`) do not apply to a Pond: it serves
   any member.
 - Mentions, replies, edits and reactions.
-- In a voice channel: a phone (roadmap 9.3), cameras (9.4), and admins disconnecting or muting someone (9.5). Push to talk
-  works only while the window is in front.
+- In a voice channel: a phone (roadmap 9.3), and admins disconnecting or muting someone (9.5). Push to talk works only
+  while the window is in front. More than 16 cameras and screens at once are not all watched.
 - A Pond changing its certificate: today the member must leave and join again. See the Pond's design, "Not yet".
 - Whether a Pond sees the same key as everyone else, or one derived for it (`discuss-later.md`).

@@ -57,6 +57,8 @@ class Backend : public QObject {
     Q_PROPERTY(QString pushKeyName READ pushKeyName NOTIFY talkChanged)
     // In a voice channel: who is talking now (members' ids; "self" for this end), and how loud the microphone is (dBFS)
     Q_PROPERTY(QStringList speaking READ speaking NOTIFY speakingChanged)
+    // How the video pane orders its tiles: "arrival" (as they came, nobody moves; the default) or "speaking" (those talking first)
+    Q_PROPERTY(QString videoOrder READ videoOrder WRITE setVideoOrder NOTIFY videoOrderChanged)
     Q_PROPERTY(double micLevel READ micLevel NOTIFY speakingChanged)
 public:
     explicit Backend(QObject *parent = nullptr);
@@ -86,6 +88,8 @@ public:
     void setPushKey(int key);
     QString pushKeyName() const;
     QStringList speaking() const { return speaking_; }
+    QString videoOrder() const { return videoOrder_; }
+    void setVideoOrder(const QString &order);
     double micLevel() const { return micLevel_; }
     bool needsSetup() const { return needsSetup_; }
     bool setupRedo() const { return setupRedo_; }
@@ -129,6 +133,7 @@ signals:
     void themeChanged();
     void talkChanged();
     void speakingChanged();
+    void videoOrderChanged();
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -162,6 +167,7 @@ private:
     CallVideo video_;         // and its camera and pictures
     QString soundFor_;        // what the sound is running for: "call", "voice", or "" (none)
     QString talkMode_ = QStringLiteral("voice");
+    QString videoOrder_ = QStringLiteral("arrival");
     int pushKey_ = 0;
     QStringList speaking_;
     double micLevel_ = -100;

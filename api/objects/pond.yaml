@@ -59,6 +59,7 @@ $defs:
             muted: { type: boolean }
             deafened: { type: boolean }
             camera: { type: boolean }
+            screen: { type: boolean, description: Sharing a screen }
   Member:
     type: object
     properties:

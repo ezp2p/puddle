@@ -12,6 +12,9 @@ Pane {
     id: page
 
     required property var chats
+    property var video: null      // CallVideo: the call's cameras and screens
+    property var backend: null
+    property var view: null       // the shell's video pane state
     property bool narrow: false
     property bool sidebarShown: true    // the conversations card is open
     signal toggleSidebar()
@@ -182,10 +185,30 @@ Pane {
             Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.hairline }
         }
 
+        // the call's video, while this is the call's chat
+        VideoPane {
+            id: videoPane
+            readonly property var calls: page.chats.calls
+            readonly property bool here: calls.state === "active" && calls.here &&
+                                         page.chats.current === (calls.group !== "" ? calls.group : calls.user)
+            visible: here && page.video !== null && page.view !== null && !page.view.popped &&
+                     (page.video.sources.length > 0 || page.video.cameraOn || page.video.screenOn)
+            video: page.video
+            view: page.view
+            backend: page.backend
+            nameOf: key => key === "" ? calls.name : key.startsWith("slot:") ? page.chats.nameOf(calls.slotUser(parseInt(key.substring(5))))
+                                                                              : page.chats.nameOf(key)
+            Layout.fillWidth: true
+            Layout.margins: 8
+            Layout.preferredHeight: Math.max(200, page.height * 0.42)
+            Layout.fillHeight: page.view !== null && page.view.full
+        }
+
         // the messages
         ScrollList {
             id: list
             objectName: "messageList"
+            visible: !(videoPane.visible && page.view.full)
             Layout.fillWidth: true
             Layout.fillHeight: true
             model: page.messages

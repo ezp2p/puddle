@@ -361,7 +361,8 @@ int main(int argc, char **argv)
             CHECK(until([&] { return find("cameraButton") && find("cameraButton")->isVisible(); }, 3000));
             CHECK(click(find("cameraButton")));
             CHECK(until([&] { return ca.camera() && video->cameraOn(); }, 2000));
-            CHECK(until([&] { return find("selfTile") && find("selfTile")->isVisible() && find("callVideo")->isVisible(); }, 3000));
+            /* the call's chat is open: its video is in the chat's pane, above the messages (not the floating tiles) */
+            CHECK(until([&] { return find("videoTile_self") && find("videoPane") && find("callVideo") == nullptr; }, 3000));
             for (int k = 0; k < 20 && atBob < 5; k++) { /* there is no camera here: pictures stand in for it */
                 video->feed(picture(k));
                 until([] { return false; }, 66);
@@ -379,19 +380,83 @@ int main(int argc, char **argv)
                 until([] { return false; }, 66);
             }
             CHECK(until([&] { return video->sources() == QStringList{ bob.uid }; }, 3000));
-            CHECK(until([&] {
-                QQuickItem *t = find("videoTile");
-                if (!t)
+            /* a tile, named: any label under it that says `text` */
+            std::function<bool(QQuickItem *, const QString &)> says = [&](QQuickItem *it, const QString &text) {
+                if (!it)
                     return false;
-                for (QQuickItem *c : t->childItems())
-                    if (c->property("text").toString() == "Bob")
+                if (it->property("text").toString() == text)
+                    return true;
+                for (QQuickItem *c : it->childItems())
+                    if (says(c, text))
                         return true;
                 return false;
-            }, 3000));
-            /* the camera off: its tile goes; Bob's goes once his pictures stop */
+            };
+            CHECK(until([&] { return says(find("videoTile_" + bob.uid), "Bob"); }, 3000));
+
+            /* our screen, shared from the bar: its own tile here, and it reaches Bob's Puddle as ours "/screen" */
+            static std::atomic<int> screenAtBob{ 0 };
+            puddle_calls_on_video(puddle_server_calls(bob.srv), [](void *, const char *, const char *from, const unsigned char *, size_t, uint32_t) {
+                if (QString::fromUtf8(from).endsWith("/screen"))
+                    screenAtBob++;
+            }, nullptr);
+            CHECK(until([&] { return find("screenButton") && find("screenButton")->isVisible(); }, 3000));
+            CHECK(click(find("screenButton")));
+            CHECK(until([&] { return ca.screen() && video->screenOn() && find("videoTile_self/screen"); }, 2000));
+            for (int k = 0; k < 20 && screenAtBob < 3; k++) {
+                QImage desk(1600, 900, QImage::Format_RGB32);
+                desk.fill(qRgb(230, 230, 230));
+                video->feedScreen(desk);
+                until([] { return false; }, 110);
+            }
+            CHECK(screenAtBob >= 3);
+            puddle_calls_on_video(puddle_server_calls(bob.srv), nullptr, nullptr);
+            CHECK(click(find("screenButton")));
+            CHECK(until([&] { return !ca.screen() && !video->screenOn() && find("videoTile_self/screen") == nullptr; }, 2000));
+
+            /* Bob shares his: a tile of its own, "Bob's screen"; clicking it pins it large, the rest in a strip */
+            H264Encoder senc;
+            CHECK(senc.open(CallVideo::kScreenWidth, CallVideo::kScreenHeight, CallVideo::kScreenFps, CallVideo::kScreenBitrate));
+            auto bobShares = [&](int frames) {
+                for (int k = 0; k < frames; k++) {
+                    QImage desk(1280, 720, QImage::Format_RGB32);
+                    desk.fill(qRgb(250, 250, 250));
+                    const QByteArray au = senc.encode(pictureFitted(desk, CallVideo::kScreenWidth, CallVideo::kScreenHeight), k * 100);
+                    if (!au.isEmpty())
+                        puddle_call_send_screen(puddle_server_calls(bob.srv), bid.constData(), reinterpret_cast<const unsigned char *>(au.constData()), size_t(au.size()));
+                    const QByteArray cam = enc.encode(pictureOf(picture(k), CallVideo::kWidth, CallVideo::kHeight), 2000 + k * 100);
+                    if (!cam.isEmpty())
+                        puddle_call_send_video(puddle_server_calls(bob.srv), bid.constData(), reinterpret_cast<const unsigned char *>(cam.constData()), size_t(cam.size()));
+                    until([] { return false; }, 100);
+                }
+            };
+            bobShares(10);
+            const QString bobScreen = bob.uid + "/screen";
+            CHECK(until([&] { return video->sources() == (QStringList{ bob.uid, bobScreen }); }, 3000)); /* in the order they came */
+            CHECK(until([&] { return says(find("videoTile_" + bobScreen), "Bob's screen"); }, 3000));
+            QObject *view = win->findChild<QObject *>("videoView");
+            CHECK(view && click(find("videoTile_" + bobScreen)));
+            CHECK(view && view->property("pinned").toString() == bobScreen);
+            /* full size: the messages make way; pop out: a window of its own, and none in the page */
+            CHECK(click(find("videoFull")));
+            CHECK(until([&] { return find("messageList") == nullptr; }, 2000));
+            CHECK(click(find("videoFull")));
+            CHECK(until([&] { return find("messageList") != nullptr; }, 2000));
+            CHECK(click(find("videoPopOut")));
+            CHECK(until([&] { return view->property("popped").toBool() && find("videoPane") == nullptr; }, 2000));
+            QQuickWindow *popped = nullptr;
+            for (QWindow *w : QGuiApplication::topLevelWindows())
+                if (w->objectName() == "videoWindow" || w->title() == "Puddle: video")
+                    popped = qobject_cast<QQuickWindow *>(w);
+            CHECK(popped && popped->isVisible());
+            view->setProperty("popped", false); /* put back */
+            view->setProperty("pinned", QString());
+            bobShares(5);
+            CHECK(until([&] { return find("videoPane") != nullptr && !(popped && popped->isVisible()); }, 3000));
+
+            /* the camera off: its tile goes; Bob's go once his pictures stop, and the pane with them */
             CHECK(click(find("cameraButton")));
-            CHECK(until([&] { return !ca.camera() && !video->cameraOn() && find("selfTile") == nullptr; }, 2000)); /* (find: the visible only) */
-            CHECK(until([&] { return find("videoTile") == nullptr && find("callVideo") == nullptr; }, 5000));
+            CHECK(until([&] { return !ca.camera() && !video->cameraOn() && find("videoTile_self") == nullptr; }, 2000)); /* (find: the visible only) */
+            CHECK(until([&] { return find("videoTile_" + bob.uid) == nullptr && find("videoPane") == nullptr; }, 6000));
         }
         CHECK(click(find("hangUpButton")));
         CHECK(until([&] { return ca.state().isEmpty() && cb.state().isEmpty(); }, 10000));

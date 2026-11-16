@@ -326,6 +326,27 @@ Rectangle {
                     ToolTip.text: Accessible.name
                     ToolTip.visible: hovered
                 }
+                // our camera, and our screen shared, in the voice channel
+                ToolButton {
+                    objectName: "voiceCamera"
+                    visible: bar.ponds.voiceState === "active" && bar.backend !== null && bar.backend.video.built
+                    icon.source: Theme.icon(bar.ponds.voiceCamera ? "video" : "video-off")
+                    highlighted: bar.ponds.voiceCamera
+                    onClicked: bar.ponds.setVoiceCamera(!bar.ponds.voiceCamera)
+                    Accessible.name: bar.ponds.voiceCamera ? qsTr("Turn the camera off") : qsTr("Turn the camera on")
+                    ToolTip.text: Accessible.name
+                    ToolTip.visible: hovered
+                }
+                ToolButton {
+                    objectName: "voiceScreen"
+                    visible: bar.ponds.voiceState === "active" && bar.backend !== null && bar.backend.video.built
+                    icon.source: Theme.icon(bar.ponds.voiceScreen ? "screen-share-off" : "screen-share")
+                    highlighted: bar.ponds.voiceScreen
+                    onClicked: bar.ponds.setVoiceScreen(!bar.ponds.voiceScreen)
+                    Accessible.name: bar.ponds.voiceScreen ? qsTr("Stop sharing your screen") : qsTr("Share your screen")
+                    ToolTip.text: Accessible.name
+                    ToolTip.visible: hovered
+                }
                 ToolButton {
                     objectName: "voiceDeafen"
                     visible: bar.ponds.voiceState !== "ended"

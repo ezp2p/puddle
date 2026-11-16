@@ -85,7 +85,7 @@ typedef struct {
     /* a Pond's voice channels (docs/ponds.md, "Voice channels"): join one, leave, muted and deafened, and which we are in */
     int (*voice_join)(puddle_ctx *ctx, const char *pond, int64_t channel, const char **code);
     int (*voice_leave)(puddle_ctx *ctx, const char **code);
-    int (*voice_state)(puddle_ctx *ctx, int muted, int deafened, const char **code);
+    int (*voice_state)(puddle_ctx *ctx, int muted, int deafened, int camera, int screen, const char **code);
     void (*voice_write)(puddle_ctx *ctx, puddle_jw *w);
 } puddle_courier;
 

@@ -59,11 +59,22 @@ Backend::Backend(QObject *parent) : QObject(parent)
     connect(chats_.callModel(), &Calls::changed, this, &Backend::followCall);
     connect(chats_.callModel(), &Calls::mutedChanged, this, [this] { audio_.setMuted(chats_.callModel()->muted()); });
     connect(chats_.callModel(), &Calls::cameraChanged, this, &Backend::followCall);
+    connect(chats_.callModel(), &Calls::screenChanged, this, &Backend::followCall);
+    // sharing a screen that stopped by itself (the system's prompt turned down, or the screen went): the switch goes off too
+    connect(&video_, &CallVideo::screenChanged, this, [this] {
+        if (video_.screenOn())
+            return;
+        if (soundFor_ == QLatin1String("voice") && chats_.pondList()->voiceScreen())
+            chats_.pondList()->setVoiceScreen(false);
+        else if (soundFor_ == QLatin1String("call") && chats_.callModel()->screen())
+            chats_.callModel()->setScreen(false);
+    });
     connect(chats_.pondList(), &Ponds::voiceChanged, this, &Backend::followCall);
     {
         QSettings s;
         talkMode_ = s.value("voice/talkMode", "voice").toString() == QLatin1String("push") ? QStringLiteral("push") : QStringLiteral("voice");
         pushKey_ = s.value("voice/pushKey", 0).toInt();
+        videoOrder_ = s.value("video/order", "arrival").toString() == QLatin1String("speaking") ? QStringLiteral("speaking") : QStringLiteral("arrival");
         audio_.gate().setThreshold(qBound(-80.0, s.value("voice/threshold", TalkGate::kDefaultThreshold).toDouble(), 0.0));
     }
     speakTimer_.setInterval(150);
@@ -137,17 +148,24 @@ void Backend::followCall()
             audio_.start([engine](const QByteArray &frame) {
                 puddle_voice_send_audio(engine, reinterpret_cast<const unsigned char *>(frame.constData()), size_t(frame.size()));
             });
+            puddle_calls_on_video(engine, onCallVideo, &video_);
+            video_.start(
+                [engine](const QByteArray &au) { puddle_voice_send_video(engine, reinterpret_cast<const unsigned char *>(au.constData()), size_t(au.size()), 0); },
+                [engine](const QByteArray &au) { puddle_voice_send_video(engine, reinterpret_cast<const unsigned char *>(au.constData()), size_t(au.size()), 1); });
             speakTimer_.start();
             append(QStringLiteral("info: voice: sound on (microphone %1, speaker %2)")
                        .arg(audio_.hasInput() ? QStringLiteral("yes") : QStringLiteral("none"), audio_.hasOutput() ? QStringLiteral("yes") : QStringLiteral("none")));
         }
         audio_.setMuted(ponds->voiceMuted());
         applyTalk();
+        video_.setCamera(ponds->voiceCamera());
+        video_.setScreen(ponds->voiceScreen());
         return;
     }
     const bool live = callLive;
     if (live && !audio_.running()) {
         soundFor_ = want;
+        speakTimer_.start();
         audio_.gate().setMode(TalkGate::Open); /* a call: the microphone always goes, unless muted */
         audio_.setMuted(calls->muted());
         if (leg) {
@@ -162,15 +180,20 @@ void Backend::followCall()
                 puddle_call_send_audio(engine, id.constData(), reinterpret_cast<const unsigned char *>(frame.constData()), size_t(frame.size()));
             });
             puddle_calls_on_video(engine, onCallVideo, &video_);
-            video_.start([engine, id](const QByteArray &au) {
-                puddle_call_send_video(engine, id.constData(), reinterpret_cast<const unsigned char *>(au.constData()), size_t(au.size()));
-            });
+            video_.start(
+                [engine, id](const QByteArray &au) {
+                    puddle_call_send_video(engine, id.constData(), reinterpret_cast<const unsigned char *>(au.constData()), size_t(au.size()));
+                },
+                [engine, id](const QByteArray &au) {
+                    puddle_call_send_screen(engine, id.constData(), reinterpret_cast<const unsigned char *>(au.constData()), size_t(au.size()));
+                });
         }
         append(QStringLiteral("info: call: sound on (microphone %1, speaker %2%3)")
                 .arg(audio_.hasInput() ? QStringLiteral("yes") : QStringLiteral("none"), audio_.hasOutput() ? QStringLiteral("yes") : QStringLiteral("none"),
                      CallAudio::built() ? QString() : QStringLiteral("; built without Opus, so silent")));
     }
     video_.setCamera(live && calls->camera());
+    video_.setScreen(live && calls->screen());
 }
 
 void Backend::applyTalk()
@@ -185,7 +208,7 @@ void Backend::sampleSpeaking()
 {
     QStringList now;
     double level = -100;
-    if (soundFor_ == QLatin1String("voice")) {
+    if (!soundFor_.isEmpty()) {
         now = audio_.speaking();
         if (audio_.talking())
             now << QStringLiteral("self");
@@ -219,6 +242,16 @@ void Backend::setTalkThreshold(double dbfs)
     audio_.gate().setThreshold(dbfs);
     QSettings().setValue("voice/threshold", dbfs);
     emit talkChanged();
+}
+
+void Backend::setVideoOrder(const QString &order)
+{
+    const QString o = order == QLatin1String("speaking") ? QStringLiteral("speaking") : QStringLiteral("arrival");
+    if (o == videoOrder_)
+        return;
+    videoOrder_ = o;
+    QSettings().setValue("video/order", o);
+    emit videoOrderChanged();
 }
 
 void Backend::setPushKey(int key)

@@ -13,6 +13,9 @@ Pane {
 
     required property var chats
     readonly property var ponds: chats.ponds
+    property var video: null      // CallVideo: a voice channel's cameras and screens
+    property var backend: null
+    property var view: null       // the shell's video pane state
     property bool narrow: false
     property bool sidebarShown: true
     signal toggleSidebar()
@@ -137,9 +140,27 @@ Pane {
             }
         }
 
+        VideoPane {
+            id: videoPane
+            // in this channel's voice, and someone's camera or screen is on
+            readonly property bool here: page.ponds.voiceState === "active" && page.ponds.voicePond === page.ponds.current &&
+                                         page.ponds.voiceChannel === page.ponds.channel
+            visible: here && page.video !== null && page.view !== null && !page.view.popped &&
+                     (page.video.sources.length > 0 || page.video.cameraOn || page.video.screenOn)
+            video: page.video
+            view: page.view
+            backend: page.backend
+            nameOf: key => page.ponds.nameOf(key)
+            Layout.fillWidth: true
+            Layout.margins: 8
+            Layout.preferredHeight: Math.max(200, page.height * 0.42)
+            Layout.fillHeight: page.view !== null && page.view.full
+        }
+
         ScrollList {
             id: list
             objectName: "pondMessageList"
+            visible: !(videoPane.visible && page.view.full)
             Layout.fillWidth: true
             Layout.fillHeight: true
             model: page.ponds.messages

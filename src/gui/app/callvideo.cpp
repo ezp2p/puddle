@@ -4,6 +4,9 @@
 #include <QCameraDevice>
 #include <QCoreApplication>
 #include <QDateTime>
+#include <QGuiApplication>
+#include <QPainter>
+#include <QScreenCapture>
 #include <QMediaCaptureSession>
 #include <QMediaDevices>
 #include <QVideoFrameFormat>
@@ -40,13 +43,10 @@ QVideoFrame Picture::toFrame() const
     return f;
 }
 
-Picture pictureOf(const QImage &image, int w, int h)
+// An RGB32 image of exactly w x h, as I420
+static Picture i420(const QImage &img, int w, int h)
 {
     Picture pic;
-    if (image.isNull() || w <= 0 || h <= 0)
-        return pic;
-    QImage img = image.convertToFormat(QImage::Format_RGB32).scaled(w, h, Qt::KeepAspectRatioByExpanding, Qt::FastTransformation);
-    img = img.copy((img.width() - w) / 2, (img.height() - h) / 2, w, h);
     pic.width = w, pic.height = h;
     pic.y.resize(qsizetype(w) * h);
     pic.u.resize(qsizetype(w / 2) * (h / 2));
@@ -75,6 +75,27 @@ Picture pictureOf(const QImage &image, int w, int h)
         }
     }
     return pic;
+}
+
+Picture pictureOf(const QImage &image, int w, int h)
+{
+    if (image.isNull() || w <= 0 || h <= 0)
+        return {};
+    QImage img = image.convertToFormat(QImage::Format_RGB32).scaled(w, h, Qt::KeepAspectRatioByExpanding, Qt::FastTransformation);
+    return i420(img.copy((img.width() - w) / 2, (img.height() - h) / 2, w, h), w, h);
+}
+
+Picture pictureFitted(const QImage &image, int w, int h)
+{
+    if (image.isNull() || w <= 0 || h <= 0)
+        return {};
+    const QImage scaled = image.convertToFormat(QImage::Format_RGB32).scaled(w, h, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    QImage img(w, h, QImage::Format_RGB32);
+    img.fill(Qt::black);
+    QPainter p(&img);
+    p.drawImage((w - scaled.width()) / 2, (h - scaled.height()) / 2, scaled);
+    p.end();
+    return i420(img, w, h);
 }
 
 // ---- H.264 ----
@@ -281,11 +302,12 @@ void CallVideo::work()
     decoders_.clear();
 }
 
-void CallVideo::start(Send send)
+void CallVideo::start(Send send, Send sendScreen)
 {
     {
         std::lock_guard<std::mutex> g(mu_);
         send_ = std::move(send);
+        sendScreen_ = std::move(sendScreen);
     }
     if (!running_) {
         running_ = true;
@@ -297,17 +319,21 @@ void CallVideo::start(Send send)
 void CallVideo::stop()
 {
     setCamera(false);
+    setScreen(false);
     {
         std::lock_guard<std::mutex> g(mu_);
         send_ = nullptr;
+        sendScreen_ = nullptr;
     }
     post([this] { // the next call starts afresh
         encoder_.reset();
+        screenEncoder_.reset();
         decoders_.clear();
     });
     sweep_.stop();
     const bool had = !sources_.isEmpty();
     sources_.clear();
+    order_.clear();
     if (had)
         emit sourcesChanged();
     if (running_) {
@@ -405,6 +431,103 @@ void CallVideo::closeCamera()
     session_ = nullptr, camSink_ = nullptr, camera_ = nullptr;
 }
 
+void CallVideo::setScreen(bool on)
+{
+    on = on && built() && running_ && sendScreen_;
+    if (on == screenOn_)
+        return;
+    screenOn_ = on;
+    if (on) {
+        if (!qEnvironmentVariableIsSet("PUDDLE_TEST_NO_AUDIO"))
+            openScreen();
+        post([this] {
+            if (screenEncoder_)
+                screenEncoder_->keyframe();
+        });
+    } else {
+        closeScreen();
+        if (selfScreen_)
+            selfScreen_->setVideoFrame(QVideoFrame());
+    }
+    emit screenChanged();
+}
+
+// The primary screen, through Qt Multimedia (on Wayland the system asks which screen, through its portal)
+void CallVideo::openScreen()
+{
+    if (screen_)
+        return;
+    screen_ = new QScreenCapture(this);
+    screen_->setScreen(QGuiApplication::primaryScreen());
+    screenSession_ = new QMediaCaptureSession(this);
+    screenSink_ = new QVideoSink(this);
+    screenSession_->setScreenCapture(screen_);
+    screenSession_->setVideoSink(screenSink_);
+    connect(screenSink_, &QVideoSink::videoFrameChanged, this, [this](const QVideoFrame &f) {
+        const qint64 now = nowMs();
+        if (now - lastScreenShot_ < 1000 / kScreenFps - 5)
+            return;
+        lastScreenShot_ = now;
+        const QImage img = f.toImage();
+        if (selfScreen_)
+            selfScreen_->setVideoFrame(pictureFitted(img, kScreenWidth / 4, kScreenHeight / 4).toFrame());
+        encodeScreenLater(img);
+    });
+    connect(screen_, &QScreenCapture::errorOccurred, this, [this](QScreenCapture::Error, const QString &why) {
+        emit cameraFailed(tr("Can't share the screen: %1").arg(why));
+        setScreen(false);
+    });
+    screen_->setActive(true);
+}
+
+void CallVideo::closeScreen()
+{
+    if (screen_)
+        screen_->setActive(false);
+    delete screenSession_;
+    delete screenSink_;
+    delete screen_;
+    screenSession_ = nullptr, screenSink_ = nullptr, screen_ = nullptr;
+}
+
+void CallVideo::feedScreen(const QImage &image)
+{
+    if (!screenOn_)
+        return;
+    if (selfScreen_)
+        selfScreen_->setVideoFrame(pictureFitted(image, kScreenWidth / 4, kScreenHeight / 4).toFrame());
+    encodeScreenLater(image);
+}
+
+void CallVideo::encodeScreenLater(const QImage &image)
+{
+    if (image.isNull())
+        return;
+    {
+        std::lock_guard<std::mutex> g(mu_);
+        if (screenPending_ > 1)
+            return;
+        screenPending_++;
+    }
+    post([this, image] {
+        const Picture pic = pictureFitted(image, kScreenWidth, kScreenHeight);
+        if (!screenEncoder_) {
+            screenEncoder_ = std::make_unique<H264Encoder>();
+            if (!screenEncoder_->open(kScreenWidth, kScreenHeight, kScreenFps, kScreenBitrate))
+                screenEncoder_.reset();
+        }
+        const QByteArray au = screenEncoder_ ? screenEncoder_->encode(pic, nowMs()) : QByteArray();
+        Send send;
+        {
+            std::lock_guard<std::mutex> g(mu_);
+            screenPending_--;
+            send = sendScreen_;
+        }
+        if (!au.isEmpty() && send)
+            send(au);
+    });
+}
+
 void CallVideo::feed(const QImage &image)
 {
     if (!cameraOn_)
@@ -463,6 +586,8 @@ void CallVideo::deliver(const QString &key, const Picture &picture)
         return;
     Source &s = sources_[key];
     const bool fresh = s.last == 0;
+    if (fresh && !order_.contains(key))
+        order_.append(key);
     s.last = nowMs();
     s.frame = picture.toFrame();
     if (s.sink)
@@ -478,6 +603,7 @@ void CallVideo::sweep()
     for (auto it = sources_.begin(); it != sources_.end();)
         if (now - it->last > kGoneMs) {
             gone.append(it.key());
+            order_.removeAll(it.key());
             it = sources_.erase(it);
         } else {
             ++it;
@@ -493,9 +619,7 @@ void CallVideo::sweep()
 
 QStringList CallVideo::sources() const
 {
-    QStringList keys = sources_.keys();
-    keys.sort();
-    return keys;
+    return order_;
 }
 
 void CallVideo::attach(const QString &key, QObject *videoSink)
@@ -503,6 +627,10 @@ void CallVideo::attach(const QString &key, QObject *videoSink)
     auto *sink = qobject_cast<QVideoSink *>(videoSink);
     if (key == QLatin1String("self")) {
         self_ = sink;
+        return;
+    }
+    if (key == QLatin1String("self/screen")) {
+        selfScreen_ = sink;
         return;
     }
     auto it = sources_.find(key);

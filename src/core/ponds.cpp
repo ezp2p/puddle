@@ -56,7 +56,7 @@ struct Member {
 struct InVoice {
     int64_t channel = 0, slot = 0;
     std::string member;
-    bool muted = false, deafened = false, camera = false;
+    bool muted = false, deafened = false, camera = false, screen = false;
 };
 
 struct Pond {
@@ -141,7 +141,8 @@ static bool get_flag(puddle_span obj, const char *key)
 /* Someone in a voice channel, as the Pond says it: {channel, member, slot, muted, deafened, camera} */
 static bool parse_in_voice(puddle_span v, InVoice &out)
 {
-    out.muted = get_flag(v, "muted"), out.deafened = get_flag(v, "deafened"), out.camera = get_flag(v, "camera");
+    out.muted = get_flag(v, "muted"), out.deafened = get_flag(v, "deafened"), out.camera = get_flag(v, "camera"),
+    out.screen = get_flag(v, "screen");
     return get_int(v, "channel", &out.channel) && out.channel > 0 && get_text(v, "member", PUDDLE_USER_ID_LEN, 0, out.member) &&
            puddle_id_valid(out.member.c_str()) && get_int(v, "slot", &out.slot) && out.slot > 0 && out.slot <= 65535;
 }
@@ -1089,6 +1090,7 @@ static void write_summary(puddle_jw *w, const Pond &pd)
                     puddle_jw_flag(w, "muted", v.muted);
                     puddle_jw_flag(w, "deafened", v.deafened);
                     puddle_jw_flag(w, "camera", v.camera);
+                    puddle_jw_flag(w, "screen", v.screen);
                     puddle_jw_end_object(w);
                 }
             puddle_jw_end_array(w);
@@ -1164,6 +1166,30 @@ int puddle_ponds_voice_member(puddle_ponds *p, const char *id, int64_t channel, 
             return 0;
         }
     return -1;
+}
+
+int puddle_ponds_voice_list(puddle_ponds *p, const char *id, int64_t channel, puddle_pond_in_voice **out, size_t *n)
+{
+    std::lock_guard<std::mutex> g(p->mu);
+    *out = nullptr, *n = 0;
+    auto it = p->ponds.find(id);
+    if (it == p->ponds.end())
+        return -1;
+    std::vector<puddle_pond_in_voice> list;
+    for (auto &v : it->second.voice)
+        if (v.channel == channel) {
+            puddle_pond_in_voice e{};
+            snprintf(e.member, sizeof e.member, "%s", v.member.c_str());
+            e.slot = (int)v.slot, e.muted = v.muted, e.deafened = v.deafened, e.camera = v.camera, e.screen = v.screen;
+            list.push_back(e);
+        }
+    *out = (puddle_pond_in_voice *)calloc(list.size() ? list.size() : 1, sizeof **out);
+    if (!*out)
+        return -1;
+    if (!list.empty())
+        memcpy(*out, list.data(), list.size() * sizeof **out);
+    *n = list.size();
+    return 0;
 }
 
 int puddle_ponds_in_voice(puddle_ponds *p, const char *id, int64_t channel, const char *member)

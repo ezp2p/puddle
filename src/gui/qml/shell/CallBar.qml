@@ -105,6 +105,21 @@ Card {
             ToolTip.visible: hovered
             onClicked: bar.calls.toggleCamera()
         }
+        // share the screen (in the window; a call a phone has carries none yet)
+        ToolButton {
+            objectName: "screenButton"
+            visible: (bar.state === "active" || bar.state === "connecting") && bar.calls.here && bar.video !== null && bar.video.built && bar.video.canShareScreen
+            checkable: true
+            checked: bar.calls.screen
+            icon.source: Theme.icon(bar.calls.screen ? "screen-share-off" : "screen-share")
+            icon.width: Theme.iconSize
+            icon.height: Theme.iconSize
+            display: AbstractButton.IconOnly
+            Accessible.name: bar.calls.screen ? qsTr("Stop sharing your screen") : qsTr("Share your screen")
+            ToolTip.text: Accessible.name
+            ToolTip.visible: hovered
+            onClicked: bar.calls.toggleScreen()
+        }
         ToolButton {
             objectName: "hangUpButton"
             visible: bar.state !== "" && !bar.ringingHere

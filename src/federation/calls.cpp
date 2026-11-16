@@ -49,12 +49,14 @@ void puddle_calls_set_beat(puddle_calls *, int64_t) {}
 int puddle_call_send_audio(puddle_calls *, const char *, const unsigned char *, size_t) { return -1; }
 void puddle_calls_on_video(puddle_calls *, puddle_call_frame_fn, void *) {}
 int puddle_call_send_video(puddle_calls *, const char *, const unsigned char *, size_t) { return -1; }
+int puddle_call_send_screen(puddle_calls *, const char *, const unsigned char *, size_t) { return -1; }
 uint64_t puddle_calls_version(puddle_calls *) { return 0; }
 int puddle_voice_join(puddle_ctx *, const char *, int64_t, const char **code) { return *code = "no_calls", -1; }
 int puddle_voice_leave(puddle_ctx *, const char **) { return 0; }
-int puddle_voice_state(puddle_ctx *, int, int, const char **code) { return *code = "no_voice", -1; }
+int puddle_voice_state(puddle_ctx *, int, int, int, int, const char **code) { return *code = "no_voice", -1; }
 void puddle_voice_write(puddle_ctx *, puddle_jw *w) { puddle_jw_null(w); }
 int puddle_voice_send_audio(puddle_calls *, const unsigned char *, size_t) { return -1; }
+int puddle_voice_send_video(puddle_calls *, const unsigned char *, size_t, int) { return -1; }
 
 static int no_calls(const puddle_call *, puddle_jw *w) { return puddle_fail(w, 409, "no_calls"); }
 
@@ -386,8 +388,9 @@ void callsx::send_on(const std::shared_ptr<rtc::Track> &track, const rtc::binary
     }
 }
 
-/* The friend's video: to the owner's device here, or on to the phone that has the call, on its leg's video track. */
-static void setup_vtrack(puddle_calls *cs, const std::weak_ptr<Call> &weak, const std::shared_ptr<rtc::Track> &track)
+/* The friend's video, or the screen they share (`screen`): to the owner's device here (a screen as from "<them>/screen"), or
+ * on to the phone that has the call, on its leg's video track (a screen isn't passed to a phone yet). */
+static void setup_vtrack(puddle_calls *cs, const std::weak_ptr<Call> &weak, const std::shared_ptr<rtc::Track> &track, bool screen = false)
 {
     h264_handler(track);
     std::string id, peer;
@@ -396,11 +399,11 @@ static void setup_vtrack(puddle_calls *cs, const std::weak_ptr<Call> &weak, cons
         CallPtr call = weak.lock();
         if (!call)
             return;
-        peer = call->peer, id = call->id;
-        call->vtrack = track;
-        call->vbase = random32();
+        peer = call->peer + (screen ? "/screen" : ""), id = call->id;
+        (screen ? call->strack : call->vtrack) = track;
+        (screen ? call->sbase : call->vbase) = random32();
     }
-    track->onFrame([cs, weak, id, peer](rtc::binary data, rtc::FrameInfo info) {
+    track->onFrame([cs, weak, id, peer, screen](rtc::binary data, rtc::FrameInfo info) {
         if (data.empty() || data.size() > PUDDLE_CALL_VIDEO_MAX)
             return;
         puddle_call_frame_fn fn = nullptr;
@@ -414,7 +417,7 @@ static void setup_vtrack(puddle_calls *cs, const std::weak_ptr<Call> &weak, cons
                 return;
             if (call->device.empty()) {
                 fn = cs->on_video, user = cs->on_video_user;
-            } else if (call->leg && track_open(call->leg->vtrack)) {
+            } else if (!screen && call->leg && track_open(call->leg->vtrack)) {
                 phone = call->leg->vtrack;
                 ts = call->leg->vbase[0] + info.timestamp;
             }
@@ -429,8 +432,10 @@ static void setup_vtrack(puddle_calls *cs, const std::weak_ptr<Call> &weak, cons
 /* The friend's connection: frames go to the owner's device here (the window), or on to the phone that has the call. */
 static void setup_track(puddle_calls *cs, const std::weak_ptr<Call> &weak, const std::shared_ptr<rtc::Track> &track)
 {
-    if (track->mid() == VIDEO_MID)
-        return setup_vtrack(cs, weak, track);
+    if (track->mid() == VIDEO_MID || track->mid() == SCREEN_MID)
+        return setup_vtrack(cs, weak, track, track->mid() == SCREEN_MID);
+    if (track->mid() != MID)
+        return; /* a track from a newer Puddle: left as it came, and nothing is sent on it */
     auto rtp = opus_handler(track);
     std::string id, peer;
     {
@@ -907,6 +912,7 @@ int puddle_call_start(puddle_ctx *ctx, const char *peer, const char *device, cha
         auto track = pc->addTrack(media);
         setup_track(cs, call, track);
         setup_vtrack(cs, call, pc->addTrack(video_media(VIDEO_MID, rtc::Description::Direction::SendRecv)));
+        setup_vtrack(cs, call, pc->addTrack(video_media(SCREEN_MID, rtc::Description::Direction::SendRecv)), true);
         pc->setLocalDescription();
         if (gathered(pc, cs, [&] { return call->track != nullptr; }))
             sdp = std::string(*pc->localDescription());
@@ -1265,21 +1271,22 @@ void puddle_calls_on_video(puddle_calls *cs, puddle_call_frame_fn fn, void *user
     cs->on_video = fn, cs->on_video_user = user;
 }
 
-int puddle_call_send_video(puddle_calls *cs, const char *id, const unsigned char *frame, size_t len)
+/* A frame of the owner's camera, or of the screen they share (`screen`), on the active call */
+static int send_video(puddle_calls *cs, const char *id, const unsigned char *frame, size_t len, bool screen)
 {
     if (!cs || !frame || !len || len > PUDDLE_CALL_VIDEO_MAX)
         return -1;
-    if (int r = group_send_video(cs, id, frame, len); r != 1)
+    if (int r = group_send_video(cs, id, frame, len, screen); r != 1)
         return r;
     std::shared_ptr<rtc::Track> track;
     uint32_t ts;
     {
         std::lock_guard<std::mutex> g(cs->mu);
         CallPtr call = cs->current;
-        if (!call || call->id != id || call->state != "active" || !call->device.empty() || !track_open(call->vtrack))
+        if (!call || call->id != id || call->state != "active" || !call->device.empty() || !track_open(screen ? call->strack : call->vtrack))
             return -1;
-        track = call->vtrack;
-        ts = call->vbase + video_now();
+        track = screen ? call->strack : call->vtrack;
+        ts = (screen ? call->sbase : call->vbase) + video_now();
     }
     try {
         track->sendFrame((const rtc::byte *)frame, len, rtc::FrameInfo(ts));
@@ -1287,6 +1294,16 @@ int puddle_call_send_video(puddle_calls *cs, const char *id, const unsigned char
         return -1;
     }
     return 0;
+}
+
+int puddle_call_send_video(puddle_calls *cs, const char *id, const unsigned char *frame, size_t len)
+{
+    return send_video(cs, id, frame, len, false);
+}
+
+int puddle_call_send_screen(puddle_calls *cs, const char *id, const unsigned char *frame, size_t len)
+{
+    return send_video(cs, id, frame, len, true);
 }
 
 void puddle_calls_set_timeouts(puddle_calls *cs, int64_t ring_ms, int64_t ring_in_ms, int64_t connect_ms)

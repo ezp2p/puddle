@@ -96,18 +96,22 @@ struct FakePond {
     std::vector<std::string> events;      /* event n is events[n - 1] */
     // our Puddle's voice connection
     std::shared_ptr<rtc::PeerConnection> pc;
-    std::shared_ptr<rtc::Track> voice;
+    std::shared_ptr<rtc::Track> voice, watch_keep[2]; /* our Puddle's voice; its camera and screen (held: tracks are held weakly) */
     std::shared_ptr<rtc::DataChannel> dc;
     std::atomic<bool> dc_open{false}, connected{false};
     std::string session;
     bool in_voice = false, muted = false, deafened = false;
-    std::atomic<int> frames{0}, joins{0}, leaves{0};
+    std::atomic<int> frames{0}, joins{0}, leaves{0}, camera_in{0}, screen_in{0};
+    std::shared_ptr<rtc::Track> out[17];  /* v1 .. v16: what our Puddle watches */
+    std::string watch_body;               /* the last watch it asked for */
+    bool ben_camera = false, ben_screen = false;
     std::string last_state, created;     /* the last state sent, and the last channel an admin asked for */
     bool refuse_state = false;            /* answer state with a 404: it has let us go */
 
     std::string voice_list()
     {
-        std::string out = "[{\"channel\":2,\"member\":\"" + std::string(BEN) + "\",\"slot\":1,\"muted\":false,\"deafened\":false,\"camera\":false}";
+        std::string out = "[{\"channel\":2,\"member\":\"" + std::string(BEN) + "\",\"slot\":1,\"muted\":false,\"deafened\":false,\"camera\":" +
+                          (ben_camera ? "true" : "false") + ",\"screen\":" + (ben_screen ? "true" : "false") + "}";
         if (in_voice && !me.empty())
             out += ",{\"channel\":2,\"member\":\"" + me + "\",\"slot\":2,\"muted\":" + (muted ? "true" : "false") + ",\"deafened\":" +
                    (deafened ? "true" : "false") + ",\"camera\":false}";
@@ -155,14 +159,31 @@ struct FakePond {
             event("voice", me_in_voice());
         });
         p->onTrack([this, seen](std::shared_ptr<rtc::Track> t) {
-            t->setMediaHandler(std::make_shared<rtc::OpusRtpDepacketizer>());
-            t->onFrame([this](rtc::binary data, rtc::FrameInfo) {
-                if (data.size() >= 3 && data[0] == std::byte{'A'})
-                    frames++;
-            });
-            {
+            const std::string mid = t->mid();
+            if (mid == "audio") {
+                t->setMediaHandler(std::make_shared<rtc::OpusRtpDepacketizer>());
+                t->onFrame([this](rtc::binary data, rtc::FrameInfo) {
+                    if (data.size() >= 3 && data[0] == std::byte{'A'})
+                        frames++;
+                });
                 std::lock_guard<std::mutex> g(mu);
                 voice = t;
+            } else if (mid == "video" || mid == "screen") {
+                t->setMediaHandler(std::make_shared<rtc::H264RtpDepacketizer>(rtc::NalUnit::Separator::LongStartSequence));
+                const bool screen = mid == "screen";
+                t->onFrame([this, screen](rtc::binary, rtc::FrameInfo) { (screen ? screen_in : camera_in)++; });
+                std::lock_guard<std::mutex> g(mu);
+                (screen ? watch_keep[1] : watch_keep[0]) = t;
+            } else if (mid.size() >= 2 && mid[0] == 'v') {
+                int n = atoi(mid.c_str() + 1);
+                auto d = t->description();
+                d.addSSRC(7000 + (uint32_t)n * 2 + 1, std::string("pond"));
+                t->setDescription(std::move(d));
+                auto rtp = std::make_shared<rtc::RtpPacketizationConfig>(7000 + (uint32_t)n * 2 + 1, "pond", 96, rtc::H264RtpPacketizer::ClockRate);
+                t->setMediaHandler(std::make_shared<rtc::H264RtpPacketizer>(rtc::NalUnit::Separator::StartSequence, rtp, 1200));
+                std::lock_guard<std::mutex> g(mu);
+                if (n >= 1 && n <= 16)
+                    out[n] = t;
             }
             (*seen)++;
         });
@@ -173,7 +194,10 @@ struct FakePond {
         });
         p->setRemoteDescription(rtc::Description(offer, "offer"));
         p->addRemoteCandidate(rtc::Candidate("a=candidate:9 1 UDP 2122000000 127.0.0.1 " + std::to_string(their_udp) + " typ host", "audio"));
-        for (int i = 0; i < 300 && seen->load() < 1; i++)
+        int lines = 0;
+        for (size_t at = 0; (at = offer.find("\nm=", at)) != std::string::npos; at += 3)
+            lines += offer.compare(at + 1, 13, "m=application") != 0;
+        for (int i = 0; i < 500 && seen->load() < lines; i++)
             usleep(10000);
         p->setLocalDescription();
         for (int i = 0; i < 300 && p->gatheringState() != rtc::PeerConnection::GatheringState::Complete; i++)
@@ -184,6 +208,35 @@ struct FakePond {
         *status = 200;
         return "{\"session\":\"" + session + "\",\"sdp\":" + quoted(std::string(*p->localDescription())) + ",\"udp\":" + std::to_string(udp) +
                ",\"slot\":2}";
+    }
+
+    // Ben turns his camera or screen on or off: everyone is told
+    void ben(bool camera, bool screen)
+    {
+        std::lock_guard<std::mutex> g(mu);
+        ben_camera = camera, ben_screen = screen;
+        event("voice", "{\"channel\":2,\"member\":\"" + std::string(BEN) + "\",\"slot\":1,\"muted\":false,\"deafened\":false,\"camera\":" +
+                           (camera ? "true" : "false") + ",\"screen\":" + (screen ? "true" : "false") + "}");
+    }
+
+    // a picture on track v<n>, as the Pond forwards a camera or screen watched there
+    bool show_on(int n, const std::string &au, uint32_t ts)
+    {
+        std::shared_ptr<rtc::Track> t;
+        {
+            std::lock_guard<std::mutex> g(mu);
+            t = out[n];
+        }
+        if (!t || !t->isOpen())
+            return false;
+        rtc::binary b(au.size());
+        memcpy(b.data(), au.data(), au.size());
+        try {
+            t->sendFrame(b, rtc::FrameInfo(ts));
+        } catch (const std::exception &) {
+            return false;
+        }
+        return true;
     }
 
     // the Pond forwarding a member's frame: [slot][ts][opus]
@@ -256,6 +309,11 @@ struct FakePond {
                 muted = body.find("\"muted\":true") != std::string::npos;
                 deafened = body.find("\"deafened\":true") != std::string::npos;
                 event("voice", me_in_voice());
+                *status = 204;
+                return "";
+            }
+            if (target.find("/watch") != std::string::npos) {
+                watch_body = body;
                 *status = 204;
                 return "";
             }
@@ -350,7 +408,9 @@ struct FakePond {
         {
             std::lock_guard<std::mutex> g(mu);
             p = pc;
-            pc.reset(), dc.reset(), voice.reset();
+            pc.reset(), dc.reset(), voice.reset(), watch_keep[0].reset(), watch_keep[1].reset();
+            for (auto &t : out)
+                t.reset();
         }
         if (p) {
             p->resetCallbacks();
@@ -374,8 +434,34 @@ struct FakePond {
 struct Heard {
     std::mutex mu;
     std::map<std::string, int> from; /* sender -> frames */
+    std::map<std::string, int> seen; /* sender -> pictures (a camera, or "<id>/screen") */
     std::string call;
 };
+
+static void on_picture(void *user, const char *, const char *from, const unsigned char *, size_t len, uint32_t)
+{
+    auto *h = static_cast<Heard *>(user);
+    if (len < 100)
+        return;
+    std::lock_guard<std::mutex> g(h->mu);
+    h->seen[from]++;
+}
+
+static int seen_from(Heard &h, const std::string &who)
+{
+    std::lock_guard<std::mutex> g(h.mu);
+    return h.seen.count(who) ? h.seen[who] : 0;
+}
+
+/* an H.264-shaped access unit (SPS, PPS, IDR) of about 3 KB */
+static std::string picture(int k)
+{
+    std::string au("\x00\x00\x00\x01\x67\x42\xc0\x1e\x00\x00\x00\x01\x68\xce\x3c\x80\x00\x00\x00\x01\x65", 21);
+    au += char(k + 1);
+    while (au.size() < 3000)
+        au += char(1 + au.size() % 250);
+    return au;
+}
 
 static void on_frame(void *user, const char *call, const char *from, const unsigned char *frame, size_t len, uint32_t)
 {
@@ -423,6 +509,7 @@ int main(int argc, char **argv)
     CHECK(calls != nullptr);
     Heard heard;
     puddle_calls_on_audio(calls, on_frame, &heard);
+    puddle_calls_on_video(calls, on_picture, &heard);
 
     FakePond pond;
     CHECK(pond.start((tmp.path() + "/pond").toStdString()));
@@ -486,6 +573,44 @@ int main(int argc, char **argv)
         std::lock_guard<std::mutex> g(heard.mu);
         CHECK(heard.call == "voice");
     }
+
+    /* ---- our camera and screen: on, the Pond is told, and they go up their own tracks; off, nothing goes ---- */
+    {
+        const std::string au = picture(0);
+        CHECK(puddle_voice_send_video(calls, (const unsigned char *)au.data(), au.size(), 0) == -1); /* the camera is off */
+        ponds->setVoiceCamera(true);
+        CHECK(until([&] { return pond.last_state.find("\"camera\":true") != std::string::npos && ponds->voiceCamera(); }));
+        ponds->setVoiceScreen(true);
+        CHECK(until([&] { return pond.last_state.find("\"screen\":true") != std::string::npos && ponds->voiceScreen(); }));
+        CHECK(until([&] {
+            puddle_voice_send_video(calls, (const unsigned char *)au.data(), au.size(), 0);
+            puddle_voice_send_video(calls, (const unsigned char *)au.data(), au.size(), 1);
+            return pond.camera_in >= 2 && pond.screen_in >= 2;
+        }));
+        ponds->setVoiceCamera(false);
+        ponds->setVoiceScreen(false);
+        CHECK(until([&] { return pond.last_state.find("\"camera\":false,\"screen\":false") != std::string::npos; }));
+        CHECK(puddle_voice_send_video(calls, (const unsigned char *)au.data(), au.size(), 1) == -1);
+    }
+
+    /* ---- everyone else's, watched by themselves: each on a track of its own, which it keeps ---- */
+    pond.ben(true, true);
+    CHECK(until([&] {
+        std::lock_guard<std::mutex> g(pond.mu);
+        return pond.watch_body.find("\"v1\":\"" + std::string(BEN) + "\"") != std::string::npos &&
+               pond.watch_body.find("\"v2\":\"" + std::string(BEN) + "/screen\"") != std::string::npos;
+    }));
+    CHECK(until([&] {
+        pond.show_on(1, picture(1), 9000);
+        pond.show_on(2, picture(2), 9000);
+        return seen_from(heard, BEN) >= 1 && seen_from(heard, std::string(BEN) + "/screen") >= 1;
+    }));
+    pond.ben(false, true); /* his camera goes off: v1 is let go, and his screen stays on v2 */
+    CHECK(until([&] {
+        std::lock_guard<std::mutex> g(pond.mu);
+        return pond.watch_body == "{\"tracks\":{\"v1\":null}}";
+    }));
+    pond.ben(false, false);
 
     /* ---- muted: nothing of ours goes, and the Pond is told; deafened: nothing comes ---- */
     ponds->setVoiceMuted(true);

@@ -153,6 +153,23 @@ Pane {
                     text: qsTr("Join a voice channel to see how loud you are. Green is heard.")
                 }
             }
+            // the video pane: everyone kept in place (the default, as a streamer wants), or those talking first
+            RowLayout {
+                spacing: 16
+                Label { text: qsTr("Video"); opacity: 0.8 }
+                RadioButton {
+                    objectName: "videoArrival"
+                    text: qsTr("Keep everyone in place")
+                    checked: page.backend.videoOrder === "arrival"
+                    onToggled: if (checked) page.backend.videoOrder = "arrival"
+                }
+                RadioButton {
+                    objectName: "videoSpeaking"
+                    text: qsTr("Who's talking first")
+                    checked: page.backend.videoOrder === "speaking"
+                    onToggled: if (checked) page.backend.videoOrder = "speaking"
+                }
+            }
             // push to talk: the key, chosen by pressing it
             RowLayout {
                 visible: page.backend.talkMode === "push"

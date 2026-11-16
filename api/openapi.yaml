@@ -511,8 +511,8 @@ paths:
   /api/v1/voice/state:
     post:
       tags: [ponds]
-      summary: Muted (nothing of ours goes) and deafened (nothing comes to us); either may be left out. The Pond tells everyone.
-      requestBody: { content: { application/json: { schema: { type: object, properties: { muted: { type: boolean }, deafened: { type: boolean } } } } } }
+      summary: Muted (nothing of ours goes), deafened (nothing comes to us), camera on, screen shared; any may be left out. The Pond tells everyone.
+      requestBody: { content: { application/json: { schema: { type: object, properties: { muted: { type: boolean }, deafened: { type: boolean }, camera: { type: boolean }, screen: { type: boolean } } } } } }
       responses:
         "200": { $ref: "#/components/responses/Voice" }
         "404": { description: "`no_voice`: in none (or the Pond let us go: then `voice` says `ended`, `removed`)" }
@@ -936,6 +936,8 @@ components:
                       slot: { type: integer }
                       muted: { type: boolean }
                       deafened: { type: boolean }
+                      camera: { type: boolean }
+                      screen: { type: boolean }
     Identity: { description: OK, content: { application/json: { schema: { $ref: "objects/identity.yaml" } } } }
     Error: { description: Not possible now, content: { application/json: { schema: { $ref: "objects/error.yaml" } } } }
     NotFound: { description: No such thing, or not allowed (the same answer), content: { application/json: { schema: { $ref: "objects/error.yaml" } } } }

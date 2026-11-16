@@ -560,14 +560,15 @@ void Ponds::leaveVoice()
     api_->post(QStringLiteral("/api/v1/voice/leave"), QJsonObject(), [this](int, const QJsonDocument &) { refreshVoice(); });
 }
 
-void Ponds::setVoiceMuted(bool muted)
+// Muted, deafened, camera or screen: shown at once; the Puddle's answer has the last word
+void Ponds::setVoiceFlag(const QString &name, bool on)
 {
     if (voice_.isEmpty())
         return;
-    voice_.insert("muted", muted); /* shown at once; the Puddle's answer has the last word */
+    voice_.insert(name, on);
     emit voiceChanged();
     const int gen = ++voiceGen_;
-    api_->post(QStringLiteral("/api/v1/voice/state"), QJsonObject{ { "muted", muted } }, [this, gen](int status, const QJsonDocument &json) {
+    api_->post(QStringLiteral("/api/v1/voice/state"), QJsonObject{ { name, on } }, [this, gen](int status, const QJsonDocument &json) {
         if (gen != voiceGen_)
             return;
         if (status == 200)
@@ -577,19 +578,7 @@ void Ponds::setVoiceMuted(bool muted)
     });
 }
 
-void Ponds::setVoiceDeafened(bool deafened)
-{
-    if (voice_.isEmpty())
-        return;
-    voice_.insert("deafened", deafened);
-    emit voiceChanged();
-    const int gen = ++voiceGen_;
-    api_->post(QStringLiteral("/api/v1/voice/state"), QJsonObject{ { "deafened", deafened } }, [this, gen](int status, const QJsonDocument &json) {
-        if (gen != voiceGen_)
-            return;
-        if (status == 200)
-            takeVoice(json.object().value("voice").toObject());
-        else
-            refreshVoice();
-    });
-}
+void Ponds::setVoiceMuted(bool muted) { setVoiceFlag(QStringLiteral("muted"), muted); }
+void Ponds::setVoiceDeafened(bool deafened) { setVoiceFlag(QStringLiteral("deafened"), deafened); }
+void Ponds::setVoiceCamera(bool on) { setVoiceFlag(QStringLiteral("camera"), on); }
+void Ponds::setVoiceScreen(bool on) { setVoiceFlag(QStringLiteral("screen"), on); }

@@ -13,6 +13,8 @@
 #include "core/ponds.h"
 #include "federation/ponds.h"
 
+#include <algorithm>
+#include <map>
 #include <stdlib.h>
 #include <string.h>
 
@@ -88,6 +90,25 @@ static void voice_frame(puddle_calls *cs, const std::weak_ptr<PondVoice> &weak, 
     fn(user, "voice", from, (const unsigned char *)b.data() + 6, b.size() - 6, ts);
 }
 
+/* A camera or screen we watch, on track `n`: to the owner's device, as the member's (or "<id>/screen") */
+static void voice_video(puddle_calls *cs, const std::weak_ptr<PondVoice> &weak, int n, const rtc::binary &au, uint32_t ts)
+{
+    if (au.empty() || au.size() > PUDDLE_CALL_VIDEO_MAX)
+        return;
+    std::string from;
+    puddle_call_frame_fn fn;
+    void *user;
+    {
+        std::lock_guard<std::mutex> g(cs->mu);
+        VoicePtr v = weak.lock();
+        if (!v || v->state == "ended" || v != cs->voice || !cs->on_video || v->watching[n].empty())
+            return;
+        from = v->watching[n];
+        fn = cs->on_video, user = cs->on_video_user;
+    }
+    fn(user, "voice", from.c_str(), (const unsigned char *)au.data(), au.size(), ts);
+}
+
 /* The JSON of a request with an SDP in it */
 static std::string offer_body(const std::string &sdp, unsigned udp)
 {
@@ -136,6 +157,18 @@ static int connect_voice(puddle_calls *cs, const VoicePtr &v, const char **code)
         rtc::DataChannelInit init;
         init.reliability.unordered = true;
         init.reliability.maxRetransmits = 0; /* a frame late is a frame lost: the jitter buffer covers it */
+        /* our camera and our screen (sent while on), and v1 .. v16, what we watch of everyone else's */
+        auto vt = pc->addTrack(video_media(VIDEO_MID, rtc::Description::Direction::SendOnly));
+        h264_handler(vt);
+        auto st = pc->addTrack(video_media(SCREEN_MID, rtc::Description::Direction::SendOnly));
+        h264_handler(st);
+        std::shared_ptr<rtc::Track> watch[POND_WATCH + 1];
+        for (int n = 1; n <= POND_WATCH; n++) {
+            const std::string mid = "v" + std::to_string(n);
+            watch[n] = pc->addTrack(video_media(mid.c_str(), rtc::Description::Direction::RecvOnly));
+            h264_handler(watch[n]);
+            watch[n]->onFrame([cs, weak, n](rtc::binary data, rtc::FrameInfo info) { voice_video(cs, weak, n, data, info.timestamp); });
+        }
         auto dc = pc->createDataChannel("frames", init);
         dc->onMessage([cs, weak](rtc::message_variant m) {
             if (auto *b = std::get_if<rtc::binary>(&m))
@@ -143,7 +176,10 @@ static int connect_voice(puddle_calls *cs, const VoicePtr &v, const char **code)
         });
         {
             std::lock_guard<std::mutex> g(cs->mu);
-            v->pc = pc, v->track = track, v->dc = dc;
+            v->pc = pc, v->track = track, v->dc = dc, v->vtrack = vt, v->strack = st;
+            v->vbase = random32(), v->sbase = random32();
+            for (int n = 1; n <= POND_WATCH; n++)
+                v->watch[n] = watch[n];
         }
         pc->setLocalDescription();
         if (!gathered(pc, cs, [] { return true; }))
@@ -227,9 +263,9 @@ int puddle_voice_join(puddle_ctx *ctx, const char *pond, int64_t channel, const 
         cs->version++;
     }
     if (connect_voice(cs, v, code) == 0) {
-        if (v->muted || v->deafened) { /* the Pond starts everyone unmuted */
+        if (v->muted || v->deafened) { /* the Pond starts everyone unmuted, with nothing on; moving keeps mute and deafen */
             const char *ignored;
-            puddle_voice_state(ctx, v->muted, v->deafened, &ignored);
+            puddle_voice_state(ctx, v->muted, v->deafened, -1, -1, &ignored);
         }
         return 0;
     }
@@ -254,7 +290,7 @@ int puddle_voice_leave(puddle_ctx *ctx, const char **)
     return 0;
 }
 
-int puddle_voice_state(puddle_ctx *ctx, int muted, int deafened, const char **code)
+int puddle_voice_state(puddle_ctx *ctx, int muted, int deafened, int camera, int screen, const char **code)
 {
     puddle_calls *cs = ctx->calls;
     if (!cs)
@@ -270,8 +306,13 @@ int puddle_voice_state(puddle_ctx *ctx, int muted, int deafened, const char **co
             v->muted = muted;
         if (deafened >= 0)
             v->deafened = deafened;
+        if (camera >= 0)
+            v->camera = camera;
+        if (screen >= 0)
+            v->screen = screen;
         pond = v->pond, session = v->session;
-        body += std::string("\"muted\":") + (v->muted ? "true" : "false") + ",\"deafened\":" + (v->deafened ? "true" : "false") + "}";
+        body += std::string("\"muted\":") + (v->muted ? "true" : "false") + ",\"deafened\":" + (v->deafened ? "true" : "false") +
+                ",\"camera\":" + (v->camera ? "true" : "false") + ",\"screen\":" + (v->screen ? "true" : "false") + "}";
         cs->version++;
     }
     if (session.empty())
@@ -314,6 +355,8 @@ void puddle_voice_write(puddle_ctx *ctx, puddle_jw *w)
     puddle_jw_num(w, "slot", v->slot);
     puddle_jw_flag(w, "muted", v->muted);
     puddle_jw_flag(w, "deafened", v->deafened);
+    puddle_jw_flag(w, "camera", v->camera);
+    puddle_jw_flag(w, "screen", v->screen);
     puddle_jw_end_object(w);
 }
 
@@ -336,16 +379,126 @@ int puddle_voice_send_audio(puddle_calls *cs, const unsigned char *frame, size_t
     return 0;
 }
 
+int puddle_voice_send_video(puddle_calls *cs, const unsigned char *frame, size_t len, int screen)
+{
+    if (!cs || !frame || !len || len > PUDDLE_CALL_VIDEO_MAX)
+        return -1;
+    std::shared_ptr<rtc::Track> track;
+    uint32_t ts;
+    {
+        std::lock_guard<std::mutex> g(cs->mu);
+        VoicePtr v = cs->voice;
+        if (!v || v->state != "active" || !(screen ? v->screen : v->camera) || !track_open(screen ? v->strack : v->vtrack))
+            return -1;
+        track = screen ? v->strack : v->vtrack;
+        ts = (screen ? v->sbase : v->vbase) + video_now();
+    }
+    try {
+        track->sendFrame((const rtc::byte *)frame, len, rtc::FrameInfo(ts));
+    } catch (const std::exception &) {
+        return -1;
+    }
+    return 0;
+}
+
+/* Everyone's camera and screen in the channel, watched: each keeps the track it was given until it goes (nothing moves), a
+ * new one takes the first free track, up to POND_WATCH. The Pond is told what changed; while it is being told, nothing else. */
+static void watch_everyone(puddle_calls *cs, const VoicePtr &v)
+{
+    std::string pond;
+    int64_t channel;
+    {
+        std::lock_guard<std::mutex> g(cs->mu);
+        if (v->state != "active" || v->watch_busy || v->session.empty())
+            return;
+        pond = v->pond, channel = v->channel;
+    }
+    puddle_pond_in_voice *list = nullptr;
+    size_t n = 0;
+    if (!cs->ctx->ponds || puddle_ponds_voice_list(cs->ctx->ponds, pond.c_str(), channel, &list, &n) != 0)
+        return;
+    std::vector<std::string> want;
+    for (size_t i = 0; i < n; i++) {
+        if (!strcmp(list[i].member, cs->me))
+            continue;
+        if (list[i].camera)
+            want.push_back(list[i].member);
+        if (list[i].screen)
+            want.push_back(std::string(list[i].member) + "/screen");
+    }
+    free(list);
+    std::map<int, std::string> change;
+    std::string session;
+    {
+        std::lock_guard<std::mutex> g(cs->mu);
+        if (cs->voice != v || v->state != "active" || v->watch_busy)
+            return;
+        std::string next[POND_WATCH + 1];
+        for (int t = 1; t <= POND_WATCH; t++)
+            if (std::find(want.begin(), want.end(), v->watching[t]) != want.end())
+                next[t] = v->watching[t]; /* still on: stays where it is */
+        for (auto &key : want) {
+            if (std::find(std::begin(next), std::end(next), key) != std::end(next))
+                continue;
+            for (int t = 1; t <= POND_WATCH; t++)
+                if (next[t].empty()) {
+                    next[t] = key;
+                    break;
+                }
+        }
+        for (int t = 1; t <= POND_WATCH; t++)
+            if (next[t] != v->watching[t])
+                change[t] = next[t];
+        if (change.empty())
+            return;
+        v->watch_busy = true;
+        session = v->session;
+    }
+    std::string body = "{\"tracks\":{";
+    for (auto &[t, key] : change)
+        body += (body.size() > 11 ? "," : "") + std::string("\"v") + std::to_string(t) + "\":" + (key.empty() ? "null" : "\"" + key + "\"");
+    body += "}}";
+    std::weak_ptr<PondVoice> weak = v;
+    puddle_ctx *ctx = cs->ctx;
+    std::lock_guard<std::mutex> g(cs->mu);
+    cs->tasks.push_back([cs, ctx, weak, pond, session, body, change] {
+        int status = 0;
+        char *reply = nullptr;
+        size_t len;
+        const char *code;
+        bool ok = puddle_pond_voice_call(ctx, pond.c_str(), ("/pond/v1/voice/" + session + "/watch").c_str(), body.data(), body.size(), &status,
+                                         &reply, &len, &code) == 0 &&
+                  status == 204;
+        free(reply);
+        std::lock_guard<std::mutex> g(cs->mu);
+        if (VoicePtr v = weak.lock()) {
+            if (ok)
+                for (auto &[t, key] : change)
+                    v->watching[t] = key;
+            v->watch_busy = false;
+        }
+    });
+    cs->wake.notify_all();
+}
+
 void callsx::voice_tick(puddle_calls *cs, int64_t now)
 {
-    std::lock_guard<std::mutex> g(cs->mu);
-    VoicePtr v = cs->voice;
-    if (!v || v->state == "ended")
-        return;
-    if (v->state == "connecting" && now - v->started >= cs->connect_ms)
-        end_voice(cs, v, "failed"); /* it never got through */
-    else if (v->lost_since && now - v->lost_since >= LOST_MS)
-        end_voice(cs, v, "failed"); /* it dropped, and didn't come back */
+    VoicePtr v;
+    {
+        std::lock_guard<std::mutex> g(cs->mu);
+        v = cs->voice;
+        if (!v || v->state == "ended")
+            return;
+        if (v->state == "connecting" && now - v->started >= cs->connect_ms) {
+            end_voice(cs, v, "failed"); /* it never got through */
+            return;
+        }
+        if (v->lost_since && now - v->lost_since >= LOST_MS) {
+            end_voice(cs, v, "failed"); /* it dropped, and didn't come back */
+            return;
+        }
+    }
+    watch_everyone(cs, v);
 }
 
 void callsx::voice_stop(puddle_calls *cs)

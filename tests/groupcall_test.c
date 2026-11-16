@@ -294,7 +294,7 @@ static void wait_heard(heard *h, const char *from, int at_least)
 typedef struct {
     pthread_mutex_t mu;
     int good, bad;
-    char from[PUDDLE_USER_ID_LEN + 1];
+    char from[PUDDLE_USER_ID_LEN + 16]; /* an id, or "<id>/screen" */
 } seen_video;
 
 /* access unit `k`: SPS, PPS, then an IDR slice of 6000 bytes, none of them zero (so no start code inside) */
@@ -523,6 +523,26 @@ int main(void)
         send_video(&c, id, 12);
         for (int i = 0; i < 100 && (video_good(&va) < 9 || video_good(&vb) < 9); i++) usleep(20000);
         CHECK(video_good(&va) >= 9 && video_good(&vb) >= 9 && !strcmp(va.from, c.uid) && !strcmp(vb.from, c.uid)); /* bob's over the group-only stream */
+        /* a shared screen, to every member, as "<them>/screen" */
+        seen_video sa = { PTHREAD_MUTEX_INITIALIZER, 0, 0, "" }, sb = sa;
+        puddle_calls_on_video(puddle_server_calls(a.srv), on_video, &sa);
+        puddle_calls_on_video(puddle_server_calls(b.srv), on_video, &sb);
+        {
+            unsigned char au[7000];
+            for (int k = 0; k < 12; k++) {
+                size_t len = video_au(k, au);
+                CHECK(puddle_call_send_screen(puddle_server_calls(c.srv), id, au, len) == 0);
+                usleep(66000);
+            }
+        }
+        for (int i = 0; i < 100 && (video_good(&sa) < 9 || video_good(&sb) < 9); i++) usleep(20000);
+        {
+            char want[PUDDLE_USER_ID_LEN + 16];
+            snprintf(want, sizeof want, "%s/screen", c.uid);
+            CHECK(video_good(&sa) >= 9 && video_good(&sb) >= 9 && sa.bad == 0 && !strcmp(sa.from, want) && !strcmp(sb.from, want));
+        }
+        puddle_calls_on_video(puddle_server_calls(a.srv), on_video, &va);
+        puddle_calls_on_video(puddle_server_calls(b.srv), on_video, &vb);
         send_video(&b, id, 12);
         for (int i = 0; i < 100 && video_good(&vc) < 9; i++) usleep(20000);
         CHECK(video_good(&vc) >= 9 && !strcmp(vc.from, b.uid));

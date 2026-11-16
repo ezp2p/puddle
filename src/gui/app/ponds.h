@@ -41,6 +41,8 @@ class Ponds : public QObject {
     Q_PROPERTY(QString voicePondName READ voicePondName NOTIFY voiceChanged)
     Q_PROPERTY(bool voiceMuted READ voiceMuted NOTIFY voiceChanged)
     Q_PROPERTY(bool voiceDeafened READ voiceDeafened NOTIFY voiceChanged)
+    Q_PROPERTY(bool voiceCamera READ voiceCamera NOTIFY voiceChanged)       // our camera, in the voice channel
+    Q_PROPERTY(bool voiceScreen READ voiceScreen NOTIFY voiceChanged)       // the screen we share there
 public:
     explicit Ponds(ApiClient *api, QObject *parent = nullptr);
 
@@ -71,6 +73,8 @@ public:
     QString voicePondName() const { return pondNames_.value(voicePond()); }
     bool voiceMuted() const { return voice_.value("muted").toBool(); }
     bool voiceDeafened() const { return voice_.value("deafened").toBool(); }
+    bool voiceCamera() const { return voice_.value("camera").toBool(); }
+    bool voiceScreen() const { return voice_.value("screen").toBool(); }
 
     void start() { timer_.start(); refresh(); }
     void stop() { timer_.stop(); }
@@ -89,6 +93,8 @@ public:
     Q_INVOKABLE void leave(const QString &pondId);
     Q_INVOKABLE void setProfile(const QString &pondId, const QString &profile);
     Q_INVOKABLE QString nameAt(int row) const { return list_.at(row).value("name").toString(); }
+    // A member of the open Pond's name, as they chose to appear there (their id's start if they show nothing)
+    Q_INVOKABLE QString nameOf(const QString &memberId) const { return people_.value(memberId).value("name").toString(memberId.left(8)); }
 
     // ---- roles (the Pond's docs/design.md, "Roles") ----
     Q_INVOKABLE void answerOffer(bool accept);
@@ -110,6 +116,8 @@ public:
     Q_INVOKABLE void leaveVoice();
     Q_INVOKABLE void setVoiceMuted(bool muted);
     Q_INVOKABLE void setVoiceDeafened(bool deafened);
+    Q_INVOKABLE void setVoiceCamera(bool on);
+    Q_INVOKABLE void setVoiceScreen(bool on);
     Q_INVOKABLE void refreshVoice();
 
 signals:
@@ -131,6 +139,7 @@ private:
     QString pathOfChannel() const;
     QString why(int status, const QJsonDocument &json, const QString &doing) const;
     void takeVoice(const QJsonObject &voice);
+    void setVoiceFlag(const QString &name, bool on);
     QJsonObject channelRow(const QJsonObject &c) const;
     void admin(const QString &path, const QJsonObject &body, const QString &done, const QString &doing, bool reloadBans = false);
 

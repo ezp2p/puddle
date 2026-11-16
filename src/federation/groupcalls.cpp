@@ -192,22 +192,24 @@ std::shared_ptr<rtc::PeerConnection> make_pair_pc(puddle_calls *cs, const std::w
     return pc;
 }
 
-/* The member's video: to the owner's device here, or to the phone that has the call, on the leg's track for their number. */
-void setup_pair_vtrack(puddle_calls *cs, const std::weak_ptr<GroupCall> &wg, const PairPtr &pair, const std::shared_ptr<rtc::Track> &track)
+/* The member's video, or the screen they share (`screen`): to the owner's device here (a screen as from "<them>/screen"), or
+ * to the phone that has the call, on the leg's track for their number (a screen isn't passed to a phone yet). */
+void setup_pair_vtrack(puddle_calls *cs, const std::weak_ptr<GroupCall> &wg, const PairPtr &pair, const std::shared_ptr<rtc::Track> &track,
+                       bool screen = false)
 {
     h264_handler(track);
-    std::string id, peer = pair->peer;
+    std::string id, peer = pair->peer, from = pair->peer + (screen ? "/screen" : "");
     {
         std::lock_guard<std::mutex> g(cs->mu);
         GroupPtr call = wg.lock();
         if (!call)
             return;
-        pair->vtrack = track;
-        pair->vbase = random32();
+        (screen ? pair->strack : pair->vtrack) = track;
+        (screen ? pair->sbase : pair->vbase) = random32();
         id = call->id;
     }
     std::weak_ptr<Pair> wp = pair;
-    track->onFrame([cs, wg, wp, id, peer](rtc::binary data, rtc::FrameInfo info) {
+    track->onFrame([cs, wg, wp, id, peer, from, screen](rtc::binary data, rtc::FrameInfo info) {
         if (data.empty() || data.size() > PUDDLE_CALL_VIDEO_MAX)
             return;
         puddle_call_frame_fn fn = nullptr;
@@ -225,7 +227,7 @@ void setup_pair_vtrack(puddle_calls *cs, const std::weak_ptr<GroupCall> &wg, con
                 return;
             if (call->device.empty()) {
                 fn = cs->on_video, user = cs->on_video_user;
-            } else if (call->leg) {
+            } else if (call->leg && !screen) {
                 int s = slot_of(*call, peer);
                 if (s <= PHONE_SLOTS && track_open(call->leg->vslots[s])) {
                     phone = call->leg->vslots[s];
@@ -234,7 +236,7 @@ void setup_pair_vtrack(puddle_calls *cs, const std::weak_ptr<GroupCall> &wg, con
             }
         }
         if (fn)
-            fn(user, id.c_str(), peer.c_str(), (const unsigned char *)data.data(), data.size(), info.timestamp);
+            fn(user, id.c_str(), from.c_str(), (const unsigned char *)data.data(), data.size(), info.timestamp);
         else if (phone)
             send_on(phone, data, ts);
     });
@@ -243,8 +245,10 @@ void setup_pair_vtrack(puddle_calls *cs, const std::weak_ptr<GroupCall> &wg, con
 /* The member's frames go to the owner's device here (the window), or to the phone that has the call, marked with whose. */
 void setup_pair_track(puddle_calls *cs, const std::weak_ptr<GroupCall> &wg, const PairPtr &pair, const std::shared_ptr<rtc::Track> &track)
 {
-    if (track->mid() == VIDEO_MID)
-        return setup_pair_vtrack(cs, wg, pair, track);
+    if (track->mid() == VIDEO_MID || track->mid() == SCREEN_MID)
+        return setup_pair_vtrack(cs, wg, pair, track, track->mid() == SCREEN_MID);
+    if (track->mid() != MID)
+        return; /* a track from a newer Puddle: left as it came */
     opus_handler(track);
     std::string id, peer = pair->peer;
     {
@@ -319,6 +323,7 @@ void offer_to(puddle_calls *cs, std::weak_ptr<GroupCall> wg, PairPtr pair, std::
         auto track = pc->addTrack(media);
         setup_pair_track(cs, wg, pair, track);
         setup_pair_track(cs, wg, pair, pc->addTrack(video_media(VIDEO_MID, rtc::Description::Direction::SendRecv)));
+        setup_pair_track(cs, wg, pair, pc->addTrack(video_media(SCREEN_MID, rtc::Description::Direction::SendRecv)));
         pc->setLocalDescription();
         if (gathered(pc, cs, [&] { return pair->track != nullptr; }))
             sdp = std::string(*pc->localDescription());
@@ -932,7 +937,7 @@ int callsx::group_send_audio(puddle_calls *cs, const char *id, const unsigned ch
     return 0;
 }
 
-int callsx::group_send_video(puddle_calls *cs, const char *id, const unsigned char *frame, size_t len)
+int callsx::group_send_video(puddle_calls *cs, const char *id, const unsigned char *frame, size_t len, bool screen)
 {
     std::vector<std::pair<std::shared_ptr<rtc::Track>, uint32_t>> to;
     {
@@ -944,8 +949,8 @@ int callsx::group_send_video(puddle_calls *cs, const char *id, const unsigned ch
             return -1;
         const uint32_t now = video_now();
         for (auto &[peer, p] : call->pairs)
-            if (p->connected && track_open(p->vtrack))
-                to.emplace_back(p->vtrack, p->vbase + now);
+            if (p->connected && track_open(screen ? p->strack : p->vtrack))
+                to.emplace_back(screen ? p->strack : p->vtrack, (screen ? p->sbase : p->vbase) + now);
     }
     if (to.empty())
         return -1;

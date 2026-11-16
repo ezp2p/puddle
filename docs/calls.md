@@ -242,9 +242,30 @@ Encoding and decoding run on a thread of their own. A sender with nothing for 2 
 and its decoder goes, so it starts again from a key frame. Without OpenH264 the app builds and calls are voice only
 (`-DPUDDLE_VIDEO=OFF` too).
 
-The camera is off at the start of every call; the bar has a button for it once the call is connected. While anyone's
-camera is on, tiles show under the bar: one for each sender, named, and this end's own, small and mirrored. On a Mac the
-app says why it wants the camera (and the microphone) in its `Info.plist`, and asks the first time.
+The camera is off at the start of every call; the bar has a button for it once the call is connected. On a Mac the app says
+why it wants the camera (and the microphone) in its `Info.plist`, and asks the first time.
+
+### Sharing a screen
+
+Every connection of a call has a second video track, `screen`, beside the camera's: H.264 the same way, sent while the
+owner shares their screen (the bar's button beside the camera). Several can share at once. The device captures the primary
+screen with Qt Multimedia (`QScreenCapture`; on Wayland the system asks which screen, through its portal) and encodes it
+apart from the camera: 1280×720, the whole screen fitted in with black around it (never cut), 10 frames a second, about
+2.5 Mbit/s, so text stays sharp. A Puddle passes it on as it does a camera; what a friend or member shares reaches the
+device as from `<their id>/screen`. A phone's leg carries no screen yet, either way.
+
+A Puddle from before this, which knows no `screen` track, would take it for sound: calls were not released before it, so
+nothing out there is that old. From now on a track a Puddle doesn't know is left alone.
+
+### The video pane
+
+What everyone's camera and screen look like (`VideoPane.qml`, shared with a Pond's voice channels): a grid above the
+call's chat, while that chat is open (elsewhere, small tiles under the bar), with a tile for each camera and each shared
+screen coming in and this end's own (its camera mirrored, its screen small). The tiles stay in the order they came, so
+nobody moves when someone comes or goes; the owner may choose "who's talking first" in Settings instead. A tile is ringed
+while its owner talks. Clicking one pins it large, the others in a strip under it: that is how one of several shared
+screens is chosen to look at. Its corner has full size (the pane covers the messages) and pop out (a window of its own,
+put back from there or by closing it).
 
 On a phone, its leg has a `video` track both ways (its camera, and the friend's back) and seven that only come in, `v1` to
 `v7`: in a group call, each other member's video comes on the track for their number (`slot`), which is the smallest not
@@ -260,4 +281,4 @@ place of a camera) and shows the friend's.
 
 - **Asking for a key frame** (RTCP PLI) instead of one every 2 seconds, and resending lost packets (NACK).
 - **Bitrate that follows the connection** (REMB or transport-wide feedback), and a smaller picture in a big group call.
-- **Screen sharing**, as a second video track.
+

@@ -592,7 +592,11 @@ activation or push to talk, no cap on people or voices, cameras too, and the Pon
   leave, and voice activation or push to talk in Settings. Tested in `pondvoice_test` against a stand-in Pond, in
   `callaudio_test` (the talk gate), and in the pond repository's `e2e_test` against a real one.
 - [ ] **9.3 On the phone.** Over its leg, as for a group call.
-- [ ] **9.4 Video in the app.** The camera in a voice channel, choosing whom to watch, the tiles.
+- [x] **9.4 Video, and sharing screens.** Cameras in a voice channel, everyone's watched by the Puddle (each on a track
+  it keeps), and a shared screen as a second video track, in voice channels and in calls between Puddles alike. One video
+  pane for both (`VideoPane.qml`): a grid in a fixed order (or who's talking first, in Settings), click to pin (how one of
+  several shared screens is picked), full size over the messages, or popped out. Tested in `pondvoice_test`, `call_test`,
+  `groupcall_test`, `callvideo_test`, `ui_test` and the pond repository's `voice_test`.
 - [ ] **9.5 Moderation.** Disconnecting and muting someone, by administrators.
 
 ## Later, not planned in detail

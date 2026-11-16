@@ -23,6 +23,8 @@
 #define H264_PT 96
 #define MID "audio"
 #define VIDEO_MID "video"
+#define SCREEN_MID "screen" /* a shared screen: a second video track (docs/calls.md, "Sharing a screen") */
+#define POND_WATCH 16 /* a Pond voice channel: cameras and screens we watch at once, on v1 .. v16 (the Pond's docs/voice.md) */
 #define PHONE_SLOTS 7 /* a phone's leg has a video track for each other member a group call can have: v1 .. v7 */
 #define LOST_MS 10000 /* a connection that dropped and hasn't come back in this long is over */
 
@@ -65,6 +67,8 @@ struct Call {
     LegPtr leg;             /* that phone's leg, once it has asked for one */
     std::shared_ptr<rtc::Track> vtrack; /* the video, beside the sound */
     uint32_t vbase = 0;     /* our video's RTP timestamps are this plus the time */
+    std::shared_ptr<rtc::Track> strack; /* a shared screen, beside that */
+    uint32_t sbase = 0;
 };
 
 using CallPtr = std::shared_ptr<Call>;
@@ -82,6 +86,8 @@ struct Pair {
     bool have_in = false;
     std::shared_ptr<rtc::Track> vtrack;
     uint32_t vbase = 0;
+    std::shared_ptr<rtc::Track> strack; /* a shared screen */
+    uint32_t sbase = 0;
 };
 
 using PairPtr = std::shared_ptr<Pair>;
@@ -112,10 +118,15 @@ struct PondVoice {
     int slot = 0;
     std::string state;      /* connecting, active, ended */
     std::string reason;     /* ended: why ("failed": the connection never came or dropped; "removed": the Pond let us go) */
-    bool muted = false, deafened = false;
+    bool muted = false, deafened = false, camera = false, screen = false;
     std::shared_ptr<rtc::PeerConnection> pc;
     std::shared_ptr<rtc::Track> track;
     std::shared_ptr<rtc::DataChannel> dc;
+    std::shared_ptr<rtc::Track> vtrack, strack;      /* our camera, and the screen we share, to the Pond */
+    uint32_t vbase = 0, sbase = 0;
+    std::shared_ptr<rtc::Track> watch[POND_WATCH + 1]; /* v1 .. v16: what we watch, from the Pond */
+    std::string watching[POND_WATCH + 1];            /* on each, as the Pond has it: a member's id (camera), "<id>/screen", or "" */
+    bool watch_busy = false;                         /* telling the Pond what to change */
     bool open = false;      /* the track: our voice can go */
     int64_t started = 0, lost_since = 0;
     uint32_t next_ts = 0;   /* the RTP timestamp of our next frame */
@@ -214,7 +225,7 @@ int group_decline(puddle_ctx *ctx, const char *id, const char **code);
 int group_end(puddle_ctx *ctx, const char *id, const char **code);
 int group_media(puddle_ctx *ctx, const char *id, const char *device, const char *sdp, char **answer, int *udp, const char **code);
 int group_send_audio(puddle_calls *cs, const char *id, const unsigned char *frame, size_t len); /* 1: not a group call's */
-int group_send_video(puddle_calls *cs, const char *id, const unsigned char *frame, size_t len); /* 1: not a group call's */
+int group_send_video(puddle_calls *cs, const char *id, const unsigned char *frame, size_t len, bool screen = false); /* 1: not a group call's */
 /* lock held. write_call for a group call; the joined one and those heard of (first), in a list */
 void write_group(puddle_ctx *ctx, puddle_jw *w, const GroupCall &g);
 int group_write_one(puddle_ctx *ctx, puddle_jw *w, const char *id); /* 0 written, 1 none */

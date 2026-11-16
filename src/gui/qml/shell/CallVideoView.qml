@@ -26,8 +26,9 @@ Card {
         return chats.nameOf(key)
     }
 
+    property bool hidden: false        // shown elsewhere (the chat's video pane, or popped out), or not a call's
     objectName: "callVideo"
-    visible: video !== null && video.running && (keys.length > 0 || video.cameraOn)
+    visible: !hidden && video !== null && video.running && (keys.length > 0 || video.cameraOn)
     implicitWidth: Math.min(content.implicitWidth, (parent ? parent.width : 1000) - 48) + 16
     implicitHeight: content.implicitHeight + 16
 

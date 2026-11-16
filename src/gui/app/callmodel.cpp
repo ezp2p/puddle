@@ -84,6 +84,10 @@ void Calls::take(const QJsonObject &call)
         camera_ = false;
         emit cameraChanged();
     }
+    if (!live && screen_) { /* and sharing nothing */
+        screen_ = false;
+        emit screenChanged();
+    }
     followLeg();
     if (state_ != was || id_ != wasId || device_ != wasDevice || here_ != wasHere || group_ != wasGroup || others_ != wasOthers) {
         emit changed();
@@ -258,4 +262,12 @@ QString Calls::describe(const QString &reason, bool incoming, const QString &nam
     if (reason == QLatin1String("no_calls"))
         return tr("%1's Puddle doesn't take calls").arg(name);
     return incoming ? tr("A call from %1 didn't connect").arg(name) : tr("Your call to %1 didn't connect").arg(name);
+}
+
+void Calls::setScreen(bool on)
+{
+    if (on == screen_)
+        return;
+    screen_ = on;
+    emit screenChanged();
 }

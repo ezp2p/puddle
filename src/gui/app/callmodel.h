@@ -33,6 +33,7 @@ class Calls : public QObject {
     Q_PROPERTY(QString elsewhere READ elsewhere NOTIFY changed)  // where it is if not here, in words: "on Pixel", "on the computer"
     Q_PROPERTY(bool muted READ muted NOTIFY mutedChanged)
     Q_PROPERTY(bool camera READ camera NOTIFY cameraChanged)    // this end's camera is on (off at the start of every call)
+    Q_PROPERTY(bool screen READ screen NOTIFY screenChanged)    // this end shares its screen (off at the start of every call)
     Q_PROPERTY(QString error READ error NOTIFY errorChanged)     // the last thing that went wrong starting or answering, in words
 public:
     explicit Calls(ApiClient *api, QObject *parent = nullptr);
@@ -49,6 +50,7 @@ public:
     QString elsewhere() const;
     bool muted() const { return muted_; }
     bool camera() const { return camera_; }
+    bool screen() const { return screen_; }
     QString error() const { return error_; }
     quint64 version() const { return version_; }
 
@@ -73,6 +75,8 @@ public:
     Q_INVOKABLE void toggleMute() { setMuted(!muted_); }
     Q_INVOKABLE void setCamera(bool on);
     Q_INVOKABLE void toggleCamera() { setCamera(!camera_); }
+    Q_INVOKABLE void setScreen(bool on);
+    Q_INVOKABLE void toggleScreen() { setScreen(!screen_); }
     // Who has number `slot` in a group call (a phone's video from "slot:<n>"), "" if nobody
     Q_INVOKABLE QString slotUser(int slot) const { return slots_.value(slot); }
     // Words for how a call ended, as a chat shows it
@@ -84,6 +88,7 @@ signals:
     void changed();
     void mutedChanged();
     void cameraChanged();
+    void screenChanged();
     void errorChanged();
     void ringing(const QString &user, const QString &group); // a friend's call (or a call in a group) just started ringing here
     void groupCallsChanged();            // the calls going on in groups
@@ -106,7 +111,7 @@ private:
     QString state_, id_, user_, group_, error_;
     int others_ = 0;
     QHash<QString, int> groupCalls_;
-    bool incoming_ = false, muted_ = false, camera_ = false;
+    bool incoming_ = false, muted_ = false, camera_ = false, screen_ = false;
     QHash<int, QString> slots_;
     qint64 answered_ = 0;
 };
