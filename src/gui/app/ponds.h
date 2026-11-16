@@ -13,7 +13,7 @@
 class Ponds : public QObject {
     Q_OBJECT
     Q_PROPERTY(QObject *list READ list CONSTANT)           // the rail: id, name, status, address
-    Q_PROPERTY(QObject *channels READ channels CONSTANT)   // of the open Pond: id, name, topic
+    Q_PROPERTY(QObject *channels READ channels CONSTANT)   // of the open Pond: id, name, topic, kind (text, voice), voice (who is in it: id, name, color, muted, deafened, isMe)
     Q_PROPERTY(QObject *members READ members CONSTANT)     // of the open Pond: id, name, color, isMe, role
     Q_PROPERTY(QObject *bans READ bans CONSTANT)           // of the open Pond, once loadBans() has asked: member, name, by, byName, reason, ts
     Q_PROPERTY(QObject *messages READ messages CONSTANT)   // the open channel, oldest first: id, author, name, tint, text, files, ts, mine, grouped, dayStart
@@ -30,6 +30,15 @@ class Ponds : public QObject {
     Q_PROPERTY(QString myId READ myId NOTIFY currentInfoChanged)
     Q_PROPERTY(bool hasOlder READ hasOlder NOTIFY hasOlderChanged)
     Q_PROPERTY(bool joining READ joining NOTIFY joiningChanged)
+    // The voice channel we are in (docs/ponds.md, "Voice channels"), in whichever Pond: "" for none
+    Q_PROPERTY(QString voicePond READ voicePond NOTIFY voiceChanged)
+    Q_PROPERTY(QString voiceChannel READ voiceChannel NOTIFY voiceChanged)
+    Q_PROPERTY(QString voiceState READ voiceState NOTIFY voiceChanged)       // connecting, active, ended
+    Q_PROPERTY(QString voiceReason READ voiceReason NOTIFY voiceChanged)     // ended: failed, removed
+    Q_PROPERTY(QString voiceName READ voiceName NOTIFY voiceChanged)         // the channel's name
+    Q_PROPERTY(QString voicePondName READ voicePondName NOTIFY voiceChanged)
+    Q_PROPERTY(bool voiceMuted READ voiceMuted NOTIFY voiceChanged)
+    Q_PROPERTY(bool voiceDeafened READ voiceDeafened NOTIFY voiceChanged)
 public:
     explicit Ponds(ApiClient *api, QObject *parent = nullptr);
 
@@ -51,6 +60,14 @@ public:
     QString channelTopic() const;
     bool hasOlder() const { return hasOlder_; }
     bool joining() const { return joining_; }
+    QString voicePond() const { return voice_.value("pond").toString(); }
+    QString voiceChannel() const { return voice_.isEmpty() ? QString() : QString::number(qint64(voice_.value("channel").toDouble())); }
+    QString voiceState() const { return voice_.value("state").toString(); }
+    QString voiceReason() const { return voice_.value("reason").toString(); }
+    QString voiceName() const { return channelNames_.value(voicePond()).value(voiceChannel()); }
+    QString voicePondName() const { return pondNames_.value(voicePond()); }
+    bool voiceMuted() const { return voice_.value("muted").toBool(); }
+    bool voiceDeafened() const { return voice_.value("deafened").toBool(); }
 
     void start() { timer_.start(); refresh(); }
     void stop() { timer_.stop(); }
@@ -84,6 +101,13 @@ public:
     // May we act on this member from the app? (Never ourselves or an operator, and only a lower rank.)
     Q_INVOKABLE bool canActOn(const QString &memberId) const;
 
+    // ---- voice channels (docs/ponds.md, "Voice channels") ----
+    Q_INVOKABLE void joinVoice(const QString &channelId);   // in the open Pond; says why not with failed()
+    Q_INVOKABLE void leaveVoice();
+    Q_INVOKABLE void setVoiceMuted(bool muted);
+    Q_INVOKABLE void setVoiceDeafened(bool deafened);
+    Q_INVOKABLE void refreshVoice();
+
 signals:
     void currentChanged();
     void currentInfoChanged();
@@ -91,6 +115,7 @@ signals:
     void hasOlderChanged();
     void joiningChanged();
     void joined(const QString &pondId);
+    void voiceChanged();
     void failed(const QString &what);
     void adminDone(const QString &what);   // said in words, for a short notice
     void adminFailed(const QString &why);
@@ -101,6 +126,8 @@ private:
     void rebuildMessages();
     QString pathOfChannel() const;
     QString why(int status, const QJsonDocument &json, const QString &doing) const;
+    void takeVoice(const QJsonObject &voice);
+    QJsonObject channelRow(const QJsonObject &c) const;
     void admin(const QString &path, const QJsonObject &body, const QString &done, const QString &doing, bool reloadBans = false);
 
     ApiClient *api_;
@@ -111,6 +138,11 @@ private:
     QJsonObject info_;
     QHash<QString, QString> lastChannel_;          // pond id -> the channel open there last
     QHash<QString, QJsonObject> people_;           // member id -> {name, color}
+    QJsonObject voice_;                            // GET /api/v1/voice's `voice`, or empty
+    QHash<QString, QHash<QString, QString>> channelNames_; // pond id -> channel id -> name, of every Pond (for the voice bar)
+    QHash<QString, QString> pondNames_;
+    bool busyVoice_ = false;
+    int voiceGen_ = 0;                             // the owner changed something since a request for it went out: drop its answer
     QList<QJsonObject> loaded_;                    // the open channel's messages, oldest first, as the API gives them
     bool hasOlder_ = false, joining_ = false, busyList_ = false, busyMessages_ = false, busyOlder_ = false;
     int generation_ = 0;                           // a channel opened since a request went out: drop its answer

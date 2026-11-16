@@ -326,6 +326,73 @@ static int pond_profile(const puddle_call *c, puddle_jw *w)
     return 200;
 }
 
+/* ---- voice channels (docs/ponds.md, "Voice channels"): carried by federation/pondvoice.cpp, through the courier ---- */
+
+static const puddle_courier &voiceCourier(const puddle_call *c)
+{
+    if (!c->ctx->courier || !c->ctx->courier->voice_join || !c->ctx->courier->voice_write)
+        throw Error(409, "no_calls");
+    return *c->ctx->courier;
+}
+
+static Error voiceFailure(const char *code)
+{
+    if (!strcmp(code, "no_pond") || !strcmp(code, "no_channel") || !strcmp(code, "no_voice"))
+        return Error(404, code);
+    if (!strcmp(code, "busy") || !strcmp(code, "no_calls") || !strcmp(code, "not_voice") || !strcmp(code, "full") || !strcmp(code, "removed"))
+        return Error(409, code);
+    return Error(502, code); /* unreachable, certificate_changed, not_proven, failed */
+}
+
+/* {"voice": the voice channel we are in, or null} */
+static int writeVoice(const puddle_call *c, puddle_jw *w)
+{
+    puddle_jw_object(w);
+    puddle_jw_key(w, "voice");
+    voiceCourier(c).voice_write(c->ctx, w);
+    puddle_jw_end_object(w);
+    return 200;
+}
+
+static int get_voice(const puddle_call *c, puddle_jw *w) { return writeVoice(c, w); }
+
+static int join_voice(const puddle_call *c, puddle_jw *w)
+{
+    const puddle_courier &cr = voiceCourier(c);
+    const char *code = "failed";
+    if (cr.voice_join(c->ctx, puddle_param(c, "pond"), strtoll(puddle_param(c, "channel"), nullptr, 10), &code) != 0)
+        throw voiceFailure(code);
+    return writeVoice(c, w);
+}
+
+static int leave_voice(const puddle_call *c, puddle_jw *)
+{
+    const char *code = "failed";
+    voiceCourier(c).voice_leave(c->ctx, &code);
+    return 204;
+}
+
+/* {muted?, deafened?}: each a boolean */
+static int voice_state(const puddle_call *c, puddle_jw *w)
+{
+    Body b(c);
+    auto flag = [&](const char *key) {
+        if (!b.has(key))
+            return -1;
+        puddle_span v = b.raw(key);
+        if (v.len == 4 && !memcmp(v.p, "true", 4))
+            return 1;
+        if (v.len == 5 && !memcmp(v.p, "false", 5))
+            return 0;
+        throw Error::badRequest();
+    };
+    int muted = flag("muted"), deafened = flag("deafened");
+    const char *code = "failed";
+    if (voiceCourier(c).voice_state(c->ctx, muted, deafened, &code) != 0)
+        throw voiceFailure(code);
+    return writeVoice(c, w);
+}
+
 #define POND "/api/v1/ponds/{pond:id}"
 
 const puddle_route puddle_pond_api_routes[] = {
@@ -347,5 +414,9 @@ const puddle_route puddle_pond_api_routes[] = {
     { "POST", POND "/admin/members/{member:id}/ban",              PUDDLE_AUTH_OWNER, 2048,  admin_ban,        NULL },
     { "GET",  POND "/admin/bans",                                 PUDDLE_AUTH_OWNER, 0,     admin_bans,       NULL },
     { "POST", POND "/admin/bans/{member:id}/unban",               PUDDLE_AUTH_OWNER, 64,    admin_unban,      NULL },
+    { "POST", POND "/channels/{channel:num}/voice/join",          PUDDLE_AUTH_OWNER, 64,    join_voice,       NULL },
+    { "GET",  "/api/v1/voice",                                    PUDDLE_AUTH_OWNER, 0,     get_voice,        NULL },
+    { "POST", "/api/v1/voice/leave",                              PUDDLE_AUTH_OWNER, 64,    leave_voice,      NULL },
+    { "POST", "/api/v1/voice/state",                              PUDDLE_AUTH_OWNER, 256,   voice_state,      NULL },
 };
 const size_t puddle_pond_api_routes_count = sizeof puddle_pond_api_routes / sizeof puddle_pond_api_routes[0];

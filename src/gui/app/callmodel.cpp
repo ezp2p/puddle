@@ -24,19 +24,26 @@ void Calls::refresh()
             return;
         version_ = v;
         // the first is the call going on, if any; then the group calls we are not in (rung by one, or open to join)
-        QJsonObject first;
+        QJsonObject first, ended;
         QHash<QString, int> groups;
         for (const QJsonValue &item : o.value("items").toArray()) {
             const QJsonObject c = item.toObject();
             const QString state = c.value("state").toString();
-            if (state == QLatin1String("ended"))
+            if (state == QLatin1String("ended")) {
+                ended = c; /* the newest that ended */
                 break; /* the history, after what is going on */
+            }
             if (!c.value("group").toString().isEmpty())
                 groups.insert(c.value("group").toString(), c.value("members").toArray().size() + (state == QLatin1String("open") || state == QLatin1String("ringing") ? 0 : 1));
             if (first.isEmpty() && state != QLatin1String("open"))
                 first = c;
         }
+        const QString wasId = id_, wasState = state_, wasUser = user_;
         take(first);
+        // ours was ringing at theirs, and they were in a call already (or in a voice channel): say so
+        if (wasState == QLatin1String("calling") && id_ != wasId && ended.value("id").toString() == wasId &&
+            ended.value("reason").toString() == QLatin1String("busy"))
+            setError(tr("%1 is already in a call.").arg(nameOf_ ? nameOf_(wasUser) : wasUser));
         if (groups != groupCalls_) {
             groupCalls_ = groups;
             emit groupCallsChanged();
@@ -167,8 +174,11 @@ void Calls::start(const QJsonObject &body)
 {
     setError(QString());
     api_->post(QStringLiteral("/api/v1/calls/start"), body, [this](int status, const QJsonDocument &json) {
+        const QJsonObject o = json.object();
+        if (status == 201 && o.value("state").toString() == QLatin1String("ended") && o.value("reason").toString() == QLatin1String("busy"))
+            setError(tr("%1 is already in a call.").arg(nameOf_ ? nameOf_(o.value("user").toString()) : o.value("user").toString()));
         if (status == 201)
-            take(json.object());
+            take(o);
         else
             setError(words(status, json));
         refresh();
@@ -244,7 +254,7 @@ QString Calls::describe(const QString &reason, bool incoming, const QString &nam
     if (reason == QLatin1String("no_answer"))
         return incoming ? tr("Missed call from %1").arg(name) : tr("%1 didn't answer").arg(name);
     if (reason == QLatin1String("busy"))
-        return incoming ? tr("%1 called while you were in a call").arg(name) : tr("%1 was in another call").arg(name);
+        return incoming ? tr("%1 called while you were in a call").arg(name) : tr("%1 was already in a call").arg(name);
     if (reason == QLatin1String("no_calls"))
         return tr("%1's Puddle doesn't take calls").arg(name);
     return incoming ? tr("A call from %1 didn't connect").arg(name) : tr("Your call to %1 didn't connect").arg(name);

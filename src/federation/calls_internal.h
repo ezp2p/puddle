@@ -103,6 +103,25 @@ struct GroupCall {
 
 using GroupPtr = std::shared_ptr<GroupCall>;
 
+/* Our connection to a Pond's voice channel (docs/ponds.md, "Voice channels"; the Pond's docs/voice.md). Not a call: nothing
+ * rings and nothing goes in the history. We offer, the Pond answers; our voice goes up `track`, everyone else's comes back over
+ * `dc` (`frames`), each marked with its sender's slot in the channel. */
+struct PondVoice {
+    std::string pond, session;
+    int64_t channel = 0;
+    int slot = 0;
+    std::string state;      /* connecting, active, ended */
+    std::string reason;     /* ended: why ("failed": the connection never came or dropped; "removed": the Pond let us go) */
+    bool muted = false, deafened = false;
+    std::shared_ptr<rtc::PeerConnection> pc;
+    std::shared_ptr<rtc::Track> track;
+    std::shared_ptr<rtc::DataChannel> dc;
+    bool open = false;      /* the track: our voice can go */
+    int64_t started = 0, lost_since = 0;
+    uint32_t next_ts = 0;   /* the RTP timestamp of our next frame */
+};
+using VoicePtr = std::shared_ptr<PondVoice>;
+
 /* An ended call, as the owner's history keeps it (<data_dir>/state/calls.jsonl, one per line, oldest first). */
 struct Record {
     std::string id, peer, reason, group;
@@ -122,6 +141,7 @@ struct puddle_calls {
     callsx::CallPtr current;                 /* the call with a friend going on, if any */
     callsx::GroupPtr group;                  /* or the group call we are in */
     std::map<std::string, callsx::GroupPtr> heard; /* calls going on in our groups that we are not in, by group */
+    callsx::VoicePtr voice;                  /* or the Pond voice channel we are in (or were, when it ended without us leaving) */
     std::deque<callsx::CallPtr> ended;       /* newest first: their connections, until the worker lets them go */
     std::deque<callsx::GroupPtr> ended_groups;
     std::deque<callsx::Record> history;      /* every ended call kept, oldest first (PUDDLE_CALL_HISTORY) */
@@ -176,6 +196,11 @@ std::string answer_leg(puddle_calls *cs, const LegPtr &leg, const std::string &o
                        std::function<void()> fail, std::function<void(const rtc::binary &, uint32_t)> frame,
                        std::function<void(const rtc::binary &, uint32_t)> vframe);
 void write_device(puddle_ctx *ctx, puddle_jw *w, const std::string &device);
+
+/* ---- pondvoice.cpp ---- */
+bool in_voice(puddle_calls *cs);                      /* lock held: in a Pond's voice channel (one that hasn't ended) */
+void voice_tick(puddle_calls *cs, int64_t now);       /* from the worker, lock not held */
+void voice_stop(puddle_calls *cs);                    /* leaving, before the worker stops: the Pond is told */
 
 /* ---- groupcalls.cpp ---- */
 void group_tick(puddle_calls *cs, int64_t now);       /* from the worker, lock not held */

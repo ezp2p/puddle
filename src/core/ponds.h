@@ -125,12 +125,24 @@ void puddle_ponds_answered(puddle_ponds *p, const char *id, const char *role);
 
 /* ---- for the owner's routes (openapi.yaml, "ponds") ---- */
 
-/* [{id, name, description, address, status, channels: [...]}] */
+/* [{id, name, description, address, status, channels: [...]}]: each channel with its `kind`, and a voice channel with who is
+ * in it now (`voice`: [{member, slot, muted, deafened, camera}]) */
 void puddle_ponds_write_list(puddle_ponds *p, puddle_jw *w);
 /* {id, name, ..., channels, members, me}. 0, or 1 if there is no such Pond. */
 int puddle_ponds_write_one(puddle_ponds *p, const char *id, puddle_jw *w);
 /* Is `channel` one of the Pond's channels? */
 int puddle_ponds_has_channel(puddle_ponds *p, const char *id, int64_t channel);
+
+/* ---- voice channels (the Pond's docs/voice.md; docs/ponds.md, "Voice channels") ---- */
+
+/* 1 a voice channel, 0 a text one, -1 no such channel. */
+int puddle_ponds_channel_kind(puddle_ponds *p, const char *id, int64_t channel);
+/* Does the Pond's /info list `feature` ("voice", "files", ...)? */
+int puddle_ponds_has_feature(puddle_ponds *p, const char *id, const char *feature);
+/* Who has `slot` in voice channel `channel` now, as the Pond last said: 0 with their id, -1 if nobody we know of. */
+int puddle_ponds_voice_member(puddle_ponds *p, const char *id, int64_t channel, int slot, char out[PUDDLE_USER_ID_LEN + 1]);
+/* Is `member` (NULL: us) in voice channel `channel`, as the Pond last said? */
+int puddle_ponds_in_voice(puddle_ponds *p, const char *id, int64_t channel, const char *member);
 /* Up to `limit` messages of `channel` before `before` (0 = the newest), oldest first, as {"items": [...], "more": bool}, if what
  * is kept can answer: 0. 1 if the Pond must be asked (older than what is kept); -1 no such Pond or channel. */
 int puddle_ponds_write_messages(puddle_ponds *p, const char *id, int64_t channel, int64_t before, int limit, puddle_jw *w,

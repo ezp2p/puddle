@@ -81,6 +81,110 @@ Pane {
         }
         Rectangle { Layout.fillWidth: true; height: 1; color: Theme.hairline }
 
+        // how the microphone goes in a Pond's voice channel (docs/ponds.md, "Voice channels"); a call always sends it
+        ColumnLayout {
+            objectName: "voiceSettings"
+            visible: !page.backend.phone
+            Layout.fillWidth: true
+            Layout.margins: 16
+            spacing: 6
+            Label { text: qsTr("Voice channels"); font.bold: true }
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                opacity: 0.65
+                font.pixelSize: 12
+                text: qsTr("When your microphone is heard in a Pond's voice channel. Calls always send it, unless you mute.")
+            }
+            RowLayout {
+                spacing: 16
+                RadioButton {
+                    objectName: "talkVoice"
+                    text: qsTr("Voice activation")
+                    checked: page.backend.talkMode === "voice"
+                    onToggled: if (checked) page.backend.talkMode = "voice"
+                }
+                RadioButton {
+                    objectName: "talkPush"
+                    text: qsTr("Push to talk")
+                    checked: page.backend.talkMode === "push"
+                    onToggled: if (checked) page.backend.talkMode = "push"
+                }
+            }
+            // voice activation: how loud you must be; the bar under it is how loud you are now, while in a voice channel
+            ColumnLayout {
+                visible: page.backend.talkMode === "voice"
+                Layout.fillWidth: true
+                spacing: 2
+                RowLayout {
+                    Layout.fillWidth: true
+                    Label { text: qsTr("Sensitivity"); opacity: 0.8 }
+                    Slider {
+                        id: threshold
+                        objectName: "talkThreshold"
+                        Layout.fillWidth: true
+                        from: -80
+                        to: 0
+                        value: page.backend.talkThreshold
+                        onMoved: page.backend.talkThreshold = value
+                        Accessible.name: qsTr("Voice activation sensitivity")
+                    }
+                    Label { text: qsTr("%1 dB").arg(Math.round(threshold.value)); opacity: 0.6; font.pixelSize: 12 }
+                }
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.leftMargin: 80
+                    implicitHeight: 4
+                    radius: 2
+                    color: Theme.tint(Theme.text, 0.1)
+                    Rectangle {
+                        height: parent.height
+                        radius: 2
+                        width: parent.width * Math.max(0, Math.min(1, (page.backend.micLevel + 80) / 80))
+                        color: page.backend.micLevel >= page.backend.talkThreshold ? Theme.primary : Theme.tint(Theme.text, 0.35)
+                    }
+                }
+                Label {
+                    Layout.fillWidth: true
+                    Layout.leftMargin: 80
+                    wrapMode: Text.Wrap
+                    opacity: 0.55
+                    font.pixelSize: 11
+                    text: qsTr("Join a voice channel to see how loud you are. Green is heard.")
+                }
+            }
+            // push to talk: the key, chosen by pressing it
+            RowLayout {
+                visible: page.backend.talkMode === "push"
+                spacing: 8
+                Label { text: qsTr("Key"); opacity: 0.8 }
+                Button {
+                    id: keyButton
+                    objectName: "pushKeyButton"
+                    property bool waiting: false
+                    text: waiting ? qsTr("Press a key…") : page.backend.pushKeyName !== "" ? page.backend.pushKeyName : qsTr("Choose a key")
+                    onClicked: { waiting = true; forceActiveFocus() }
+                    onActiveFocusChanged: if (!activeFocus) waiting = false
+                    Keys.onPressed: event => {
+                        if (!waiting)
+                            return
+                        if (event.key !== Qt.Key_Escape)
+                            page.backend.pushKey = event.key
+                        waiting = false
+                        event.accepted = true
+                    }
+                }
+                Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.Wrap
+                    opacity: 0.55
+                    font.pixelSize: 11
+                    text: qsTr("Hold it while the window is in front to be heard.")
+                }
+            }
+        }
+        Rectangle { visible: !page.backend.phone; Layout.fillWidth: true; height: 1; color: Theme.hairline }
+
         // phones: on the computer, let them in; on a phone, let go of the Puddle (docs/identity.md, "Devices")
         ColumnLayout {
             objectName: "phones"

@@ -11,6 +11,8 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QGuiApplication>
+#include <QKeyEvent>
+#include <QKeySequence>
 #include <QSettings>
 
 #include "dock.h"
@@ -57,6 +59,15 @@ Backend::Backend(QObject *parent) : QObject(parent)
     connect(chats_.callModel(), &Calls::changed, this, &Backend::followCall);
     connect(chats_.callModel(), &Calls::mutedChanged, this, [this] { audio_.setMuted(chats_.callModel()->muted()); });
     connect(chats_.callModel(), &Calls::cameraChanged, this, &Backend::followCall);
+    connect(chats_.pondList(), &Ponds::voiceChanged, this, &Backend::followCall);
+    {
+        QSettings s;
+        talkMode_ = s.value("voice/talkMode", "voice").toString() == QLatin1String("push") ? QStringLiteral("push") : QStringLiteral("voice");
+        pushKey_ = s.value("voice/pushKey", 0).toInt();
+        audio_.gate().setThreshold(qBound(-80.0, s.value("voice/threshold", TalkGate::kDefaultThreshold).toDouble(), 0.0));
+    }
+    speakTimer_.setInterval(150);
+    connect(&speakTimer_, &QTimer::timeout, this, &Backend::sampleSpeaking);
     connect(&video_, &CallVideo::cameraFailed, this, [this](const QString &why) { append(QStringLiteral("warning: call: camera: ") + why); });
 
     if (phoneMode()) { /* no Puddle here: this is a phone of the owner's, once paired */
@@ -94,14 +105,50 @@ static void onCallVideo(void *user, const char *, const char *from, const unsign
 }
 
 // The sound runs while this device has an active call: through the Puddle in this process (the window), or a phone's leg.
-// So does the video, with the camera on when the owner turns it on.
+// So does the video, with the camera on when the owner turns it on. Or while the window is in a Pond's voice channel (one at
+// a time: the Puddle never has both), through the Puddle, with the microphone going as the owner chose (applyTalk).
 void Backend::followCall()
 {
     Calls *calls = chats_.callModel();
+    Ponds *ponds = chats_.pondList();
     CallLeg *leg = calls->leg();
-    puddle_calls *engine = puddle_server_calls(srv_);
-    const bool live = calls->state() == QLatin1String("active") && calls->here() && (engine || leg);
+    puddle_calls *engine = srv_ ? puddle_server_calls(srv_) : nullptr;
+    const bool callLive = calls->state() == QLatin1String("active") && calls->here() && (engine || leg);
+    const bool voiceLive = !callLive && engine && ponds->voiceState() == QLatin1String("active");
+    const QString want = callLive ? QStringLiteral("call") : voiceLive ? QStringLiteral("voice") : QString();
+    if (audio_.running() && want != soundFor_) { /* ended, or the one changed for the other: stop, then start what is wanted */
+        if (soundFor_ == QLatin1String("call") && leg) {
+            leg->setOnFrame(nullptr);
+            leg->setOnVideo(nullptr);
+        } else if (engine) {
+            puddle_calls_on_audio(engine, nullptr, nullptr);
+            puddle_calls_on_video(engine, nullptr, nullptr);
+        }
+        audio_.stop();
+        video_.stop();
+        speakTimer_.stop();
+        soundFor_.clear();
+        sampleSpeaking();
+    }
+    if (voiceLive) {
+        if (!audio_.running()) {
+            soundFor_ = want;
+            puddle_calls_on_audio(engine, onCallFrame, &audio_);
+            audio_.start([engine](const QByteArray &frame) {
+                puddle_voice_send_audio(engine, reinterpret_cast<const unsigned char *>(frame.constData()), size_t(frame.size()));
+            });
+            speakTimer_.start();
+            append(QStringLiteral("info: voice: sound on (microphone %1, speaker %2)")
+                       .arg(audio_.hasInput() ? QStringLiteral("yes") : QStringLiteral("none"), audio_.hasOutput() ? QStringLiteral("yes") : QStringLiteral("none")));
+        }
+        audio_.setMuted(ponds->voiceMuted());
+        applyTalk();
+        return;
+    }
+    const bool live = callLive;
     if (live && !audio_.running()) {
+        soundFor_ = want;
+        audio_.gate().setMode(TalkGate::Open); /* a call: the microphone always goes, unless muted */
         audio_.setMuted(calls->muted());
         if (leg) {
             leg->setOnFrame([a = &audio_](const QString &from, uint32_t ts, const QByteArray &frame) { a->received(from, ts, frame); });
@@ -122,18 +169,70 @@ void Backend::followCall()
         append(QStringLiteral("info: call: sound on (microphone %1, speaker %2%3)")
                 .arg(audio_.hasInput() ? QStringLiteral("yes") : QStringLiteral("none"), audio_.hasOutput() ? QStringLiteral("yes") : QStringLiteral("none"),
                      CallAudio::built() ? QString() : QStringLiteral("; built without Opus, so silent")));
-    } else if (!live && audio_.running()) {
-        if (leg) {
-            leg->setOnFrame(nullptr);
-            leg->setOnVideo(nullptr);
-        } else {
-            puddle_calls_on_audio(engine, nullptr, nullptr);
-            puddle_calls_on_video(engine, nullptr, nullptr);
-        }
-        audio_.stop();
-        video_.stop();
     }
     video_.setCamera(live && calls->camera());
+}
+
+void Backend::applyTalk()
+{
+    if (soundFor_ != QLatin1String("voice"))
+        return;
+    audio_.gate().setMode(talkMode_ == QLatin1String("push") ? TalkGate::PushToTalk : TalkGate::VoiceActivity);
+}
+
+// Who is talking in the voice channel, from the frames arriving (and this end, from its own gate), a few times a second.
+void Backend::sampleSpeaking()
+{
+    QStringList now;
+    double level = -100;
+    if (soundFor_ == QLatin1String("voice")) {
+        now = audio_.speaking();
+        if (audio_.talking())
+            now << QStringLiteral("self");
+        level = audio_.gate().lastLevel();
+    }
+    now.sort();
+    if (now == speaking_ && qAbs(level - micLevel_) < 1)
+        return;
+    speaking_ = now;
+    micLevel_ = level;
+    emit speakingChanged();
+}
+
+void Backend::setTalkMode(const QString &mode)
+{
+    const QString m = mode == QLatin1String("push") ? QStringLiteral("push") : QStringLiteral("voice");
+    if (m == talkMode_)
+        return;
+    talkMode_ = m;
+    QSettings().setValue("voice/talkMode", m);
+    audio_.gate().setPushed(false);
+    applyTalk();
+    emit talkChanged();
+}
+
+void Backend::setTalkThreshold(double dbfs)
+{
+    dbfs = qBound(-80.0, dbfs, 0.0);
+    if (qAbs(dbfs - audio_.gateThreshold()) < 0.01)
+        return;
+    audio_.gate().setThreshold(dbfs);
+    QSettings().setValue("voice/threshold", dbfs);
+    emit talkChanged();
+}
+
+void Backend::setPushKey(int key)
+{
+    if (key == pushKey_)
+        return;
+    pushKey_ = key;
+    QSettings().setValue("voice/pushKey", key);
+    emit talkChanged();
+}
+
+QString Backend::pushKeyName() const
+{
+    return pushKey_ ? QKeySequence(pushKey_).toString(QKeySequence::NativeText) : QString();
 }
 
 bool Backend::canDrawQr() const
@@ -321,6 +420,15 @@ bool Backend::eventFilter(QObject *watched, QEvent *event)
         quitting_ = true;
         emit quittingChanged();
     }
+    /* push to talk: the chosen key, held anywhere in the window (only while the window is in front: a key held elsewhere is
+     * the system's to tell, and it doesn't tell everyone) */
+    if ((event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease) && pushKey_ && talkMode_ == QLatin1String("push")) {
+        auto *k = static_cast<QKeyEvent *>(event);
+        if (k->key() == pushKey_ && !k->isAutoRepeat() && watched->isWindowType())
+            audio_.gate().setPushed(event->type() == QEvent::KeyPress);
+    }
+    if (event->type() == QEvent::ApplicationDeactivate)
+        audio_.gate().setPushed(false); /* a key let go while the window wasn't looking is let go */
     return QObject::eventFilter(watched, event);
 }
 

@@ -50,6 +50,11 @@ int puddle_call_send_audio(puddle_calls *, const char *, const unsigned char *, 
 void puddle_calls_on_video(puddle_calls *, puddle_call_frame_fn, void *) {}
 int puddle_call_send_video(puddle_calls *, const char *, const unsigned char *, size_t) { return -1; }
 uint64_t puddle_calls_version(puddle_calls *) { return 0; }
+int puddle_voice_join(puddle_ctx *, const char *, int64_t, const char **code) { return *code = "no_calls", -1; }
+int puddle_voice_leave(puddle_ctx *, const char **) { return 0; }
+int puddle_voice_state(puddle_ctx *, int, int, const char **code) { return *code = "no_voice", -1; }
+void puddle_voice_write(puddle_ctx *, puddle_jw *w) { puddle_jw_null(w); }
+int puddle_voice_send_audio(puddle_calls *, const unsigned char *, size_t) { return -1; }
 
 static int no_calls(const puddle_call *, puddle_jw *w) { return puddle_fail(w, 409, "no_calls"); }
 
@@ -742,6 +747,7 @@ static void work(puddle_calls *cs)
         if (reason)
             finish(cs, call, reason, told);
         group_tick(cs, now);
+        voice_tick(cs, now);
         lk.lock();
         if (cs->tasks.empty() && !cs->stopping)
             cs->wake.wait_for(lk, std::chrono::milliseconds(200));
@@ -829,6 +835,7 @@ void puddle_calls_stop(puddle_calls *cs)
     if (call) /* the friend hears it went (the worker sends it before it stops) */
         finish(cs, call, "hung_up", call->state == "ringing" ? "declined" : call->state == "calling" ? "cancelled" : "hung_up");
     group_stop(cs); /* the members hear we left (the pool sends it before it stops) */
+    voice_stop(cs); /* and the Pond, out of its voice channel (the worker sends it before it stops) */
     {
         std::lock_guard<std::mutex> g(cs->mu);
         cs->stopping = true;
@@ -882,7 +889,7 @@ int puddle_call_start(puddle_ctx *ctx, const char *peer, const char *device, cha
         return *code = "internal", -1;
     {
         std::lock_guard<std::mutex> g(cs->mu);
-        if (cs->current || group_busy(cs))
+        if (cs->current || group_busy(cs) || in_voice(cs))
             return *code = "busy", -1;
         cs->current = call;
         cs->version++;
@@ -1351,7 +1358,7 @@ static int offer_post(const puddle_call *c, puddle_jw *w)
                 goto ringing; /* the same offer again: still ringing */
             return puddle_fail(w, 409, "busy");
         }
-        if (group_busy(cs))
+        if (group_busy(cs) || in_voice(cs)) /* in a voice channel too: the caller hears "already in a call" */
             return puddle_fail(w, 409, "busy");
         auto call = std::make_shared<Call>();
         call->id = id;

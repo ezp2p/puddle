@@ -5,14 +5,19 @@ import "../components"
 import "../theme"
 
 // The left-hand list while a Pond is open: its name, which drops down the Pond's menu (Server Settings for an operator or
-// administrator, how you appear there, your id, leaving), a role the Pond offers you if it does, then its text channels.
+// administrator, how you appear there, your id, leaving), a role the Pond offers you if it does, then its channels. A voice
+// channel (docs/ponds.md, "Voice channels") has a speaker, and who is in it underneath, lit while they talk; clicking it
+// joins, with nothing to answer. While you are in one, in any Pond, a bar at the bottom says which, with mute, deafen and
+// leave.
 Rectangle {
     id: bar
 
     objectName: "pondSidebar"
     color: "transparent"   // it is drawn on a card
     required property var chats
+    property var backend: null       // who is talking (Backend.speaking)
     readonly property var ponds: chats.ponds
+    readonly property var speaking: backend ? backend.speaking : []
     signal leaveRequested()
     signal settingsRequested()
     signal notice(string text)
@@ -153,7 +158,7 @@ Rectangle {
             Layout.leftMargin: 16
             Layout.topMargin: 14
             Layout.bottomMargin: 4
-            text: qsTr("TEXT CHANNELS")
+            text: qsTr("CHANNELS")
             font.pixelSize: 11
             font.bold: true
             opacity: 0.55
@@ -168,33 +173,86 @@ Rectangle {
             Layout.rightMargin: 8
             model: bar.ponds.channels
             currentIndex: -1
-            delegate: Rectangle {
+            delegate: Item {
                 id: row
                 required property var model
                 required property int index
                 readonly property bool selected: model.id === bar.ponds.channel
-                function openIt() { bar.ponds.openChannel(model.id) }
+                readonly property bool voice: model.kind === "voice"
+                readonly property var people: model.voice || []
+                // a voice channel: join it (nothing to answer) and show its messages; a text one: show its messages
+                function openIt() {
+                    if (voice)
+                        bar.ponds.joinVoice(model.id)
+                    bar.ponds.openChannel(model.id)
+                }
                 objectName: "channel_" + model.name
                 width: ListView.view.width
-                height: 34
-                radius: Theme.radius
-                color: selected ? Theme.tint(Theme.text, Theme.selected) : rowHover.hovered ? Theme.tint(Theme.text, Theme.hover) : "transparent"
-                HoverHandler { id: rowHover }
-                TapHandler { onTapped: row.openIt() }
-                Accessible.role: Accessible.Button
-                Accessible.name: "#" + model.name
-                Accessible.onPressAction: row.openIt()
-                RowLayout {
-                    anchors.fill: parent
-                    anchors.leftMargin: 10
-                    anchors.rightMargin: 10
-                    spacing: 6
-                    Icon { glyph: "hash"; size: 18; opacity: row.selected ? 1 : 0.6 }
-                    Label { text: row.model.name; Layout.fillWidth: true; elide: Text.ElideRight; opacity: row.selected ? 1 : 0.8; font.bold: row.selected }
+                height: head.height + (people.length ? inVoice.implicitHeight + 4 : 0)
+                Rectangle {
+                    id: head
+                    width: parent.width
+                    height: 34
+                    radius: Theme.radius
+                    color: row.selected ? Theme.tint(Theme.text, Theme.selected) : rowHover.hovered ? Theme.tint(Theme.text, Theme.hover) : "transparent"
+                    HoverHandler { id: rowHover }
+                    TapHandler { onTapped: row.openIt() }
+                    Accessible.role: Accessible.Button
+                    Accessible.name: row.voice ? qsTr("Voice channel %1").arg(row.model.name) : "#" + row.model.name
+                    Accessible.onPressAction: row.openIt()
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: 10
+                        anchors.rightMargin: 10
+                        spacing: 6
+                        Icon { glyph: row.voice ? "volume" : "hash"; size: 18; opacity: row.selected ? 1 : 0.6 }
+                        Label { text: row.model.name; Layout.fillWidth: true; elide: Text.ElideRight; opacity: row.selected ? 1 : 0.8; font.bold: row.selected }
+                    }
+                    ToolTip.text: row.model.topic
+                    ToolTip.visible: rowHover.hovered && row.model.topic !== ""
+                    ToolTip.delay: 600
                 }
-                ToolTip.text: row.model.topic
-                ToolTip.visible: rowHover.hovered && row.model.topic !== ""
-                ToolTip.delay: 600
+                // who is in a voice channel: lit while they talk
+                Column {
+                    id: inVoice
+                    objectName: "voiceIn_" + row.model.name
+                    visible: row.people.length > 0
+                    anchors.top: head.bottom
+                    anchors.topMargin: 2
+                    x: 30
+                    width: parent.width - 34
+                    spacing: 2
+                    Repeater {
+                        model: row.people
+                        delegate: RowLayout {
+                            id: person
+                            required property var modelData
+                            readonly property bool talking: bar.speaking.indexOf(modelData.isMe ? "self" : modelData.id) >= 0
+                            objectName: "inVoice_" + modelData.name
+                            width: inVoice.width
+                            height: 26
+                            spacing: 6
+                            Rectangle {
+                                implicitWidth: 24
+                                implicitHeight: 24
+                                radius: 12
+                                color: "transparent"
+                                border.width: 2
+                                border.color: person.talking ? Theme.primary : "transparent"
+                                Avatar { anchors.centerIn: parent; chats: bar.chats; name: person.modelData.name; tint: person.modelData.color || ""; size: 20 }
+                            }
+                            Label {
+                                text: person.modelData.name
+                                Layout.fillWidth: true
+                                elide: Text.ElideRight
+                                font.pixelSize: 13
+                                opacity: person.talking ? 1 : 0.75
+                            }
+                            Icon { visible: person.modelData.muted; glyph: "microphone-off"; size: 14; opacity: 0.6 }
+                            Icon { visible: person.modelData.deafened; glyph: "headphones-off"; size: 14; opacity: 0.6 }
+                        }
+                    }
+                }
             }
         }
 
@@ -205,6 +263,71 @@ Rectangle {
             wrapMode: Text.Wrap
             opacity: 0.6
             text: bar.ponds.currentStatus === "connecting" ? qsTr("Connecting…") : qsTr("This Pond has no channels yet.")
+        }
+
+        // the voice channel we are in, whichever Pond it is in
+        Rectangle {
+            objectName: "voiceBar"
+            visible: bar.ponds.voiceState !== ""
+            Layout.fillWidth: true
+            implicitHeight: voiceRow.implicitHeight + 16
+            color: Theme.tint(Theme.text, 0.04)
+            Rectangle { anchors.top: parent.top; width: parent.width; height: 1; color: Theme.hairline }
+            RowLayout {
+                id: voiceRow
+                anchors.fill: parent
+                anchors.leftMargin: 12
+                anchors.rightMargin: 8
+                spacing: 4
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 0
+                    Label {
+                        objectName: "voiceStatus"
+                        font.bold: true
+                        font.pixelSize: 13
+                        color: bar.ponds.voiceState === "active" ? Theme.primary : bar.ponds.voiceState === "ended" ? Theme.danger : palette.windowText
+                        text: bar.ponds.voiceState === "active" ? qsTr("Voice connected")
+                              : bar.ponds.voiceState === "connecting" ? qsTr("Connecting…")
+                              : bar.ponds.voiceReason === "removed" ? qsTr("Disconnected by the Pond") : qsTr("Voice disconnected")
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        elide: Text.ElideRight
+                        font.pixelSize: 12
+                        opacity: 0.7
+                        text: bar.ponds.voiceName + (bar.ponds.voicePondName !== "" ? " / " + bar.ponds.voicePondName : "")
+                    }
+                }
+                ToolButton {
+                    objectName: "voiceMute"
+                    visible: bar.ponds.voiceState !== "ended"
+                    icon.source: Theme.icon(bar.ponds.voiceMuted ? "microphone-off" : "microphone")
+                    highlighted: bar.ponds.voiceMuted
+                    onClicked: bar.ponds.setVoiceMuted(!bar.ponds.voiceMuted)
+                    Accessible.name: bar.ponds.voiceMuted ? qsTr("Unmute") : qsTr("Mute")
+                    ToolTip.text: Accessible.name
+                    ToolTip.visible: hovered
+                }
+                ToolButton {
+                    objectName: "voiceDeafen"
+                    visible: bar.ponds.voiceState !== "ended"
+                    icon.source: Theme.icon(bar.ponds.voiceDeafened ? "headphones-off" : "headphones")
+                    highlighted: bar.ponds.voiceDeafened
+                    onClicked: bar.ponds.setVoiceDeafened(!bar.ponds.voiceDeafened)
+                    Accessible.name: bar.ponds.voiceDeafened ? qsTr("Undeafen") : qsTr("Deafen")
+                    ToolTip.text: Accessible.name
+                    ToolTip.visible: hovered
+                }
+                ToolButton {
+                    objectName: "voiceLeave"
+                    icon.source: Theme.icon(bar.ponds.voiceState === "ended" ? "x" : "phone-off")
+                    onClicked: bar.ponds.leaveVoice()
+                    Accessible.name: bar.ponds.voiceState === "ended" ? qsTr("Dismiss") : qsTr("Leave the voice channel")
+                    ToolTip.text: Accessible.name
+                    ToolTip.visible: hovered
+                }
+            }
         }
     }
 }

@@ -617,7 +617,7 @@ int callsx::group_join_post(const puddle_call *c, puddle_jw *w)
             if (it == cs->heard.end()) {
                 auto h = std::make_shared<GroupCall>();
                 h->id = id, h->group = gid, h->starter = sender, h->created = now;
-                h->rang = !cs->current && !cs->group; /* only when free to answer */
+                h->rang = !cs->current && !cs->group && !in_voice(cs); /* only when free to answer */
                 h->ring_until = now + cs->ring_ms;
                 it = cs->heard.emplace(gid, h).first;
                 puddle_log(PUDDLE_LOG_INFO, "calls: a call in %s, begun by %.12s…", gid.c_str(), sender.c_str());
@@ -749,7 +749,7 @@ int callsx::group_start(puddle_ctx *ctx, const char *gid, const char *device, ch
     if (!puddle_id_valid(gid) || !members_of(cs, gid).in)
         return *code = "no_group", -1;
     std::lock_guard<std::mutex> g(cs->mu);
-    if (cs->current)
+    if (cs->current || in_voice(cs))
         return *code = "busy", -1;
     if (cs->group) {
         if (cs->group->group != gid)
@@ -788,7 +788,7 @@ int callsx::group_accept(puddle_ctx *ctx, const char *id, const char *device, co
     GroupPtr h = heard_by_id(cs, id);
     if (!h)
         return 1;
-    if (cs->current || cs->group)
+    if (cs->current || cs->group || in_voice(cs))
         return *code = "busy", -1;
     if ((int)h->in.size() >= PUDDLE_GROUP_CALL_MAX)
         return *code = "full", -1;

@@ -39,6 +39,7 @@ struct Msg {
 struct Channel {
     int64_t id = 0, position = 0;
     std::string name, topic;
+    bool voice = false;     /* a voice channel (the Pond's docs/voice.md); text otherwise, and before protocol 4 */
     std::deque<Msg> recent; /* oldest first */
     bool filled = false;    /* the newest messages are held (so new ones can simply be added) */
     bool complete = false;  /* everything back to the channel's first message is held */
@@ -48,6 +49,14 @@ struct Member {
     std::string profile; /* cleaned JSON, or "" for none */
     int64_t joined = 0;
     std::string role = "member"; /* operator, administrator or member (the Pond's docs/design.md, "Roles") */
+};
+
+/* Someone in one of the Pond's voice channels now (the Pond's docs/voice.md, "Who is in it"): only in memory, as the Pond says
+ * it in /info and its `voice` and `voice_left` events. */
+struct InVoice {
+    int64_t channel = 0, slot = 0;
+    std::string member;
+    bool muted = false, deafened = false, camera = false;
 };
 
 struct Pond {
@@ -63,6 +72,7 @@ struct Pond {
     std::string me;
     std::vector<Channel> channels;
     std::map<std::string, Member> members;
+    std::vector<InVoice> voice;
 };
 
 } // namespace
@@ -116,8 +126,33 @@ static bool channel_name_ok(const std::string &s)
 
 static bool parse_channel(puddle_span v, Channel &c)
 {
+    std::string kind;
+    c.voice = get_text(v, "kind", 8, 0, kind) && kind == "voice"; /* anything else, or none, is text */
     return get_int(v, "id", &c.id) && c.id > 0 && get_text(v, "name", CHANNEL_NAME_MAX, 0, c.name) && channel_name_ok(c.name) &&
            get_text(v, "topic", TOPIC_MAX_CHARS, 0, c.topic) && get_int(v, "position", &c.position);
+}
+
+static bool get_flag(puddle_span obj, const char *key)
+{
+    puddle_span v;
+    return member(obj, key, &v) && v.len == 4 && !memcmp(v.p, "true", 4);
+}
+
+/* Someone in a voice channel, as the Pond says it: {channel, member, slot, muted, deafened, camera} */
+static bool parse_in_voice(puddle_span v, InVoice &out)
+{
+    out.muted = get_flag(v, "muted"), out.deafened = get_flag(v, "deafened"), out.camera = get_flag(v, "camera");
+    return get_int(v, "channel", &out.channel) && out.channel > 0 && get_text(v, "member", PUDDLE_USER_ID_LEN, 0, out.member) &&
+           puddle_id_valid(out.member.c_str()) && get_int(v, "slot", &out.slot) && out.slot > 0 && out.slot <= 65535;
+}
+
+/* `who` came into a voice channel or changed how they are there: one channel at a time, so any other place of theirs goes */
+static void set_in_voice(Pond &pd, const InVoice &who)
+{
+    pd.voice.erase(std::remove_if(pd.voice.begin(), pd.voice.end(), [&](const InVoice &v) { return v.member == who.member; }),
+                   pd.voice.end());
+    if (pd.voice.size() < 10000)
+        pd.voice.push_back(who);
 }
 
 /* One file of a message, as the Pond says it (the Pond's docs/design.md, "Files"), written cleaned to `w`: false if it breaks a
@@ -280,6 +315,15 @@ static bool parse_info(puddle_ponds *p, const char *json, size_t len, Pond &pd, 
     parse_protocol(all, pd);
     parse_files_max(pond, pd);
     parse_offer(all, pd);
+    pd.voice.clear();
+    puddle_span voice;
+    size_t vcur = 0;
+    if (member(all, "voice", &voice)) /* who is in which voice channel now (protocol 4) */
+        while (puddle_json_array_next(voice, &vcur, &item) == 1) {
+            InVoice iv;
+            if (parse_in_voice(item, iv))
+                set_in_voice(pd, iv);
+        }
     size_t cur = 0;
     int r;
     while ((r = puddle_json_array_next(chans, &cur, &item)) == 1) {
@@ -348,6 +392,8 @@ static void write_channel(puddle_jw *w, const Channel &c)
     puddle_jw_str(w, "name", c.name.c_str());
     puddle_jw_str(w, "topic", c.topic.c_str());
     puddle_jw_num(w, "position", c.position);
+    if (c.voice)
+        puddle_jw_str(w, "kind", "voice");
     puddle_jw_end_object(w);
 }
 
@@ -730,6 +776,7 @@ int puddle_ponds_info(puddle_ponds *p, const char *id, const char *info, size_t 
     }
     pd.files_max = fresh.files_max;
     pd.offer = fresh.offer, pd.offer_role = fresh.offer_role;
+    pd.voice = std::move(fresh.voice); /* who is in voice now: /info always says it whole */
     if (reset) /* otherwise the events since our cursor are still to come, and say what changed */
         pd.cursor = fresh.cursor;
     pd.channels = std::move(channels);
@@ -854,7 +901,7 @@ int puddle_ponds_events(puddle_ponds *p, const char *id, const char *json, size_
         return -1;
     Pond &pd = it->second;
     std::vector<int64_t> touched;
-    bool members_changed = false, pond_changed = false;
+    bool members_changed = false, pond_changed = false, voice_changed = false;
     size_t cur = 0;
     int r;
     while ((r = puddle_json_array_next(arr, &cur, &item)) == 1) {
@@ -874,7 +921,7 @@ int puddle_ponds_events(puddle_ponds *p, const char *id, const char *json, size_
             if (!parse_channel(data, n))
                 continue;
             if (Channel *c = find_channel(pd, n.id)) {
-                c->name = n.name, c->topic = n.topic, c->position = n.position;
+                c->name = n.name, c->topic = n.topic, c->position = n.position, c->voice = n.voice;
             } else if (pd.channels.size() < MAX_CHANNELS) {
                 pd.channels.push_back(std::move(n));
             }
@@ -886,6 +933,8 @@ int puddle_ponds_events(puddle_ponds *p, const char *id, const char *json, size_
                 forget_channel_file(p, pd, cid);
                 pd.channels.erase(std::remove_if(pd.channels.begin(), pd.channels.end(), [&](const Channel &c) { return c.id == cid; }),
                                   pd.channels.end());
+                pd.voice.erase(std::remove_if(pd.voice.begin(), pd.voice.end(), [&](const InVoice &v) { return v.channel == cid; }),
+                               pd.voice.end());
                 pond_changed = true;
             }
         } else if (kind == "member") {
@@ -899,7 +948,24 @@ int puddle_ponds_events(puddle_ponds *p, const char *id, const char *json, size_
             std::string mid;
             if (get_text(data, "id", PUDDLE_USER_ID_LEN, 0, mid) && mid != pd.me) {
                 pd.members.erase(mid);
+                pd.voice.erase(std::remove_if(pd.voice.begin(), pd.voice.end(), [&](const InVoice &v) { return v.member == mid; }),
+                               pd.voice.end());
                 members_changed = true;
+            }
+        } else if (kind == "voice") {
+            InVoice iv;
+            if (parse_in_voice(data, iv)) {
+                set_in_voice(pd, iv);
+                voice_changed = true;
+            }
+        } else if (kind == "voice_left") {
+            std::string mid;
+            int64_t cid;
+            if (get_text(data, "member", PUDDLE_USER_ID_LEN, 0, mid) && get_int(data, "channel", &cid)) {
+                pd.voice.erase(std::remove_if(pd.voice.begin(), pd.voice.end(),
+                                              [&](const InVoice &v) { return v.member == mid && v.channel == cid; }),
+                               pd.voice.end());
+                voice_changed = true;
             }
         } else if (kind == "role_offer") { /* only ever sent to us */
             puddle_span wrap = data;
@@ -932,7 +998,7 @@ int puddle_ponds_events(puddle_ponds *p, const char *id, const char *json, size_
     }
     if (pond_changed || members_changed)
         save_pond(p, pd);
-    if (pond_changed || members_changed || !touched.empty())
+    if (pond_changed || members_changed || voice_changed || !touched.empty())
         p->version++;
     return 0;
 }
@@ -1011,6 +1077,22 @@ static void write_summary(puddle_jw *w, const Pond &pd)
         puddle_jw_str(w, "name", c.name.c_str());
         puddle_jw_str(w, "topic", c.topic.c_str());
         puddle_jw_num(w, "last", c.recent.empty() ? 0 : c.recent.back().id);
+        puddle_jw_str(w, "kind", c.voice ? "voice" : "text");
+        if (c.voice) { /* who is in it now */
+            puddle_jw_key(w, "voice");
+            puddle_jw_array(w);
+            for (auto &v : pd.voice)
+                if (v.channel == c.id) {
+                    puddle_jw_object(w);
+                    puddle_jw_str(w, "member", v.member.c_str());
+                    puddle_jw_num(w, "slot", v.slot);
+                    puddle_jw_flag(w, "muted", v.muted);
+                    puddle_jw_flag(w, "deafened", v.deafened);
+                    puddle_jw_flag(w, "camera", v.camera);
+                    puddle_jw_end_object(w);
+                }
+            puddle_jw_end_array(w);
+        }
         puddle_jw_end_object(w);
     }
     puddle_jw_end_array(w);
@@ -1052,6 +1134,48 @@ int puddle_ponds_write_one(puddle_ponds *p, const char *id, puddle_jw *w)
         write_member(w, mid, m);
     puddle_jw_end_array(w);
     puddle_jw_end_object(w);
+    return 0;
+}
+
+int puddle_ponds_channel_kind(puddle_ponds *p, const char *id, int64_t channel)
+{
+    std::lock_guard<std::mutex> g(p->mu);
+    auto it = p->ponds.find(id);
+    Channel *c = it == p->ponds.end() ? nullptr : find_channel(it->second, channel);
+    return !c ? -1 : c->voice ? 1 : 0;
+}
+
+int puddle_ponds_has_feature(puddle_ponds *p, const char *id, const char *feature)
+{
+    std::lock_guard<std::mutex> g(p->mu);
+    auto it = p->ponds.find(id);
+    return it != p->ponds.end() && std::find(it->second.features.begin(), it->second.features.end(), feature) != it->second.features.end();
+}
+
+int puddle_ponds_voice_member(puddle_ponds *p, const char *id, int64_t channel, int slot, char out[PUDDLE_USER_ID_LEN + 1])
+{
+    std::lock_guard<std::mutex> g(p->mu);
+    auto it = p->ponds.find(id);
+    if (it == p->ponds.end())
+        return -1;
+    for (auto &v : it->second.voice)
+        if (v.channel == channel && v.slot == slot) {
+            snprintf(out, PUDDLE_USER_ID_LEN + 1, "%s", v.member.c_str());
+            return 0;
+        }
+    return -1;
+}
+
+int puddle_ponds_in_voice(puddle_ponds *p, const char *id, int64_t channel, const char *member)
+{
+    std::lock_guard<std::mutex> g(p->mu);
+    auto it = p->ponds.find(id);
+    if (it == p->ponds.end())
+        return 0;
+    const std::string who = member ? std::string(member) : it->second.me;
+    for (auto &v : it->second.voice)
+        if (v.channel == channel && v.member == who)
+            return 1;
     return 0;
 }
 

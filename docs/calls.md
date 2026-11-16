@@ -206,7 +206,9 @@ What the owner sees is a call with `group` set and its `members` (the others in 
 the owner is not in. The history notes each call left (`hung_up`, `cancelled`, `no_answer`, `failed`), and each one rung
 for and never joined (`missed`, or `declined`), under the group; `user` is who started it.
 
-One call at a time still: in a group call, a friend's ring is answered `busy`, and the other way round.
+One call at a time still: in a group call, a friend's ring is answered `busy`, and the other way round. So is being in a
+Pond's voice channel (`ponds.md`, "Voice channels"): a friend who rings then is answered `busy`, and their window says
+"*Ann* is already in a call".
 
 `groupcall_test` has four Puddles, three of them in a group, two of whom have never met: starting, ringing, joining,
 frames between every pair marked with whose they are (over the group-only stream too), leaving and coming back, busy, a

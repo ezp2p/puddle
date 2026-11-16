@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QFileSystemWatcher>
+#include <QTimer>
 #include <QObject>
 #include <QVariantMap>
 #include <QStringListModel>
@@ -47,6 +48,16 @@ class Backend : public QObject {
     Q_PROPERTY(bool phone READ phone CONSTANT)
     Q_PROPERTY(QObject *phoneLink READ phoneLink CONSTANT)
     Q_PROPERTY(bool canDrawQr READ canDrawQr CONSTANT) // "image://qr/..." works (libqrencode was found)
+    // Voice channels (docs/ponds.md, "Voice channels"): how the microphone goes there, kept between runs. `talkMode` is "voice"
+    // (voice activation, the default) or "push" (push to talk, while `pushKey` is held: a Qt::Key, 0 for none chosen yet);
+    // `talkThreshold` is how loud speech must be for voice activation, in dBFS.
+    Q_PROPERTY(QString talkMode READ talkMode WRITE setTalkMode NOTIFY talkChanged)
+    Q_PROPERTY(double talkThreshold READ talkThreshold WRITE setTalkThreshold NOTIFY talkChanged)
+    Q_PROPERTY(int pushKey READ pushKey WRITE setPushKey NOTIFY talkChanged)
+    Q_PROPERTY(QString pushKeyName READ pushKeyName NOTIFY talkChanged)
+    // In a voice channel: who is talking now (members' ids; "self" for this end), and how loud the microphone is (dBFS)
+    Q_PROPERTY(QStringList speaking READ speaking NOTIFY speakingChanged)
+    Q_PROPERTY(double micLevel READ micLevel NOTIFY speakingChanged)
 public:
     explicit Backend(QObject *parent = nullptr);
     ~Backend() override;
@@ -67,6 +78,15 @@ public:
     QString myId() const { return phone_ ? phone_->puddleId() : myId_; }
     bool developerMode() const { return developerMode_; }
     void setDeveloperMode(bool on);
+    QString talkMode() const { return talkMode_; }
+    void setTalkMode(const QString &mode);
+    double talkThreshold() const { return audio_.gateThreshold(); }
+    void setTalkThreshold(double dbfs);
+    int pushKey() const { return pushKey_; }
+    void setPushKey(int key);
+    QString pushKeyName() const;
+    QStringList speaking() const { return speaking_; }
+    double micLevel() const { return micLevel_; }
     bool needsSetup() const { return needsSetup_; }
     bool setupRedo() const { return setupRedo_; }
     bool quitting() const { return quitting_; }
@@ -107,6 +127,8 @@ signals:
     void errorChanged();
     void needsSetupChanged();
     void themeChanged();
+    void talkChanged();
+    void speakingChanged();
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -116,7 +138,9 @@ private:
     void startServer();
     void setError(const QString &message);
     void loadTheme();
-    void followCall(); // the call's sound starts when it connects, and stops when it ends
+    void followCall(); // the sound starts when a call connects, or a voice channel does, and stops when it ends
+    void applyTalk();  // the talk settings, to the gate, when in a voice channel
+    void sampleSpeaking();
 
     QVariantMap theme_;
     QString themePath_;
@@ -136,4 +160,10 @@ private:
     QThreadPool takePool_;    // files handed to the Puddle (Chats::setTakeFile), one at a time
     CallAudio audio_;         // a call's microphone and speaker; its frames go through the Puddle (federation/calls.h)
     CallVideo video_;         // and its camera and pictures
+    QString soundFor_;        // what the sound is running for: "call", "voice", or "" (none)
+    QString talkMode_ = QStringLiteral("voice");
+    int pushKey_ = 0;
+    QStringList speaking_;
+    double micLevel_ = -100;
+    QTimer speakTimer_;       // while in a voice channel: who is talking
 };

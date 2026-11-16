@@ -43,6 +43,12 @@ int puddle_pond_fetch(puddle_ctx *ctx, const char *pond, int64_t channel, int64_
 int puddle_pond_admin(puddle_ctx *ctx, const char *pond, const char *method, const char *target, const char *body, size_t len,
                       int *status, char **reply, size_t *reply_len, const char **code);
 
+/* A voice channel's request to the Pond (the Pond's docs/voice.md): POST to /pond/v1/channels/{c}/voice/join or under
+ * /pond/v1/voice/. The Pond's status and answer (malloc'd), as for puddle_pond_admin; a Pond that no longer has us is
+ * -1 "removed". Federation/pondvoice.cpp makes these. */
+int puddle_pond_voice_call(puddle_ctx *ctx, const char *pond, const char *target, const char *body, size_t len, int *status, char **reply,
+                           size_t *reply_len, const char **code);
+
 /* Leave: tell the Pond (if it can be reached; we leave either way) and forget it, with what was kept of it. 0, or -1 "no_pond". */
 int puddle_pond_leave(puddle_ctx *ctx, const char *pond, const char **code);
 

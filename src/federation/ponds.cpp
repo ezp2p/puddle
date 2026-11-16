@@ -129,7 +129,8 @@ static void write_profile(puddle_ctx *ctx, const char *place, const char *profil
 /* The `error` a Pond answered with, if it is one we pass on; else `fallback`. */
 static const char *pond_error(const puddle_net_reply *r, const char *fallback)
 {
-    static const char *const KNOWN[] = {"no_channel", "bad_text", "slow_down", "bad_query", "files_off", "too_large", "no_file", "no_chunk"};
+    static const char *const KNOWN[] = {"no_channel", "bad_text", "slow_down", "bad_query", "files_off", "too_large", "no_file", "no_chunk",
+                                         "no_session", "full", "bad_sdp"};
     puddle_span v;
     char e[32];
     if (r->body && puddle_json_member(r->body, r->body_len, "error", &v) == 0 && puddle_json_string(v, e, sizeof e) == 0)
@@ -146,7 +147,8 @@ static bool refused(const puddle_net_reply *r)
 {
     const char *e = pond_error(r, "");
     bool answered = r->result == PUDDLE_NET_OK || (r->result == PUDDLE_NET_NOT_PROVEN && r->proof == PUDDLE_RECEIPT_MISSING);
-    return answered && r->status == 404 && strcmp(e, "no_channel") != 0 && strcmp(e, "no_file") != 0 && strcmp(e, "no_chunk") != 0;
+    return answered && r->status == 404 && strcmp(e, "no_channel") != 0 && strcmp(e, "no_file") != 0 && strcmp(e, "no_chunk") != 0 &&
+           strcmp(e, "no_session") != 0; /* a voice session it no longer has (the Pond's docs/voice.md) */
 }
 
 /* A call to a Pond we are in (docs/ponds.md, "Proving who answers"). A Pond that signs is held to its receipts: an answer
@@ -980,6 +982,41 @@ int puddle_pond_admin(puddle_ctx *ctx, const char *pond, const char *method, con
         return -1;
     }
     *status = r.status;
+    *reply = (char *)malloc(r.body_len + 1);
+    if (!*reply) {
+        puddle_net_reply_free(&r);
+        *code = "failed";
+        return -1;
+    }
+    if (r.body_len)
+        memcpy(*reply, r.body, r.body_len);
+    (*reply)[r.body_len] = '\0';
+    *reply_len = r.body_len;
+    puddle_net_reply_free(&r);
+    return 0;
+}
+
+int puddle_pond_voice_call(puddle_ctx *ctx, const char *pond, const char *target, const char *body, size_t len, int *status, char **reply,
+                           size_t *reply_len, const char **code)
+{
+    static const char join_tail[] = "/voice/join";
+    size_t tl = strlen(target), jl = sizeof join_tail - 1;
+    bool joining = strncmp(target, "/pond/v1/channels/", 18) == 0 && tl > jl && strcmp(target + tl - jl, join_tail) == 0;
+    if (!joining && strncmp(target, "/pond/v1/voice/", 15) != 0) {
+        *code = "failed";
+        return -1;
+    }
+    puddle_net_reply r;
+    if (!owner_call(ctx, pond, "POST", target, body ? std::string(body, len) : std::string(), 1u << 16, &r, code)) {
+        puddle_net_reply_free(&r);
+        return -1;
+    }
+    *status = r.status;
+    if (refused(&r)) { /* the Pond doesn't know us at all (a voice session it dropped is a 404 no_session, passed on) */
+        puddle_net_reply_free(&r);
+        *code = "removed";
+        return -1;
+    }
     *reply = (char *)malloc(r.body_len + 1);
     if (!*reply) {
         puddle_net_reply_free(&r);

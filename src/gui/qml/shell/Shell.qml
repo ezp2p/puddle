@@ -373,6 +373,7 @@ Pane {
                 anchors.leftMargin: Theme.railWidth + 1
                 anchors.right: parent.right
                 chats: shell.chats
+                backend: shell.backend
                 onSettingsRequested: pondSettings.show("overview")
                 onNotice: text => toast.show(text)
                 onLeaveRequested: leaveConfirm.ask(qsTr("Leave %1?").arg(shell.ponds.currentName),
