@@ -19,6 +19,7 @@ Puddle is the **reference implementation**: the protocol's test vectors were mad
 | 04 devices (phone clients) | built (roadmap phase 7) | `src/api/devices.cpp`, `src/gui/app/apiclient.cpp`, `docs/identity.md` "Devices" |
 | 05 ponds, member side | built | `src/federation/ponds.cpp`, `docs/ponds.md` |
 | 05 receipts from Ponds | built: checked for a Pond with `receipts`, whose certificate is then never pinned | `src/federation/ponds.cpp`, `docs/ponds.md` "Proving who answers" |
+| 08 calls | built: one to one, Puddle to Puddle (roadmap 8.1) | `src/federation/calls.cpp`, `docs/calls.md` |
 | 06 Levee | not yet: the address record's `levee` field and custody receipts are specified, not built | `docs/levee.md` (draft) |
 
 ## What Puddle has to do next for the protocol

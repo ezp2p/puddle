@@ -21,6 +21,10 @@
 #include "../src/gui/app/composer.h"
 #include "../src/gui/app/phone.h"
 #include "testnode.h"
+#include "federation/calls.h"
+
+#include <QPainter>
+#include <atomic>
 
 static int failures;
 #define CHECK(cond) do { if (!(cond)) { fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); failures++; } } while (0)
@@ -171,6 +175,7 @@ int main(int argc, char **argv)
     Chats &B = *bob.chats;
     auto *msgs_b = static_cast<JsonListModel *>(B.messages());
 
+    qputenv("PUDDLE_TEST_NO_AUDIO", "1"); // calls below: not this computer's microphone and speaker
     Backend backend; // the app's own Puddle
     if (backend.needsSetup()) {
         CHECK(!backend.createIdentity().isEmpty());
@@ -319,6 +324,95 @@ int main(int argc, char **argv)
     }
     CHECK(until([&] { return msgs_b->at(0).value("deleted").toBool(); }));
     CHECK(until([&] { return !shows("hello edited") && shows("Message deleted"); }, 5000));
+
+    /* ---- a call (docs/calls.md): from the window to Bob, who answers; mute; hang up; the chat notes it ---- */
+    {
+        Calls &ca = *A.callModel(), &cb = *bob.chats->callModel();
+        auto note = [&](const QString &start) {
+            for (QQuickItem *i : all("groupNotice"))
+                if (i->property("text").toString().startsWith(start))
+                    return true;
+            return false;
+        };
+        CHECK(until([&] { return find("callButton") && find("callButton")->property("enabled").toBool(); }, 5000));
+        CHECK(click(find("callButton")));
+        CHECK(until([&] { return cb.state() == "ringing"; }, 10000));
+        CHECK(until([&] { QQuickItem *s = find("callStatus"); return s && s->property("text").toString() == "Ringing…"; }, 3000));
+        CHECK(!find("callButton")->property("enabled").toBool()); /* one call at a time */
+        cb.accept();
+        CHECK(until([&] { return ca.state() == "active"; }, 15000));
+        CHECK(until([&] { QQuickItem *s = find("callStatus"); return s && s->property("text").toString().startsWith("0:0"); }, 5000));
+        CHECK(click(find("muteButton")));
+        CHECK(until([&] { return ca.muted(); }, 2000));
+
+        /* ---- video (docs/calls.md, "Video") ---- */
+        if (CallVideo::isBuilt()) {
+            auto *video = static_cast<CallVideo *>(backend.video());
+            auto picture = [](int k) {
+                QImage img(640, 480, QImage::Format_RGB32);
+                img.fill(qRgb(40, 90, 160));
+                QPainter p(&img);
+                p.fillRect(50 + k * 12, 150, 100, 100, Qt::yellow);
+                return img;
+            };
+            /* the camera, from the bar: the window's own picture shows, and what it takes reaches Bob's Puddle */
+            static std::atomic<int> atBob{ 0 };
+            puddle_calls_on_video(puddle_server_calls(bob.srv), [](void *, const char *, const char *, const unsigned char *, size_t, uint32_t) { atBob++; }, nullptr);
+            CHECK(until([&] { return find("cameraButton") && find("cameraButton")->isVisible(); }, 3000));
+            CHECK(click(find("cameraButton")));
+            CHECK(until([&] { return ca.camera() && video->cameraOn(); }, 2000));
+            CHECK(until([&] { return find("selfTile") && find("selfTile")->isVisible() && find("callVideo")->isVisible(); }, 3000));
+            for (int k = 0; k < 20 && atBob < 5; k++) { /* there is no camera here: pictures stand in for it */
+                video->feed(picture(k));
+                until([] { return false; }, 66);
+            }
+            CHECK(atBob >= 5);
+            puddle_calls_on_video(puddle_server_calls(bob.srv), nullptr, nullptr);
+            /* Bob's camera: a tile for him in the window */
+            H264Encoder enc;
+            CHECK(enc.open(CallVideo::kWidth, CallVideo::kHeight, CallVideo::kFps, CallVideo::kBitrate));
+            const QByteArray bid = cb.callId().toUtf8();
+            for (int k = 0; k < 20; k++) {
+                const QByteArray au = enc.encode(pictureOf(picture(k), CallVideo::kWidth, CallVideo::kHeight), k * 66);
+                if (!au.isEmpty())
+                    puddle_call_send_video(puddle_server_calls(bob.srv), bid.constData(), reinterpret_cast<const unsigned char *>(au.constData()), size_t(au.size()));
+                until([] { return false; }, 66);
+            }
+            CHECK(until([&] { return video->sources() == QStringList{ bob.uid }; }, 3000));
+            CHECK(until([&] {
+                QQuickItem *t = find("videoTile");
+                if (!t)
+                    return false;
+                for (QQuickItem *c : t->childItems())
+                    if (c->property("text").toString() == "Bob")
+                        return true;
+                return false;
+            }, 3000));
+            /* the camera off: its tile goes; Bob's goes once his pictures stop */
+            CHECK(click(find("cameraButton")));
+            CHECK(until([&] { return !ca.camera() && !video->cameraOn() && find("selfTile") == nullptr; }, 2000)); /* (find: the visible only) */
+            CHECK(until([&] { return find("videoTile") == nullptr && find("callVideo") == nullptr; }, 5000));
+        }
+        CHECK(click(find("hangUpButton")));
+        CHECK(until([&] { return ca.state().isEmpty() && cb.state().isEmpty(); }, 10000));
+        CHECK(until([&] { return find("callBar") == nullptr && note("You called Bob · 0:0"); }, 5000));
+        CHECK(!ca.muted()); /* the next call starts unmuted */
+
+        /* Bob calls the window: the bar rings; declined */
+        cb.call(backend.myId());
+        CHECK(until([&] { return find("acceptCallButton") != nullptr; }, 10000));
+        CHECK(click(find("declineCallButton")));
+        CHECK(until([&] { return ca.state().isEmpty() && cb.state().isEmpty(); }, 10000));
+        CHECK(until([&] { return note("You declined a call from Bob"); }, 5000));
+        /* and again, answered from the bar, and Bob hangs up */
+        cb.call(backend.myId());
+        CHECK(until([&] { return find("acceptCallButton") != nullptr; }, 10000));
+        CHECK(click(find("acceptCallButton")));
+        CHECK(until([&] { return ca.state() == "active" && cb.state() == "active"; }, 15000));
+        cb.hangUp();
+        CHECK(until([&] { return ca.state().isEmpty(); }, 10000));
+        CHECK(until([&] { return note("Bob called you · 0:0"); }, 5000));
+    }
 
     /* ---- Bob goes offline: the message says so, and goes through when he is back ---- */
     bob.stop();
@@ -512,6 +606,37 @@ int main(int argc, char **argv)
         }));
         B.close();
         D.close();
+
+        /* ---- a call in the group (docs/calls.md, "Group calls"): started from the header, Bob and Dana join; the bar says how
+         * many are in it; leaving leaves it to them, and the header offers to join again; the chat notes it ---- */
+        {
+            Calls &ca = *A.callModel(), &cb = *B.callModel(), &cd = *D.callModel();
+            auto status = [&] { QQuickItem *s = find("callStatus"); return s ? s->property("text").toString() : QString(); };
+            CHECK(until([&] { return find("callButton") && find("callButton")->property("enabled").toBool(); }, 5000));
+            CHECK(click(find("callButton")));
+            CHECK(until([&] { return cb.state() == "ringing" && cd.state() == "ringing" && cb.group() == gid && cb.name() == "Weekend"; }, 10000));
+            CHECK(until([&] { return status() == "Waiting for others…"; }, 3000));
+            cb.accept();
+            cd.callGroup(gid);
+            CHECK(until([&] { return ca.state() == "active" && ca.others() == 2; }, 15000));
+            CHECK(until([&] { return status().endsWith("2 others"); }, 5000));
+            CHECK(until([&] { return cb.others() == 2 && cd.others() == 2 && cd.state() == "active"; }, 15000));
+            CHECK(click(find("hangUpButton")));
+            CHECK(until([&] { return ca.state().isEmpty() && cb.others() == 1 && cd.others() == 1; }, 10000));
+            CHECK(until([&] { return find("callButton") && find("callButton")->property("text").toString() == "Join (2)"; }, 5000));
+            CHECK(click(find("callButton")));
+            CHECK(until([&] { return ca.state() == "active" && ca.others() == 2; }, 15000));
+            CHECK(click(find("hangUpButton")));
+            cb.hangUp();
+            cd.hangUp();
+            CHECK(until([&] { return ca.state().isEmpty() && cb.state().isEmpty() && cd.state().isEmpty() && ca.groupCall(gid) == 0; }, 10000));
+            CHECK(until([&] {
+                for (QQuickItem *i : all("groupNotice"))
+                    if (i->property("text").toString().startsWith("You started a call · 0:0"))
+                        return true;
+                return false;
+            }, 8000));
+        }
 
         /* ---- the side panel: the members are beside the conversation (the window is wide), and it can be put away and brought back ---- */
         CHECK(until([&] { return find("contextBar") != nullptr && find("memberList") != nullptr && find("memberList")->property("count").toInt() == 3; }, 5000));

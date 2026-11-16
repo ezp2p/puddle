@@ -24,6 +24,8 @@ puddle_assignments *puddle_server_assignments(puddle_server *s);
 struct puddle_streams *puddle_server_streams(puddle_server *s);
 struct puddle_people *puddle_server_people(puddle_server *s);
 struct puddle_outbox *puddle_server_outbox(puddle_server *s);
+/* Its calls (federation/calls.h), once it runs: NULL before, after, or without calls. The window hands its audio to them. */
+struct puddle_calls *puddle_server_calls(puddle_server *s);
 struct puddle_groups *puddle_server_groups(puddle_server *s);
 
 /* The owner picked a file on this computer, open as `fd`: take it into the Puddle (cloned where the file system can, else

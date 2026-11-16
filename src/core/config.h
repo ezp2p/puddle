@@ -27,7 +27,17 @@ typedef struct {
      * 0 = the default; read them with puddle_files_max_size and puddle_files_auto_download. */
     int64_t files_max_size;
     int64_t files_auto_download; /* -1 = never by itself */
+    /* calls: the UDP port every call arrives on (docs/calls.md, "Finding a path"); 0 = the same number as `port`.
+     * calls_off: `calls: off`, no calls at all. */
+    uint16_t calls_port;
+    int calls_off;
 } puddle_config;
+
+/* The UDP port calls use. */
+static inline uint16_t puddle_calls_port(const puddle_config *c)
+{
+    return c->calls_port ? c->calls_port : c->port;
+}
 
 #define PUDDLE_FILES_DEFAULT_MAX (100LL << 20)
 #define PUDDLE_FILES_DEFAULT_AUTO (100LL << 20)

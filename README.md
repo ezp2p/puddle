@@ -88,7 +88,11 @@ port.
 The core (storage, identity, streams, the HTTPS server) is C++20 on 
 OpenSSL 3, shared by `puddled`, the headless Puddle, and by the desktop app, 
 which is Qt 6 (Quick/QML). Configuration and profiles are YAML, read with 
-libyaml.
+libyaml. Calls (docs/calls.md) use libdatachannel for WebRTC; without it 
+everything else still builds, and the Puddle has no calls. The app plays 
+and records a call's sound with Qt Multimedia and libopus, and cancels echo 
+with webrtc-audio-processing (or speexdsp, where that isn't packaged); 
+its video is H.264 with OpenH264.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 

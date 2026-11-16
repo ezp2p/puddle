@@ -25,7 +25,7 @@ services:
     environment:
       PUDDLE_ADVERTISE: alice:8443
       PUDDLE_NAME: Alice
-    ports: ["127.0.0.1:18443:8443"]
+    ports: ["127.0.0.1:18443:8443", "127.0.0.1:18443:8443/udp"]   # UDP: calls
     volumes: ["alice:/data"]
 
   bob:
@@ -36,7 +36,7 @@ services:
     environment:
       PUDDLE_ADVERTISE: bob:8443
       PUDDLE_NAME: Bob
-    ports: ["127.0.0.1:28443:8443"]
+    ports: ["127.0.0.1:28443:8443", "127.0.0.1:28443:8443/udp"]
     volumes: ["bob:/data"]
 
 networks:

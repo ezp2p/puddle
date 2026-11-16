@@ -1,5 +1,7 @@
 #include "backend.h"
 
+#include "federation/calls.h"
+
 #include <QStandardPaths>
 
 #include <QClipboard>
@@ -52,6 +54,11 @@ Backend::Backend(QObject *parent) : QObject(parent)
         loadTheme();
     }
 
+    connect(chats_.callModel(), &Calls::changed, this, &Backend::followCall);
+    connect(chats_.callModel(), &Calls::mutedChanged, this, [this] { audio_.setMuted(chats_.callModel()->muted()); });
+    connect(chats_.callModel(), &Calls::cameraChanged, this, &Backend::followCall);
+    connect(&video_, &CallVideo::cameraFailed, this, [this](const QString &why) { append(QStringLiteral("warning: call: camera: ") + why); });
+
     if (phoneMode()) { /* no Puddle here: this is a phone of the owner's, once paired */
         phone_ = new Phone(&chats_, phoneDir(), this);
         connect(phone_, &Phone::changed, this, &Backend::startedChanged);
@@ -72,6 +79,61 @@ Backend::Backend(QObject *parent) : QObject(parent)
     needsSetup_ = setupRedo_ || !puddle_identity_exists(cfg_.data_dir);
     if (!needsSetup_)
         startServer();
+}
+
+// Frames from the friend, on one of the Puddle's network threads: into the jitter buffer, which is safe for that.
+static void onCallFrame(void *user, const char *, const char *from, const unsigned char *frame, size_t len, uint32_t rtpTs)
+{
+    static_cast<CallAudio *>(user)->received(QString::fromLatin1(from), rtpTs, QByteArray(reinterpret_cast<const char *>(frame), qsizetype(len)));
+}
+
+// A sender's video, on a network thread: to the decoder's thread.
+static void onCallVideo(void *user, const char *, const char *from, const unsigned char *au, size_t len, uint32_t rtpTs)
+{
+    static_cast<CallVideo *>(user)->received(QString::fromLatin1(from), rtpTs, QByteArray(reinterpret_cast<const char *>(au), qsizetype(len)));
+}
+
+// The sound runs while this device has an active call: through the Puddle in this process (the window), or a phone's leg.
+// So does the video, with the camera on when the owner turns it on.
+void Backend::followCall()
+{
+    Calls *calls = chats_.callModel();
+    CallLeg *leg = calls->leg();
+    puddle_calls *engine = puddle_server_calls(srv_);
+    const bool live = calls->state() == QLatin1String("active") && calls->here() && (engine || leg);
+    if (live && !audio_.running()) {
+        audio_.setMuted(calls->muted());
+        if (leg) {
+            leg->setOnFrame([a = &audio_](const QString &from, uint32_t ts, const QByteArray &frame) { a->received(from, ts, frame); });
+            audio_.start([leg](const QByteArray &frame) { leg->send(frame); });
+            leg->setOnVideo([v = &video_](const QString &from, uint32_t ts, const QByteArray &au) { v->received(from, ts, au); });
+            video_.start([leg](const QByteArray &au) { leg->sendVideo(au); });
+        } else {
+            const QByteArray id = calls->callId().toUtf8();
+            puddle_calls_on_audio(engine, onCallFrame, &audio_);
+            audio_.start([engine, id](const QByteArray &frame) {
+                puddle_call_send_audio(engine, id.constData(), reinterpret_cast<const unsigned char *>(frame.constData()), size_t(frame.size()));
+            });
+            puddle_calls_on_video(engine, onCallVideo, &video_);
+            video_.start([engine, id](const QByteArray &au) {
+                puddle_call_send_video(engine, id.constData(), reinterpret_cast<const unsigned char *>(au.constData()), size_t(au.size()));
+            });
+        }
+        append(QStringLiteral("info: call: sound on (microphone %1, speaker %2%3)")
+                .arg(audio_.hasInput() ? QStringLiteral("yes") : QStringLiteral("none"), audio_.hasOutput() ? QStringLiteral("yes") : QStringLiteral("none"),
+                     CallAudio::built() ? QString() : QStringLiteral("; built without Opus, so silent")));
+    } else if (!live && audio_.running()) {
+        if (leg) {
+            leg->setOnFrame(nullptr);
+            leg->setOnVideo(nullptr);
+        } else {
+            puddle_calls_on_audio(engine, nullptr, nullptr);
+            puddle_calls_on_video(engine, nullptr, nullptr);
+        }
+        audio_.stop();
+        video_.stop();
+    }
+    video_.setCamera(live && calls->camera());
 }
 
 bool Backend::canDrawQr() const
@@ -139,7 +201,17 @@ void Backend::loadTheme()
 
 Backend::~Backend()
 {
+    if (CallLeg *leg = chats_.callModel()->leg()) { // a phone: no more frames for a speaker that is going
+        leg->setOnFrame(nullptr);
+        leg->setOnVideo(nullptr);
+        audio_.stop();
+        video_.stop();
+    }
     if (srv_) {
+        puddle_calls_on_audio(puddle_server_calls(srv_), nullptr, nullptr); // no more frames for a speaker that is going
+        puddle_calls_on_video(puddle_server_calls(srv_), nullptr, nullptr);
+        audio_.stop();
+        video_.stop();
         chats_.setTakeFile({}, nullptr);
         takePool_.waitForDone();
         puddle_server_stop(srv_);

@@ -1,5 +1,6 @@
 #include "federation/courier.h"
 
+#include "federation/calls.h"
 #include "federation/files.h"
 #include "federation/flow.h"
 #include "federation/groupflow.h"
@@ -38,4 +39,11 @@ const puddle_courier puddle_federation_courier = {
     puddle_pond_leave,
     puddle_pond_fetch,
     puddle_pond_admin,
+    puddle_call_start,
+    puddle_call_accept,
+    puddle_call_decline,
+    puddle_call_end,
+    puddle_calls_write,
+    puddle_call_media,
+    puddle_call_start_group,
 };

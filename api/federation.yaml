@@ -52,6 +52,8 @@ tags:
     description: Group invites
   - name: files
     description: Files sent in messages, fetched a checked chunk at a time (docs/files.md)
+  - name: calls
+    description: Setting up and ending calls (docs/calls.md); the media itself goes over WebRTC
 
 paths:
   /stream/v1/hello:
@@ -422,6 +424,104 @@ paths:
         "202": { description: Received }
         "400": { $ref: "#/components/responses/BadRequest" }
         "403": { description: Not a friend }
+  /stream/v1/call/offer:
+    post:
+      tags: [calls]
+      operationId: callOffer
+      summary: Ring the recipient (docs/calls.md, "Setting a call up")
+      description: |
+        From a friend only (`403 no_stream` otherwise). `sdp` is the caller's WebRTC offer with its candidates: an Opus track
+        `audio` and an H.264 track `video`, each naming the SSRC it is sent from (docs/calls.md, "Video"). It names the DTLS
+        certificate the media will use, and arrives signed by the caller, so the call is bound to who they are. `udp` is the port the
+        caller's calls arrive on. `409 busy` if a call is going on (the same offer again is still `ringing`); `409 no_calls` if this
+        Puddle has none. Not through the outbox: a call that can't be set up now is missed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [call, sdp, udp]
+              properties:
+                call: { type: string, pattern: "^[a-z2-7]{26}$", description: Chosen by the caller }
+                sdp: { type: string, maxLength: 16384 }
+                udp: { type: integer, minimum: 1, maximum: 65535 }
+      responses:
+        "200": { description: Ringing, content: { application/json: { schema: { type: object, properties: { state: { const: ringing } } } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { description: Not a friend }
+        "409": { description: "busy, or no_calls" }
+  /stream/v1/call/answer:
+    post:
+      tags: [calls]
+      operationId: callAnswer
+      summary: The callee answered; here is its side
+      description: "`{call, sdp, udp}` as for the offer. `404 no_call` if the caller has no such call ringing (it gave up)."
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [call, sdp, udp], properties: { call: { type: string }, sdp: { type: string, maxLength: 16384 }, udp: { type: integer } } } } } }
+      responses:
+        "204": { description: Connecting }
+        "404": { description: No such call }
+  /stream/v1/call/end:
+    post:
+      tags: [calls]
+      operationId: callEnd
+      summary: A call is over
+      description: |
+        `reason`: `hung_up`, `declined`, `cancelled`, `no_answer`, `busy` or `failed` (anything else is taken as `hung_up`). A callee
+        whose phone was still ringing records `cancelled` and `no_answer` as `missed`. `404 no_call` for a call it doesn't know.
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [call, reason], properties: { call: { type: string }, reason: { type: string } } } } } }
+      responses:
+        "204": { description: Ended }
+        "404": { description: No such call }
+  /stream/v1/call/group/join:
+    post:
+      tags: [calls]
+      operationId: groupCallJoin
+      summary: The sender is in the group's call `call` (docs/calls.md, "Group calls")
+      description: |
+        From a member of `group` over a stream that carries groups (a friend's, or a group-only one; `403 not_member` otherwise). Sent
+        to every member on joining, and again every 20 s while in it; a member not heard from in three of those has gone. It says
+        the sender is in no other call of the group. `seq` only goes up from each sender: one no newer than the last is ignored
+        (they may arrive out of order). The answer: whether the recipient is in that call too (`in`; if so, of the two, the
+        smaller id offers), and `call` if the recipient knows of another call in the group with a smaller id, which everyone moves
+        to (two started at once). A recipient that isn't in it is rung, if it hadn't heard of it and is free.
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [call, group], properties: { call: { type: string, pattern: "^[a-z2-7]{26}$" }, group: { $ref: "wire/ids.yaml#/$defs/UserId" }, seq: { type: integer, minimum: 1 } } } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, required: [in], properties: { in: { type: boolean }, call: { type: string } } } } } }
+        "403": { description: not_member }
+  /stream/v1/call/group/leave:
+    post:
+      tags: [calls]
+      operationId: groupCallLeave
+      summary: The sender left the group's call
+      description: "Sent to every member. `{call, group, seq}` as for join; a stale one (an older `seq`) is ignored. The call is over for those not in it once nobody is."
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [call, group], properties: { call: { type: string }, group: { type: string }, seq: { type: integer, minimum: 1 } } } } } }
+      responses:
+        "204": { description: Noted }
+  /stream/v1/call/group/offer:
+    post:
+      tags: [calls]
+      operationId: groupCallOffer
+      summary: Connect two members in the group's call
+      description: |
+        From the member with the smaller user id of the two (`409 ours_to_offer` otherwise), to one in the same call (`404 no_call`
+        otherwise). `{call, group, sdp, udp}` as for a friend's offer; answered with `group/answer` once the recipient has made
+        its side. A member's offer replaces any connection the two had. `409 full` past 8 in the call.
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [call, group, sdp, udp], properties: { call: { type: string }, group: { type: string }, sdp: { type: string, maxLength: 16384 }, udp: { type: integer } } } } } }
+      responses:
+        "204": { description: Answered in a moment }
+        "404": { description: Not in that call }
+        "409": { description: "ours_to_offer, or full" }
+  /stream/v1/call/group/answer:
+    post:
+      tags: [calls]
+      operationId: groupCallAnswer
+      summary: The other member's side of the connection
+      description: "`{call, group, sdp, udp}`. `404 no_call` if the offerer has no such connection waiting."
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [call, group, sdp, udp], properties: { call: { type: string }, group: { type: string }, sdp: { type: string, maxLength: 16384 }, udp: { type: integer } } } } } }
+      responses:
+        "204": { description: Connecting }
+        "404": { description: No such connection }
 
 components:
   securitySchemes:

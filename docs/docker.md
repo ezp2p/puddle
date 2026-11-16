@@ -19,7 +19,7 @@ domain name or a fixed public IP, with the port forwarded to that machine if it 
 
 ```sh
 docker run -d --name puddle --restart unless-stopped \
-  -p 8443:8443 -v puddle:/data \
+  -p 8443:8443 -p 8443:8443/udp -v puddle:/data \
   -e PUDDLE_ADVERTISE=home.example.org:8443 \
   ghcr.io/ezp2p/puddle
 ```

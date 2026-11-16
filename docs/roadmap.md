@@ -13,7 +13,7 @@ signed receipts), the retrying outbox, direct messages with edit and delete, key
 pictures over a stream, and the Qt app (Friends, conversations, chat, delivery state). 32 test suites, including two Puddles
 talking over TLS and the window driven by real clicks and keys.
 
-Group chats (phase 5) are built, and so is proving who answers (phase 6), which replaced certificate pinning for streams. So is joining Ponds' text channels (docs/ponds.md). The phone client is built up to its Android package (phase 7). Not built: encryption at rest. See "Later" below and `discuss-later.md`.
+Group chats (phase 5) are built, and so is proving who answers (phase 6), which replaced certificate pinning for streams. So is joining Ponds' text channels (docs/ponds.md). The phone client is built up to its Android package (phase 7). Calls (phase 8) are under way: voice calls between two Puddles (8.1), made and answered in the window (8.2) and on the phone (8.3), with the echo from the speakers cancelled, group calls (8.4), and video (8.5). Not built: encryption at rest. See "Later" below and `discuss-later.md`.
 
 ## Order, and why
 
@@ -542,10 +542,44 @@ key of its own, and the Puddle signs every answer. The design is in `identity.md
     for Android); pasting the link works meanwhile.
 - [ ] **7.4 Android build.** An APK to install directly. Needs the Android SDK and NDK, a JDK and Qt for Android.
 
+## Phase 8: Calls
+
+Design in `docs/calls.md`. Decided with the owner: the two Puddles carry the call (each passes it to its owner's window
+or phone); WebRTC through libdatachannel, Opus for voice; only the Puddles' own addresses, no outside STUN or TURN; one
+to one in the window first, then phones, group calls and video.
+
+- [x] **8.1 A call between two Puddles.** `federation/calls.cpp`: libdatachannel on one UDP port (`calls.port`), the
+  signed routes `POST /stream/v1/call/offer|answer|end`, a call's states, the owner's routes (`/api/v1/calls...`), and
+  Opus frames in and out through a C interface. Tested with two Puddles in one process: ringing, accepting, frames both
+  ways over real UDP, declining, busy, no answer, hanging up, and that only a friend can ring.
+- [x] **8.2 Calls in the window.** Recording and playing with Qt Multimedia and libopus, a jitter buffer, ringing, the
+  call bar (mute, hang up), and a note of each call in the chat.
+- [x] **8.3 Calls on the phone.** A phone that starts or answers a call has it (the call's `device`), and sets up a WebRTC
+  leg of its own to its Puddle with `POST /api/v1/calls/{call}/media`, signed like all it asks; the Puddle passes Opus
+  frames between the leg and the friend, on the same UDP port. Every device rings; the others show where the call is and
+  can hang it up. A phone that stops asking for 10 seconds, or whose leg fails, ends the call. `app/callleg.*`; tested in
+  `phone_test` against two real Puddles: answering on the phone, ringing from it, frames both ways, the computer showing
+  where the call went, and a phone that goes quiet.
+- [x] **Echo.** The microphone's sound goes through an echo canceller before it is encoded, in the window and on the
+  phone: WebRTC's (webrtc-audio-processing) where it is packaged, else speexdsp's, else none. Its reference is lined up
+  with the speaker from what the speaker was handed. `callaudio_test` measures the echo taken off and the near voice kept.
+- [x] **8.4 Group calls.** A connection between each pair of the people in a group's call, over the group's streams
+  (a friend's, or a group-only one), set up with signed `call/group/join|leave|offer|answer`; the smaller id of each pair
+  offers, a member says it is in every 20 s, and joins and leaves carry a `seq` so that late ones are ignored. Joined from
+  the ring or from the group's chat while it goes on; two started at once become one. In the window, a voice per member,
+  mixed; on a phone, the members' frames over a data channel on its leg. `federation/groupcalls.cpp`; tested in
+  `groupcall_test` (four Puddles, a group-only pair among them), `phone_test` and `ui_test`.
+- [x] **8.5 Video.** A video track beside the voice in every connection of a call: H.264 (Constrained Baseline) with
+  OpenH264 on the device, 640×480 at 15 frames a second, a key frame every 2 s; the Puddles pass whole frames on and decode
+  nothing. Each track says its SSRC, and an answer waits until every track is set up. The camera from the call bar, tiles
+  under it; on a phone, a `video` track both ways and `v1`..`v7` for a group call's members. `app/callvideo.*`; tested in
+  `callvideo_test`, `call_test`, `groupcall_test`, `phone_test` and `ui_test`. Not yet: key frames on request, resending,
+  a bitrate that follows the connection.
+
 ## Later, not planned in detail
 
 Removing a member, a display name for the group-only connection, more of Ponds (docs/ponds.md, "Not yet"), encrypting message
-bodies, encrypting data at rest, the phone client and device pairing. Parked questions are in
+bodies, encrypting data at rest. Parked questions are in
 `discuss-later.md`.
 
 ## Decisions

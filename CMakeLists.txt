@@ -140,6 +140,7 @@ target_link_libraries(puddle_http PUBLIC OpenSSL::SSL)
 
 # api: the owner API: routes that use the objects
 add_library(puddle_api STATIC
+  src/api/calls.cpp
   src/api/conversations.cpp
   src/api/devices.cpp
   src/api/files.cpp
@@ -154,6 +155,8 @@ target_link_libraries(puddle_api PUBLIC puddle_objects puddle_http)
 
 # federation: the stream API: routes other Puddles call, and how our news reaches them
 add_library(puddle_federation STATIC
+  src/federation/calls.cpp
+  src/federation/groupcalls.cpp
   src/federation/files.cpp
   src/federation/access.cpp
   src/federation/courier.cpp
@@ -167,6 +170,18 @@ add_library(puddle_federation STATIC
   src/federation/profiles_api.cpp
   src/federation/sender.cpp)
 target_link_libraries(puddle_federation PUBLIC puddle_wire puddle_events puddle_http)
+# Calls (docs/calls.md) need libdatachannel. Without it a Puddle still builds, and has none: friends are told `no_calls`.
+option(PUDDLE_CALLS "Calls with friends, with libdatachannel" ON)
+if(PUDDLE_CALLS)
+  find_package(LibDataChannel QUIET)
+endif()
+if(PUDDLE_CALLS AND LibDataChannel_FOUND)
+  target_link_libraries(puddle_federation PUBLIC LibDataChannel::LibDataChannel)
+  target_compile_definitions(puddle_federation PUBLIC PUDDLE_HAVE_CALLS) # PUBLIC: the app sets up a phone's leg too
+  message(STATUS "calls: with libdatachannel")
+else()
+  message(STATUS "calls: none (libdatachannel not found, or PUDDLE_CALLS off)")
+endif()
 
 # service: the assembled Puddle (server.cpp) and every route together
 add_library(puddle_service STATIC
@@ -205,7 +220,72 @@ if(PUDDLE_BUILD_GUI)
       src/gui/app/phone.cpp
       src/gui/app/phone.h
       src/gui/app/qrimage.cpp
-      src/gui/app/qrimage.h)
+      src/gui/app/qrimage.h
+      src/gui/app/callmodel.cpp
+      src/gui/app/callmodel.h
+      src/gui/app/callleg.cpp
+      src/gui/app/callleg.h
+      src/gui/app/callvideo.cpp
+      src/gui/app/callvideo.h
+      src/gui/app/callaudio.cpp
+      src/gui/app/callaudio.h)
+    # a call's sound (callaudio.h): Opus. Without libopus a call still connects, in silence.
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+      pkg_check_modules(OPUS IMPORTED_TARGET opus)
+    endif()
+    if(NOT OPUS_FOUND)
+      message(WARNING "libopus not found: calls in the window will be silent")
+    endif()
+    # and its echo canceller (callaudio.h, EchoCanceller): WebRTC's (webrtc-audio-processing) if there, else speexdsp's
+    # (Homebrew has only that one), else none: the far end then hears itself back from this computer's speakers
+    set(PUDDLE_ECHO auto CACHE STRING "Echo canceller for calls: auto, webrtc, speex or off")
+    set_property(CACHE PUDDLE_ECHO PROPERTY STRINGS auto webrtc speex off)
+    if(PkgConfig_FOUND AND PUDDLE_ECHO MATCHES "^(auto|webrtc)$")
+      pkg_check_modules(WEBRTC_APM IMPORTED_TARGET webrtc-audio-processing-2)
+      if(NOT WEBRTC_APM_FOUND)
+        pkg_check_modules(WEBRTC_APM IMPORTED_TARGET webrtc-audio-processing-1)
+      endif()
+    endif()
+    if(PkgConfig_FOUND AND NOT WEBRTC_APM_FOUND AND PUDDLE_ECHO MATCHES "^(auto|speex)$")
+      pkg_check_modules(SPEEXDSP IMPORTED_TARGET speexdsp)
+    endif()
+    if(WEBRTC_APM_FOUND)
+      message(STATUS "Calls cancel echo with webrtc-audio-processing ${WEBRTC_APM_VERSION}")
+    elseif(SPEEXDSP_FOUND)
+      message(STATUS "Calls cancel echo with speexdsp ${SPEEXDSP_VERSION}")
+    elseif(NOT PUDDLE_ECHO STREQUAL "off")
+      message(WARNING "neither webrtc-audio-processing nor speexdsp found: calls will not cancel echo")
+    endif()
+    # and its video (callvideo.h): H.264 with OpenH264. Without it a call is voice only.
+    option(PUDDLE_VIDEO "Video in calls, with OpenH264" ON)
+    if(PkgConfig_FOUND AND PUDDLE_VIDEO)
+      pkg_check_modules(OPENH264 IMPORTED_TARGET openh264)
+    endif()
+    if(OPENH264_FOUND)
+      message(STATUS "Calls have video with OpenH264 ${OPENH264_VERSION}")
+    elseif(PUDDLE_VIDEO)
+      message(WARNING "OpenH264 not found: calls will be voice only")
+    endif()
+    # everything that builds callaudio.cpp (and callvideo.cpp)
+    function(puddle_call_sound t)
+      if(OPENH264_FOUND)
+        target_compile_definitions(${t} PRIVATE PUDDLE_HAVE_OPENH264)
+        target_link_libraries(${t} PRIVATE PkgConfig::OPENH264)
+      endif()
+      if(OPUS_FOUND)
+        target_compile_definitions(${t} PRIVATE PUDDLE_HAVE_OPUS)
+        target_link_libraries(${t} PRIVATE PkgConfig::OPUS)
+      endif()
+      if(WEBRTC_APM_FOUND)
+        target_compile_definitions(${t} PRIVATE PUDDLE_HAVE_WEBRTC_APM)
+        target_link_libraries(${t} PRIVATE PkgConfig::WEBRTC_APM)
+      elseif(SPEEXDSP_FOUND)
+        target_compile_definitions(${t} PRIVATE PUDDLE_HAVE_SPEEXDSP)
+        target_link_libraries(${t} PRIVATE PkgConfig::SPEEXDSP)
+      endif()
+    endfunction()
+    puddle_call_sound(puddle)
     # the QR code of a pairing link; without libqrencode the link is shown as text only
     find_library(QRENCODE_LIBRARY qrencode)
     find_path(QRENCODE_INCLUDE qrencode.h)
@@ -226,6 +306,8 @@ if(PUDDLE_BUILD_GUI)
         src/gui/qml/Main.qml
         src/gui/qml/setup/Setup.qml
         src/gui/qml/setup/Pair.qml
+        src/gui/qml/shell/CallBar.qml
+        src/gui/qml/shell/CallVideoView.qml
         src/gui/qml/shell/Shell.qml
         src/gui/qml/shell/Sidebar.qml
         src/gui/qml/shell/SidebarRow.qml
@@ -290,15 +372,18 @@ if(PUDDLE_BUILD_GUI)
       OUTPUT_NAME Puddle
       MACOSX_BUNDLE_BUNDLE_NAME Puddle
       MACOSX_BUNDLE_GUI_IDENTIFIER io.github.ezp2p.puddle
-      MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION})
+      MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
+      # CMake's own template, with why the app asks for the microphone and the camera (macOS refuses both without)
+      MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/Info.plist.in)
     install(TARGETS puddle BUNDLE DESTINATION . RUNTIME DESTINATION bin)
 
     # The first-run state machine, against the real core, with no window (needs the offscreen platform).
     add_executable(backend_test tests/backend_test.cpp src/gui/app/backend.cpp src/gui/app/backend.h src/gui/app/chats.cpp src/gui/app/chats.h
-      src/gui/app/apiclient.cpp src/gui/app/apiclient.h src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h
+      src/gui/app/apiclient.cpp src/gui/app/apiclient.h src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h src/gui/app/callmodel.cpp src/gui/app/callmodel.h src/gui/app/callleg.cpp src/gui/app/callleg.h
       src/gui/app/phone.cpp src/gui/app/phone.h)
     target_include_directories(backend_test PRIVATE src/gui/app)
-    target_link_libraries(backend_test PRIVATE puddle_service Qt6::Gui Qt6::Network)
+    target_sources(backend_test PRIVATE src/gui/app/callaudio.cpp src/gui/app/callaudio.h src/gui/app/callvideo.cpp src/gui/app/callvideo.h)
+    target_link_libraries(backend_test PRIVATE puddle_service Qt6::Gui Qt6::Network Qt6::Multimedia)
     if(APPLE)
       target_sources(backend_test PRIVATE src/gui/app/dock_mac.mm)
       target_link_libraries(backend_test PRIVATE "-framework AppKit" "-framework UserNotifications")
@@ -307,14 +392,14 @@ if(PUDDLE_BUILD_GUI)
 
     # The app's view of a Puddle (owner API over pinned TLS), against two real Puddles talking to each other.
     add_executable(chats_test tests/chats_test.cpp src/gui/app/chats.cpp src/gui/app/chats.h src/gui/app/apiclient.cpp src/gui/app/apiclient.h
-      src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h)
+      src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h src/gui/app/callmodel.cpp src/gui/app/callmodel.h src/gui/app/callleg.cpp src/gui/app/callleg.h)
     set_target_properties(chats_test PROPERTIES AUTOMOC ON)
     target_link_libraries(chats_test PRIVATE puddle_service Qt6::Core Qt6::Gui Qt6::Network Qt6::Test)
     add_test(NAME chats COMMAND chats_test)
 
     # The app as a phone: pairing with a real Puddle, then using it as a thin client (docs/identity.md, "Devices").
     add_executable(phone_test tests/phone_test.cpp src/gui/app/chats.cpp src/gui/app/chats.h src/gui/app/apiclient.cpp src/gui/app/apiclient.h
-      src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h src/gui/app/phone.cpp src/gui/app/phone.h)
+      src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h src/gui/app/callmodel.cpp src/gui/app/callmodel.h src/gui/app/callleg.cpp src/gui/app/callleg.h src/gui/app/phone.cpp src/gui/app/phone.h)
     set_target_properties(phone_test PROPERTIES AUTOMOC ON)
     target_link_libraries(phone_test PRIVATE puddle_service Qt6::Core Qt6::Gui Qt6::Network Qt6::Test)
     add_test(NAME phone COMMAND phone_test)
@@ -322,12 +407,31 @@ if(PUDDLE_BUILD_GUI)
 
     # The window, driven with real mouse and key events against two real Puddles.
     add_executable(ui_test tests/ui_test.cpp src/gui/app/backend.cpp src/gui/app/backend.h src/gui/app/chats.cpp src/gui/app/chats.h
-      src/gui/app/apiclient.cpp src/gui/app/apiclient.h src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h src/gui/app/composer.cpp src/gui/app/composer.h
+      src/gui/app/apiclient.cpp src/gui/app/apiclient.h src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h src/gui/app/callmodel.cpp src/gui/app/callmodel.h src/gui/app/callleg.cpp src/gui/app/callleg.h src/gui/app/composer.cpp src/gui/app/composer.h
       src/gui/app/phone.cpp src/gui/app/phone.h)
     set_target_properties(ui_test PROPERTIES AUTOMOC ON)
     target_include_directories(ui_test PRIVATE src/gui/app)
     target_compile_definitions(ui_test PRIVATE PUDDLE_GUI_DIR="${CMAKE_SOURCE_DIR}/src/gui/qml")
     target_link_libraries(ui_test PRIVATE puddle_service Qt6::Quick Qt6::QuickControls2 Qt6::Network Qt6::Multimedia Qt6::Test)
+    target_sources(ui_test PRIVATE src/gui/app/callaudio.cpp src/gui/app/callaudio.h src/gui/app/callvideo.cpp src/gui/app/callvideo.h)
+    puddle_call_sound(backend_test)
+    puddle_call_sound(ui_test)
+
+    # A call's sound without devices: the jitter buffer, Opus there and back, and the echo canceller (callaudio.h).
+    add_executable(callaudio_test tests/callaudio_test.cpp src/gui/app/callaudio.cpp src/gui/app/callaudio.h)
+    set_target_properties(callaudio_test PROPERTIES AUTOMOC ON)
+    target_include_directories(callaudio_test PRIVATE src/gui/app)
+    target_link_libraries(callaudio_test PRIVATE Qt6::Core Qt6::Multimedia)
+    puddle_call_sound(callaudio_test)
+    add_test(NAME callaudio COMMAND callaudio_test)
+    # A call's video without a camera: pictures to I420 and back, H.264 there and back, and senders coming and going.
+    add_executable(callvideo_test tests/callvideo_test.cpp src/gui/app/callvideo.cpp src/gui/app/callvideo.h)
+    set_target_properties(callvideo_test PROPERTIES AUTOMOC ON)
+    target_include_directories(callvideo_test PRIVATE src/gui/app)
+    target_link_libraries(callvideo_test PRIVATE Qt6::Gui Qt6::Multimedia)
+    puddle_call_sound(callvideo_test)
+    add_test(NAME callvideo COMMAND callvideo_test)
+    set_tests_properties(callvideo PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PUDDLE_TEST_NO_AUDIO=1")
     if(APPLE)
       target_sources(ui_test PRIVATE src/gui/app/dock_mac.mm)
       target_link_libraries(ui_test PRIVATE "-framework AppKit" "-framework UserNotifications")
@@ -349,13 +453,15 @@ enable_testing()
 # Each layer of src/ includes only the layers it may (tests/layers.cmake).
 add_test(NAME layers COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_CURRENT_SOURCE_DIR}/src -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/layers.cmake)
 
-foreach(t http json store storage files transfers people conversations config yaml profile encoding identity auth reqsig phrase serve router routes link group groupapi groupowner streams ratelimit access owner_streams client outbox inbound open_request flow message messages keysync devices protocol_vectors wireprofile profiles e2e group_e2e)
+foreach(t http json store storage files transfers people conversations config yaml profile encoding identity auth reqsig phrase serve router routes link group groupapi groupowner streams ratelimit access owner_streams client outbox inbound open_request flow message messages keysync devices protocol_vectors wireprofile profiles e2e group_e2e call groupcall)
   add_executable(${t}_test tests/${t}_test.c)
   target_link_libraries(${t}_test PRIVATE puddle_service)
   add_test(NAME ${t} COMMAND ${t}_test)
   # fill new and freed heap memory with garbage, so reading memory nobody wrote shows up as a failure
   set_tests_properties(${t} PROPERTIES ENVIRONMENT "MallocScribble=1;MALLOC_PERTURB_=165")
 endforeach()
+# call and groupcall skip (77) when built without libdatachannel
+set_tests_properties(call groupcall PROPERTIES SKIP_RETURN_CODE 77)
 # The Puddle Protocol's vectors, from a checkout of ezp2p/protocol beside this one (skipped without one)
 target_compile_definitions(protocol_vectors_test PRIVATE PUDDLE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 endif()
