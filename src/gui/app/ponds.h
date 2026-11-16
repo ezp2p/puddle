@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QHash>
+#include <QJsonArray>
 #include <QObject>
 #include <QTimer>
 
@@ -28,6 +29,7 @@ class Ponds : public QObject {
     Q_PROPERTY(bool canAdmin READ canAdmin NOTIFY currentInfoChanged)           // operator or administrator: Server Settings
     Q_PROPERTY(QString currentOffer READ currentOffer NOTIFY currentInfoChanged) // a role it offers us ("operator", "administrator"), or ""
     Q_PROPERTY(QString myId READ myId NOTIFY currentInfoChanged)
+    Q_PROPERTY(bool canVoice READ canVoice NOTIFY currentInfoChanged)          // the open Pond has voice channels (its `features`)
     Q_PROPERTY(bool hasOlder READ hasOlder NOTIFY hasOlderChanged)
     Q_PROPERTY(bool joining READ joining NOTIFY joiningChanged)
     // The voice channel we are in (docs/ponds.md, "Voice channels"), in whichever Pond: "" for none
@@ -50,6 +52,7 @@ public:
     bool canAdmin() const { return currentRole() == QLatin1String("operator") || currentRole() == QLatin1String("administrator"); }
     QString currentOffer() const { return info_.value("offer").toObject().value("role").toString(); }
     QString myId() const { return me_; }
+    bool canVoice() const { return info_.value("features").toArray().contains(QStringLiteral("voice")); }
     QObject *messages() { return &messages_; }
     QString current() const { return current_; }
     QString currentName() const { return info_.value("name").toString(); }
@@ -91,7 +94,8 @@ public:
     Q_INVOKABLE void answerOffer(bool accept);
     // What an operator or administrator does, in Server Settings. Each says how it went with adminDone or adminFailed.
     Q_INVOKABLE void saveOverview(const QString &name, const QString &description);
-    Q_INVOKABLE void createChannel(const QString &name, const QString &topic);
+    // `kind`: "text" or "voice" (a voice channel, where the Pond has them)
+    Q_INVOKABLE void createChannel(const QString &name, const QString &topic, const QString &kind = QStringLiteral("text"));
     Q_INVOKABLE void editChannel(const QString &channelId, const QString &name, const QString &topic);
     Q_INVOKABLE void deleteChannel(const QString &channelId);
     Q_INVOKABLE void kick(const QString &memberId);

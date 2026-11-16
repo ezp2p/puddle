@@ -212,6 +212,35 @@ Popup {
                         SettingsGroup {
                             title: qsTr("Create a channel")
                             Layout.fillWidth: true
+                            // text, or voice (a channel to drop into and talk: docs/ponds.md, "Voice channels")
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 16
+                                RadioButton {
+                                    id: kindText
+                                    objectName: "newChannelText"
+                                    text: qsTr("Text")
+                                    checked: true
+                                    icon.source: Theme.icon("hash")
+                                }
+                                RadioButton {
+                                    id: kindVoice
+                                    objectName: "newChannelVoice"
+                                    text: qsTr("Voice")
+                                    enabled: settings.ponds.canVoice
+                                    icon.source: Theme.icon("volume")
+                                    ToolTip.text: qsTr("This Pond doesn't have voice channels.")
+                                    ToolTip.visible: !enabled && voiceHover.hovered
+                                    HoverHandler { id: voiceHover }
+                                }
+                                Label {
+                                    Layout.fillWidth: true
+                                    wrapMode: Text.Wrap
+                                    opacity: 0.6
+                                    font.pixelSize: 12
+                                    text: kindVoice.checked ? qsTr("Members drop in and talk. It takes messages too.") : qsTr("Messages and files.")
+                                }
+                            }
                             RowLayout {
                                 Layout.fillWidth: true
                                 spacing: 8
@@ -229,7 +258,12 @@ Popup {
                                     objectName: "createChannel"
                                     text: qsTr("Create")
                                     enabled: newName.text !== ""
-                                    onClicked: { settings.ponds.createChannel(newName.text, newTopic.text); newName.text = ""; newTopic.text = "" }
+                                    onClicked: {
+                                        settings.ponds.createChannel(newName.text, newTopic.text, kindVoice.checked ? "voice" : "text")
+                                        newName.text = ""
+                                        newTopic.text = ""
+                                        kindText.checked = true
+                                    }
                                 }
                             }
                         }
@@ -248,7 +282,7 @@ Popup {
                                         visible: !chRow.editing
                                         Layout.fillWidth: true
                                         spacing: 8
-                                        Icon { glyph: "hash"; size: 16; opacity: 0.6 }
+                                        Icon { glyph: chRow.model.kind === "voice" ? "volume" : "hash"; size: 16; opacity: 0.6 }
                                         Label { text: chRow.model.name; font.bold: true }
                                         Label { text: chRow.model.topic; opacity: 0.6; elide: Text.ElideRight; Layout.fillWidth: true }
                                         ToolButton {

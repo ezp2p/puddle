@@ -310,10 +310,12 @@ void Ponds::saveOverview(const QString &name, const QString &description)
     admin(QStringLiteral("pond"), { { "name", name.trimmed() }, { "description", description.trimmed() } }, tr("Saved."), tr("save that"));
 }
 
-void Ponds::createChannel(const QString &name, const QString &topic)
+void Ponds::createChannel(const QString &name, const QString &topic, const QString &kind)
 {
-    admin(QStringLiteral("channels/create"), { { "name", name.trimmed() }, { "topic", topic.trimmed() } },
-          tr("#%1 made.").arg(name.trimmed()), tr("make that channel"));
+    const bool voice = kind == QLatin1String("voice");
+    admin(QStringLiteral("channels/create"),
+          { { "name", name.trimmed() }, { "topic", topic.trimmed() }, { "kind", voice ? QStringLiteral("voice") : QStringLiteral("text") } },
+          voice ? tr("Voice channel %1 made.").arg(name.trimmed()) : tr("#%1 made.").arg(name.trimmed()), tr("make that channel"));
 }
 
 void Ponds::editChannel(const QString &channelId, const QString &name, const QString &topic)

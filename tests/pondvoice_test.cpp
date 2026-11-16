@@ -102,7 +102,7 @@ struct FakePond {
     std::string session;
     bool in_voice = false, muted = false, deafened = false;
     std::atomic<int> frames{0}, joins{0}, leaves{0};
-    std::string last_state;
+    std::string last_state, created;     /* the last state sent, and the last channel an admin asked for */
     bool refuse_state = false;            /* answer state with a 404: it has let us go */
 
     std::string voice_list()
@@ -118,7 +118,7 @@ struct FakePond {
     {
         return "{\"protocol\":4,\"features\":[\"files\",\"roles\",\"voice\"],\"pond\":{\"id\":\"" + std::string(POND_ID) +
                "\",\"name\":\"Voice Pond\",\"description\":\"\",\"files\":{\"max_size\":0,\"chunk_size\":1048576,\"per_message\":10}},"
-               "\"me\":{\"id\":\"" + me + "\",\"profile\":null,\"joined\":1,\"role\":\"member\"},\"offer\":null,"
+               "\"me\":{\"id\":\"" + me + "\",\"profile\":null,\"joined\":1,\"role\":\"operator\"},\"offer\":null,"
                "\"channels\":[{\"id\":1,\"name\":\"general\",\"topic\":\"\",\"position\":0,\"kind\":\"text\"},"
                "{\"id\":2,\"name\":\"talk\",\"topic\":\"\",\"position\":1,\"kind\":\"voice\"}],\"voice\":" + voice_list() +
                ",\"cursor\":" + std::to_string(events.size()) + "}";
@@ -225,7 +225,7 @@ struct FakePond {
         }
         if (target == "/pond/v1/members") {
             std::lock_guard<std::mutex> g(mu);
-            return "{\"members\":[{\"id\":\"" + me + "\",\"profile\":null,\"joined\":1,\"role\":\"member\"},{\"id\":\"" + std::string(BEN) +
+            return "{\"members\":[{\"id\":\"" + me + "\",\"profile\":null,\"joined\":1,\"role\":\"operator\"},{\"id\":\"" + std::string(BEN) +
                    "\",\"profile\":{\"display_name\":\"Ben\"},\"joined\":1,\"role\":\"member\"}]}";
         }
         if (target.rfind("/pond/v1/channels/", 0) == 0 && target.find("/messages") != std::string::npos)
@@ -266,6 +266,12 @@ struct FakePond {
                 *status = 204;
                 return "";
             }
+        }
+        if (method == "POST" && target == "/pond/v1/admin/channels/create") {
+            std::lock_guard<std::mutex> g(mu);
+            created = body;
+            *status = 204;
+            return "";
         }
         if (method == "POST") { /* the profile, keys and the rest: taken */
             *status = 204;
@@ -438,6 +444,19 @@ int main(int argc, char **argv)
     CHECK(until([&] { return talk().value("kind").toString() == "voice"; }));
     CHECK(until([&] { return talk().value("voice").toArray().size() == 1; }));
     CHECK(talk().value("voice").toArray().at(0).toObject().value("name").toString() == "Ben"); /* by name, as the members say */
+
+    /* ---- making a voice channel, as Server Settings does (the Pond decides who may) ---- */
+    CHECK(until([&] { return ponds->canVoice(); }));
+    ponds->createChannel("chat", "", "voice");
+    CHECK(until([&] {
+        std::lock_guard<std::mutex> g(pond.mu);
+        return pond.created.find("\"kind\":\"voice\"") != std::string::npos && pond.created.find("\"name\":\"chat\"") != std::string::npos;
+    }));
+    ponds->createChannel("notes", "");
+    CHECK(until([&] {
+        std::lock_guard<std::mutex> g(pond.mu);
+        return pond.created.find("\"kind\":\"text\"") != std::string::npos;
+    }));
 
     /* ---- only a voice channel: a text one says so ---- */
     QStringList failed;
