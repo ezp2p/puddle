@@ -104,7 +104,7 @@ Pane {
     function goHome() { sidebarDrawer.close(); page = "home"; chats.close() }
     // the conversation most recently open, which the Home button goes back to ({} until one was opened, or once it is gone)
     property var lastChat: ({})
-    // the call's conversation, or the Pond voice channel you are in (the floating bars and the voice panel)
+    // the call's conversation, or the Pond voice channel you are in (a click on the voice panel's name)
     function goToCall() { chats.calls.group !== "" ? openChat(chats.calls.group, "group") : openChat(chats.calls.user, "dm") }
     function goToVoice() {
         const pond = ponds.voicePond, channel = ponds.voiceChannel
@@ -256,28 +256,14 @@ Pane {
                 onToggleSidebar: shell.toggleSidebar()
                 onToggleContext: shell.toggleContext()
             }
-            // the call going on, over whatever page is open
+            // a friend ringing while the left-hand list (and its voice panel) is out of sight
             CallBar {
-                id: callBar
                 chats: shell.chats
-                video: shell.backend.video
-                view: videoView
+                sidebarShown: shell.sidebarOpen
                 z: 10
                 anchors.top: parent.top
                 anchors.topMargin: Theme.headerHeight + 8
                 anchors.horizontalCenter: parent.horizontalCenter
-                onOpenRequested: shell.goToCall()
-            }
-            // the Pond voice channel you are in, likewise (never with a call: one at a time)
-            VoiceToast {
-                chats: shell.chats
-                video: shell.backend.video
-                view: videoView
-                z: 10
-                anchors.top: callBar.visible ? callBar.bottom : parent.top
-                anchors.topMargin: callBar.visible ? 8 : Theme.headerHeight + 8
-                anchors.horizontalCenter: parent.horizontalCenter
-                onOpenRequested: shell.goToVoice()
             }
         }
 

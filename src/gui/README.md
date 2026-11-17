@@ -30,8 +30,8 @@ src/gui/
                       HomePage: what shows when nothing is open
                       ContextBar: the panel at the right of an open conversation: members of a group, or a person's profile and what can be done about them.
                       PondSidebar: a Pond's channels, in place of the conversations while it is open. PondMembers: its members, in the right panel
-                      CallBar: the call going on, floating over the page: ringing, connecting, mute, hang up
-                      VoiceToast: the Pond voice channel you are in, floating likewise. VoicePanel: the same (a call too), sliding up at the foot of the sidebar, above your row
+                      VoicePanel: the call or Pond voice channel you are in, sliding up at the foot of the sidebar above your row: where, ringing, mute, camera, screen, leave
+                      CallBar: a friend ringing, floating over the page while the sidebar (and so its panel) is out of sight
                       Beside the conversation when the window is at least Theme.contextBreakpoint wide, a drawer over it when not
     chat/             ChatPage: one conversation. PondPage: a Pond's text channel. MessageFiles: a message's photos and videos as a grid (the sender's blurred preview until
                       each is here) and other files as cards. MediaViewer: a photo or a video over the whole window

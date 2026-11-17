@@ -73,6 +73,8 @@ public:
     Q_INVOKABLE void accept();
     Q_INVOKABLE void decline();
     Q_INVOKABLE void hangUp();
+    // The error shown is put away (the owner dismissed it)
+    Q_INVOKABLE void dismissError() { setError(QString()); }
     Q_INVOKABLE void setMuted(bool muted);
     Q_INVOKABLE void toggleMute() { setMuted(!muted_); }
     Q_INVOKABLE void setCamera(bool on);

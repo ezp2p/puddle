@@ -4,162 +4,50 @@ import QtQuick.Layouts
 import "../components"
 import "../theme"
 
-// The call going on (docs/calls.md), floating over the top of the page whatever is open: a friend ringing (answer or
-// decline), ours ringing at theirs, connecting, or the call itself with how long it has run, mute and hang up. A friend
-// rings on every device of the owner's; once one of them answers or starts a call, the others say where it is (on a phone,
-// on the computer) and can only hang it up. A group's call shows the group, and how many others are in it; hanging up leaves
-// it to them.
+// A friend ringing (docs/calls.md), floating over the top of the page while the left-hand list is out of sight (a narrow
+// window, or the list folded away), so the call is not missed: who, and answer or decline. Everything else about a call,
+// and the ringing too when the list is in sight, is in the voice panel at its foot (VoicePanel.qml).
 Card {
     id: bar
 
     required property var chats
-    property var video: null        // the call's video (CallVideo); none, no camera button
-    property var view: null         // the shell's video pane state (popping it out)
-    signal openRequested()          // the name was clicked: the call's chat
+    property bool sidebarShown: true
     readonly property var calls: chats.calls
-    readonly property string state: calls.state
-    readonly property bool ringingHere: state === "ringing"
     readonly property bool inGroup: calls.group !== ""
 
     objectName: "callBar"
-    visible: state !== "" || calls.error !== ""
+    visible: calls.state === "ringing" && !sidebarShown
     implicitWidth: row.implicitWidth + 24
     implicitHeight: row.implicitHeight + 16
-    border.color: ringingHere ? Theme.primary : Theme.hairline
-    border.width: ringingHere ? 2 : 1
-
-    // the time since it connected, kept fresh while it runs
-    property real now: Date.now()
-    Timer { interval: 1000; repeat: true; running: bar.state === "active"; onTriggered: bar.now = Date.now() }
-
-    function length() {
-        const s = Math.max(0, Math.floor((bar.now - bar.calls.answeredAt) / 1000))
-        const m = Math.floor(s / 60), h = Math.floor(m / 60)
-        const two = n => (n < 10 ? "0" : "") + n
-        return h > 0 ? h + ":" + two(m % 60) + ":" + two(s % 60) : m + ":" + two(s % 60)
-    }
+    border.color: Theme.primary
+    border.width: 2
 
     RowLayout {
         id: row
         anchors.centerIn: parent
         spacing: 10
 
-        Avatar { visible: bar.state !== ""; chats: bar.chats; name: bar.calls.name; hash: ""; size: 28 }
+        Avatar { chats: bar.chats; name: bar.calls.name; hash: ""; size: 28 }
         ColumnLayout {
             spacing: 0
+            Label { objectName: "callName"; text: bar.calls.name; font.bold: true; elide: Text.ElideRight; Layout.maximumWidth: 220 }
             Label {
-                objectName: "callName"
-                visible: bar.state !== ""
-                text: bar.calls.name
-                font.bold: true
-                font.underline: callNameHover.hovered
-                elide: Text.ElideRight
-                Layout.maximumWidth: 220
-                HoverHandler { id: callNameHover; cursorShape: Qt.PointingHandCursor }
-                TapHandler { onTapped: bar.openRequested() }
-                Accessible.role: Accessible.Link
-                Accessible.name: qsTr("Go to %1").arg(text)
-            }
-            Label {
-                objectName: "callStatus"
                 font.pixelSize: 12
-                opacity: bar.state === "" ? 1 : 0.7
-                color: bar.state === "" ? Theme.danger : palette.windowText
-                readonly property string what: bar.state === "ringing" ? (bar.inGroup ? qsTr("%1 started a call").arg(bar.chats.nameOf(bar.calls.user)) : qsTr("is calling you"))
-                    : bar.state === "calling" ? (bar.inGroup ? qsTr("Waiting for others…") : qsTr("Ringing…"))
-                    : bar.state === "connecting" ? qsTr("Connecting…")
-                    : bar.state === "active" ? (bar.inGroup ? bar.length() + " · " + (bar.calls.others === 1 ? qsTr("1 other") : qsTr("%1 others").arg(bar.calls.others)) : bar.length())
-                    : bar.calls.error
-                text: bar.calls.elsewhere !== "" ? what + " · " + bar.calls.elsewhere : what
+                opacity: 0.7
+                text: bar.inGroup ? qsTr("%1 started a call").arg(bar.chats.nameOf(bar.calls.user)) : qsTr("is calling you")
             }
         }
-
-        // a friend is ringing: answer or not
         PrimaryButton {
             objectName: "acceptCallButton"
-            visible: bar.ringingHere
             text: bar.inGroup ? qsTr("Join") : qsTr("Answer")
             icon.source: Theme.icon("phone")
             onClicked: bar.calls.accept()
         }
         Button {
             objectName: "declineCallButton"
-            visible: bar.ringingHere
             text: qsTr("Decline")
             palette.buttonText: Theme.danger
             onClicked: bar.calls.decline()
-        }
-
-        // in a call (or ringing theirs): mute, hang up
-        ToolButton {
-            objectName: "muteButton"
-            visible: (bar.state === "active" || bar.state === "connecting") && bar.calls.here
-            checkable: true
-            checked: bar.calls.muted
-            icon.source: Theme.icon(bar.calls.muted ? "microphone-off" : "microphone")
-            icon.width: Theme.iconSize
-            icon.height: Theme.iconSize
-            display: AbstractButton.IconOnly
-            Accessible.name: bar.calls.muted ? qsTr("Unmute") : qsTr("Mute")
-            ToolTip.text: Accessible.name
-            ToolTip.visible: hovered
-            onClicked: bar.calls.toggleMute()
-        }
-        ToolButton {
-            objectName: "cameraButton"
-            visible: (bar.state === "active" || bar.state === "connecting") && bar.calls.here && bar.video !== null && bar.video.built
-            checkable: true
-            checked: bar.calls.camera
-            icon.source: Theme.icon(bar.calls.camera ? "video" : "video-off")
-            icon.width: Theme.iconSize
-            icon.height: Theme.iconSize
-            display: AbstractButton.IconOnly
-            Accessible.name: bar.calls.camera ? qsTr("Turn the camera off") : qsTr("Turn the camera on")
-            ToolTip.text: Accessible.name
-            ToolTip.visible: hovered
-            onClicked: bar.calls.toggleCamera()
-        }
-        // the video in a window of its own
-        ToolButton {
-            objectName: "callPopOut"
-            visible: bar.state === "active" && bar.calls.here && bar.view !== null && bar.video !== null && bar.video.built
-            highlighted: bar.view !== null && bar.view.popped
-            icon.source: Theme.icon("external-link")
-            icon.width: Theme.iconSize
-            icon.height: Theme.iconSize
-            display: AbstractButton.IconOnly
-            Accessible.name: bar.view !== null && bar.view.popped ? qsTr("Put the video back") : qsTr("Video in its own window")
-            ToolTip.text: Accessible.name
-            ToolTip.visible: hovered
-            onClicked: { bar.view.popped = !bar.view.popped; bar.view.full = false }
-        }
-        // share the screen (in the window; a call a phone has carries none yet)
-        ToolButton {
-            objectName: "screenButton"
-            visible: (bar.state === "active" || bar.state === "connecting") && bar.calls.here && bar.video !== null && bar.video.built && bar.video.canShareScreen
-            checkable: true
-            checked: bar.calls.screen
-            icon.source: Theme.icon(bar.calls.screen ? "screen-share-off" : "screen-share")
-            icon.width: Theme.iconSize
-            icon.height: Theme.iconSize
-            display: AbstractButton.IconOnly
-            Accessible.name: bar.calls.screen ? qsTr("Stop sharing your screen") : qsTr("Share your screen")
-            ToolTip.text: Accessible.name
-            ToolTip.visible: hovered
-            onClicked: bar.calls.toggleScreen()
-        }
-        ToolButton {
-            objectName: "hangUpButton"
-            visible: bar.state !== "" && !bar.ringingHere
-            icon.source: Theme.icon("phone-off")
-            icon.width: Theme.iconSize
-            icon.height: Theme.iconSize
-            icon.color: Theme.danger
-            display: AbstractButton.IconOnly
-            Accessible.name: bar.inGroup ? qsTr("Leave the call") : bar.state === "calling" ? qsTr("Cancel the call") : qsTr("Hang up")
-            ToolTip.text: Accessible.name
-            ToolTip.visible: hovered
-            onClicked: bar.calls.hangUp()
         }
     }
 }

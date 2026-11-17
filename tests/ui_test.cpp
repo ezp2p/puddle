@@ -337,12 +337,12 @@ int main(int argc, char **argv)
         CHECK(until([&] { return find("callButton") && find("callButton")->property("enabled").toBool(); }, 5000));
         CHECK(click(find("callButton")));
         CHECK(until([&] { return cb.state() == "ringing"; }, 10000));
-        CHECK(until([&] { QQuickItem *s = find("callStatus"); return s && s->property("text").toString() == "Ringing…"; }, 3000));
+        CHECK(until([&] { QQuickItem *s = find("voicePanelStatus"); return s && s->property("text").toString() == "Ringing…"; }, 3000));
         CHECK(!find("callButton")->property("enabled").toBool()); /* one call at a time */
         cb.accept();
         CHECK(until([&] { return ca.state() == "active"; }, 15000));
-        CHECK(until([&] { QQuickItem *s = find("callStatus"); return s && s->property("text").toString().startsWith("0:0"); }, 5000));
-        CHECK(click(find("muteButton")));
+        CHECK(until([&] { QQuickItem *s = find("voicePanelStatus"); return s && s->property("text").toString().startsWith("In a call · 0:0"); }, 5000));
+        CHECK(click(find("voicePanelMute")));
         CHECK(until([&] { return ca.muted(); }, 2000));
 
         /* ---- video (docs/calls.md, "Video") ---- */
@@ -358,8 +358,8 @@ int main(int argc, char **argv)
             /* the camera, from the bar: the window's own picture shows, and what it takes reaches Bob's Puddle */
             static std::atomic<int> atBob{ 0 };
             puddle_calls_on_video(puddle_server_calls(bob.srv), [](void *, const char *, const char *, const unsigned char *, size_t, uint32_t) { atBob++; }, nullptr);
-            CHECK(until([&] { return find("cameraButton") && find("cameraButton")->isVisible(); }, 3000));
-            CHECK(click(find("cameraButton")));
+            CHECK(until([&] { return find("voicePanelCamera") && find("voicePanelCamera")->isVisible(); }, 3000));
+            CHECK(click(find("voicePanelCamera")));
             CHECK(until([&] { return ca.camera() && video->cameraOn(); }, 2000));
             /* the call's chat is open: its video is in the chat's pane, above the messages (not the floating tiles) */
             CHECK(until([&] { return find("videoTile_self") && find("videoPane") && find("callVideo") == nullptr; }, 3000));
@@ -399,8 +399,8 @@ int main(int argc, char **argv)
                 if (QString::fromUtf8(from).endsWith("/screen"))
                     screenAtBob++;
             }, nullptr);
-            CHECK(until([&] { return find("screenButton") && find("screenButton")->isVisible(); }, 3000));
-            CHECK(click(find("screenButton")));
+            CHECK(until([&] { return find("voicePanelScreen") && find("voicePanelScreen")->isVisible(); }, 3000));
+            CHECK(click(find("voicePanelScreen")));
             CHECK(until([&] { return ca.screen() && video->screenOn() && find("videoTile_self/screen"); }, 2000));
             for (int k = 0; k < 20 && screenAtBob < 3; k++) {
                 QImage desk(1600, 900, QImage::Format_RGB32);
@@ -410,7 +410,7 @@ int main(int argc, char **argv)
             }
             CHECK(screenAtBob >= 3);
             puddle_calls_on_video(puddle_server_calls(bob.srv), nullptr, nullptr);
-            CHECK(click(find("screenButton")));
+            CHECK(click(find("voicePanelScreen")));
             CHECK(until([&] { return !ca.screen() && !video->screenOn() && find("videoTile_self/screen") == nullptr; }, 2000));
 
             /* Bob shares his: a tile of its own, "Bob's screen"; clicking it pins it large, the rest in a strip */
@@ -455,45 +455,46 @@ int main(int argc, char **argv)
 
             /* the camera off: everyone keeps a tile for the whole call, with their picture while no video comes; Bob's
              * screen tile goes once his pictures stop */
-            CHECK(click(find("cameraButton")));
+            CHECK(click(find("voicePanelCamera")));
             CHECK(until([&] { return !ca.camera() && !video->cameraOn() && find("videoTile_self") && !find("videoTile_self")->property("live").toBool(); }, 2000));
             CHECK(until([&] { return find("videoTile_" + bobScreen) == nullptr && find("videoTile_" + bob.uid) &&
                                      !find("videoTile_" + bob.uid)->property("live").toBool(); }, 6000));
             CHECK(find("videoPane") != nullptr && find("videoSplit") != nullptr); /* the chat, split: video above, messages below */
 
-            /* elsewhere, the call's name in the bar takes you back to its chat */
+            /* elsewhere, the call's name in the voice panel above your row takes you back to its chat */
             CHECK(clickName("settingsButton"));
             CHECK(until([&] { return find("videoPane") == nullptr; }, 2000));
-            CHECK(click(find("callName")));
-            CHECK(until([&] { return A.current() == bob.uid && find("videoPane") != nullptr; }, 3000));
-            /* and so does the voice panel above your row in the sidebar, which has the call's controls too */
-            CHECK(find("voicePanel") != nullptr && find("voicePanelMute") != nullptr && find("voicePanelLeave") != nullptr);
-            CHECK(clickName("settingsButton"));
-            CHECK(until([&] { return find("videoPane") == nullptr; }, 2000));
+            CHECK(find("voicePanel") != nullptr && find("callBar") == nullptr); /* the floating bar is only for ringing, out of sight */
             CHECK(click(find("voicePanelName")));
             CHECK(until([&] { return A.current() == bob.uid && find("videoPane") != nullptr; }, 3000));
-            CHECK(ca.muted()); /* (muted from the bar earlier) */
+            CHECK(ca.muted()); /* (muted earlier) */
             CHECK(click(find("voicePanelMute")));
-            CHECK(until([&] { return !ca.muted() && find("muteButton")->property("checked") == false; }, 2000));
+            CHECK(until([&] { return !ca.muted() && !find("voicePanelMute")->property("highlighted").toBool(); }, 2000));
             CHECK(click(find("voicePanelMute")));
             CHECK(until([&] { return ca.muted(); }, 2000));
         }
-        CHECK(click(find("hangUpButton")));
+        CHECK(click(find("voicePanelLeave")));
         CHECK(until([&] { return ca.state().isEmpty() && cb.state().isEmpty(); }, 10000));
-        CHECK(until([&] { return find("callBar") == nullptr && note("You called Bob · 0:0"); }, 5000));
-        CHECK(until([&] { return find("voicePanel") == nullptr; }, 2000)); /* slid away */
+        CHECK(until([&] { return find("voicePanel") == nullptr && note("You called Bob · 0:0"); }, 5000)); /* slid away */
         CHECK(!ca.muted()); /* the next call starts unmuted */
 
         /* Bob calls the window: the bar rings; declined */
         cb.call(backend.myId());
-        CHECK(until([&] { return find("acceptCallButton") != nullptr; }, 10000));
-        CHECK(click(find("declineCallButton")));
+        CHECK(until([&] { return find("voicePanelAnswer") != nullptr; }, 10000));
+        CHECK(find("callBar") == nullptr); /* the list is in sight: ringing is in its panel */
+        CHECK(click(find("voicePanelDecline")));
         CHECK(until([&] { return ca.state().isEmpty() && cb.state().isEmpty(); }, 10000));
         CHECK(until([&] { return note("You declined a call from Bob"); }, 5000));
-        /* and again, answered from the bar, and Bob hangs up */
+        /* and again, with the left-hand list folded away: a bar floats over the page instead, answered there, and Bob hangs up */
+        QQuickItem *shellItem = nullptr;
+        walk(win->contentItem(), [&](QQuickItem *i) { if (!shellItem && i->property("showSidebar").isValid()) shellItem = i; return false; });
+        CHECK(shellItem != nullptr);
+        shellItem->setProperty("showSidebar", false);
         cb.call(backend.myId());
-        CHECK(until([&] { return find("acceptCallButton") != nullptr; }, 10000));
+        CHECK(until([&] { return find("acceptCallButton") != nullptr && find("voicePanelAnswer") == nullptr; }, 10000));
         CHECK(click(find("acceptCallButton")));
+        CHECK(until([&] { return find("callBar") == nullptr; }, 5000)); /* answered: only ringing floats */
+        shellItem->setProperty("showSidebar", true);
         CHECK(until([&] { return ca.state() == "active" && cb.state() == "active"; }, 15000));
         cb.hangUp();
         CHECK(until([&] { return ca.state().isEmpty(); }, 10000));
@@ -697,7 +698,7 @@ int main(int argc, char **argv)
          * many are in it; leaving leaves it to them, and the header offers to join again; the chat notes it ---- */
         {
             Calls &ca = *A.callModel(), &cb = *B.callModel(), &cd = *D.callModel();
-            auto status = [&] { QQuickItem *s = find("callStatus"); return s ? s->property("text").toString() : QString(); };
+            auto status = [&] { QQuickItem *s = find("voicePanelStatus"); return s ? s->property("text").toString() : QString(); };
             CHECK(until([&] { return find("callButton") && find("callButton")->property("enabled").toBool(); }, 5000));
             CHECK(click(find("callButton")));
             CHECK(until([&] { return cb.state() == "ringing" && cd.state() == "ringing" && cb.group() == gid && cb.name() == "Weekend"; }, 10000));
@@ -707,12 +708,12 @@ int main(int argc, char **argv)
             CHECK(until([&] { return ca.state() == "active" && ca.others() == 2; }, 15000));
             CHECK(until([&] { return status().endsWith("2 others"); }, 5000));
             CHECK(until([&] { return cb.others() == 2 && cd.others() == 2 && cd.state() == "active"; }, 15000));
-            CHECK(click(find("hangUpButton")));
+            CHECK(click(find("voicePanelLeave")));
             CHECK(until([&] { return ca.state().isEmpty() && cb.others() == 1 && cd.others() == 1; }, 10000));
             CHECK(until([&] { return find("callButton") && find("callButton")->property("text").toString() == "Join (2)"; }, 5000));
             CHECK(click(find("callButton")));
             CHECK(until([&] { return ca.state() == "active" && ca.others() == 2; }, 15000));
-            CHECK(click(find("hangUpButton")));
+            CHECK(click(find("voicePanelLeave")));
             cb.hangUp();
             cd.hangUp();
             CHECK(until([&] { return ca.state().isEmpty() && cb.state().isEmpty() && cd.state().isEmpty() && ca.groupCall(gid) == 0; }, 10000));

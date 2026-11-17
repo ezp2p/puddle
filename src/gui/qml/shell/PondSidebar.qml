@@ -8,7 +8,7 @@ import "../theme"
 // administrator, how you appear there, your id, leaving), a role the Pond offers you if it does, then its channels. A voice
 // channel (docs/ponds.md, "Voice channels") has a speaker, and who is in it underneath, lit while they talk; clicking it shows
 // its messages, like any channel, and the phone beside it joins its voice (nothing to answer), or leaves it. While you are in
-// one, a bar floats over the page (VoiceToast.qml). Your own row at the bottom has the app's Settings.
+// one, the voice panel above your own row says which, with its controls (VoicePanel.qml); your row has the app's Settings.
 Rectangle {
     id: bar
 
