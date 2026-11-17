@@ -28,7 +28,8 @@ Releases are tagged by hand (`git tag 0.3.0 && git push origin 0.3.0`), from whi
 | `puddled-<v>-linux-amd64.tar.gz`, `arm64` | the Puddle without a window, for a server: OpenSSL built in, a systemd `--user` unit     |
 | `SHA256SUMS`                             | the checksums of all of the above                                                     |
 
-The container image of `puddled` is published by `docker.yml` on a release tag (`docs/docker.md`).
+The container image of `puddled` (amd64 and arm64) is published by `docker.yml`: `:dev` on a push to `dev`, the version
+and `:latest` on a release tag (`docs/docker.md`).
 
 How each is made:
 

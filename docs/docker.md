@@ -1,14 +1,17 @@
 # Running a Puddle in Docker
 
-`puddled`, the headless Puddle, is published as a container image for amd64 (arm64 to come) with each release:
+`puddled`, the headless Puddle, is published as a container image for amd64 and arm64:
 
 ```
-ghcr.io/ezp2p/puddle:latest      the newest release
-ghcr.io/ezp2p/puddle:0.1.0       one release
-ghcr.io/ezp2p/puddle:0.1         the newest 0.1.x
+ghcr.io/ezp2p/puddle:latest          the newest release
+ghcr.io/ezp2p/puddle:0.1.0           one release
+ghcr.io/ezp2p/puddle:0.1             the newest 0.1.x
+ghcr.io/ezp2p/puddle:dev             the newest build of the dev branch, replaced on every push to it: for trying
+ghcr.io/ezp2p/puddle:dev-<commit>    the build of that commit of dev
 ```
 
-Prereleases (tags with a `-`, such as `0.2.0-rc.1`) get only their own tag, never `latest`.
+Prereleases (tags with a `-`, such as `0.2.0-rc.1`) get only their own tag, never `latest`. A pull request builds the
+image for both and publishes nothing (`.github/workflows/docker.yml`).
 
 ## From scratch
 
