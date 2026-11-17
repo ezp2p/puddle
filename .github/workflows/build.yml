@@ -118,7 +118,13 @@ jobs:
         run: cmake --build build --parallel 4   # a bare --parallel is unlimited with Makefiles
 
       - name: Test
-        run: LD_LIBRARY_PATH="$HOME/deps/lib" ctest --test-dir build --output-on-failure   # (the Linux desktop's libdatachannel)
+        run: |
+          # LD_LIBRARY_PATH: the Linux desktop's libdatachannel
+          if ! LD_LIBRARY_PATH="$HOME/deps/lib" ctest --test-dir build --output-on-failure 2>&1 | tee test.log; then
+            # which tests failed, and the end of what they said, as an annotation: readable without signing in for the log
+            tail -n 80 test.log | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}' | sed 's/^/::error title=Tests failed::/'; echo
+            exit 1
+          fi
 
       - name: Package
         run: |
