@@ -1,0 +1,15 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: MessageEvent
+description: Something someone wrote. In a DM or a group alike.
+allOf:
+  - $ref: "header.yaml"
+  - type: object
+    required: [type, body]
+    properties:
+      type: { const: "message" }
+      body: { type: string, minLength: 1, maxLength: 4000, description: "Valid UTF-8; no control characters but newline and tab" }
+      ref: { $ref: "../wire/ids.yaml#/$defs/EventId", description: The message this replies to }
+unevaluatedProperties: false
+x-sent-by: a party to the DM, or a group member
+x-rules:
+  - The sender shares an active stream with us (DM) or is a member (group)

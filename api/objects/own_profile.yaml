@@ -1,0 +1,19 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: OwnProfile
+description: |
+  One of the owner's profiles (docs/profiles.md), a file in the data folder, with the private id used to refer to it.
+  The id is never sent to anyone. `places` is where it is shown: the owner's consent for it to go there.
+allOf:
+  - $ref: "../wire/profile.yaml"
+  - type: object
+    required: [id, places]
+    properties:
+      id: { type: string, pattern: "^[a-z0-9_-]{1,32}$" }
+      places:
+        type: array
+        items: { type: string, pattern: "^(dm|group):[a-z2-7]{52}$", description: "dm:<user id> or group:<group id>" }
+x-methods:
+  edit: POST /api/v1/profiles/{id}/edit
+  delete: POST /api/v1/profiles/{id}/delete
+  show to someone: POST /api/v1/streams/{user}/profile
+  show to a group: POST /api/v1/groups/{group}/profile

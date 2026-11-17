@@ -1,0 +1,15 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: OwnProfile
+description: One of the owner's profiles, with the private id used to refer to it. The id is never sent to anyone.
+allOf:
+  - $ref: "../wire/profile.yaml"
+  - type: object
+    required: [id, default]
+    properties:
+      id: { type: string, pattern: "^[a-z0-9_-]{1,32}$" }
+      default: { type: boolean, description: Shown to anyone not assigned a profile }
+x-source:
+  struct: "src/core/profile.h puddle_profile (id, display_name, blurb, about, pronouns, color, avatar, banner, background)"
+  writer: "src/core/profiles_api.c list_profiles; fields by src/core/profile.c puddle_profile_write_fields"
+  stored: "profiles.yaml, edited by the owner (docs/profiles.md); images in media/"
+  today: "The same."

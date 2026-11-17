@@ -1,0 +1,12 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: Block
+type: object
+required: [user, created_at]
+properties:
+  user: { $ref: "partial_user.yaml" }
+  created_at: { $ref: "../wire/ids.yaml#/$defs/Timestamp" }
+x-source:
+  struct: "src/core/streams.h puddle_block (id, ts_ms)"
+  writer: "src/core/owner_streams.c list_blocks, block_user"
+  stored: "state/blocks.tsv"
+  today: "`user` is a bare id."

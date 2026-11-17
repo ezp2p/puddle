@@ -1,0 +1,14 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: MemberJoin
+description: Says yes to an invitation.
+allOf:
+  - $ref: "header.yaml"
+  - type: object
+    required: [type]
+    properties:
+      type: { const: "member.join" }
+
+unevaluatedProperties: false
+x-sent-by: the invitee
+x-rules:
+  - Only from someone invited, answering an invitation older than it

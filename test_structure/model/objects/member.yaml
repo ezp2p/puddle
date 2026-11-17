@@ -1,0 +1,14 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: Member
+description: Someone in a group, or invited to it, the owner included. People who left are not listed.
+type: object
+required: [user, state, since]
+properties:
+  user: { $ref: "partial_user.yaml" }
+  state: { type: string, enum: [invited, member] }
+  invited_by: { $ref: "partial_user.yaml", description: Absent for the creator }
+  since: { $ref: "../wire/ids.yaml#/$defs/Timestamp", description: The time of the event that put them in this state }
+x-source:
+  struct: "src/core/group.h puddle_gmember (id, state, by, ts)"
+  writer: "src/core/groupapi.c write_group, the `members` array"
+  today: "{id, state, by}: a bare id, `by` for who invited them, and no time."

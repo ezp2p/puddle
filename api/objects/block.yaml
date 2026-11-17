@@ -1,0 +1,7 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: Block
+type: object
+required: [user, created_at]
+properties:
+  user: { $ref: "partial_user.yaml" }
+  created_at: { $ref: "../wire/ids.yaml#/$defs/Timestamp" }

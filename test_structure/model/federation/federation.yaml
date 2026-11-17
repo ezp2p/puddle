@@ -1,0 +1,229 @@
+openapi: 3.1.0
+info:
+  title: Puddle stream API
+  version: 1.0.0
+  description: |
+    How one Puddle talks to another. Code: federation/.
+
+    It speaks in signed events (../events) and the shared shapes (../wire), never in objects (../objects): an object
+    is one Puddle's view for its owner, while what crosses here has to be checkable and the same on both sides. Each
+    Puddle builds its own objects from the events it holds.
+
+    The protocol messages below (asking for a stream, delivering a batch of events) belong to this API alone and
+    are defined here.
+
+    Stability: other Puddles may be older or newer than this one. A change here must keep working with Puddles
+    that don't have it: add optional fields, never change or remove one, and anything bigger is /stream/v2 served
+    beside v1.
+
+    Nothing is public. Every request is signed; one that fails any check, the signature included, gets the same
+    404 as a path that does not exist. `POST /stream/v1/access` is the only request a Puddle takes from a stranger,
+    and it answers it the same way whatever it decides.
+
+servers:
+  - url: https://localhost:8443
+
+tags:
+  - { name: keys, description: Who a Puddle is, and where it is }
+  - { name: access, description: Becoming connected }
+  - { name: delivery, description: Events and profile changes over a stream }
+  - { name: groups, description: Group invitations }
+
+paths:
+  /stream/v1/identity:
+    get:
+      tags: [keys]
+      summary: This Puddle's key chain
+      x-auth: peer
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ChainBody" } } } } }
+    post:
+      tags: [keys]
+      summary: Our keys rolled; here is the chain that proves it
+      x-auth: chain
+      requestBody: { content: { application/json: { schema: { $ref: "#/components/schemas/ChainBody" } } } }
+      responses: { "204": { description: Taken } }
+
+  /stream/v1/address:
+    post:
+      tags: [keys]
+      summary: Reach me here from now on
+      x-auth: peer
+      requestBody: { content: { application/json: { schema: { $ref: "#/components/schemas/AddressRecord" } } } }
+      responses: { "204": { description: Taken } }
+
+  /stream/v1/access:
+    post:
+      tags: [access]
+      summary: Ask for a stream (a friendship, or group-only with `scope`)
+      x-auth: chain-open
+      requestBody: { content: { application/json: { schema: { $ref: "#/components/schemas/AccessRequest" } } } }
+      responses: { "202": { description: Received. The same answer whatever is decided; the result comes later on /access/result. } }
+  /stream/v1/access/result:
+    post:
+      tags: [access]
+      summary: The owner decided
+      x-auth: chain
+      requestBody: { content: { application/json: { schema: { $ref: "#/components/schemas/AccessResult" } } } }
+      responses: { "204": { description: Taken } }
+  /stream/v1/access/status:
+    post:
+      tags: [access]
+      summary: What became of the request I sent you
+      x-auth: chain
+      requestBody: { content: { application/json: { schema: { type: object, required: [requester], properties: { requester: { $ref: "#/components/schemas/Peer" } } } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/AccessState" } } } } }
+  /stream/v1/close:
+    post:
+      tags: [access]
+      summary: This stream is closed
+      x-auth: peer
+      requestBody: { content: { application/json: { schema: { type: object, properties: { scope: { $ref: "#/components/schemas/Scope" } } } } } }
+      responses: { "204": { description: Taken } }
+
+  /stream/v1/events:
+    post:
+      tags: [delivery]
+      summary: Signed events for one chat
+      x-auth: peer
+      requestBody: { content: { application/json: { schema: { $ref: "#/components/schemas/Delivery" } } } }
+      responses: { "200": { description: Which were taken, content: { application/json: { schema: { $ref: "#/components/schemas/DeliveryResult" } } } } }
+  /stream/v1/profile:
+    post:
+      tags: [delivery]
+      summary: The profile you see of me changed
+      x-auth: peer
+      requestBody: { content: { application/json: { schema: { type: object, required: [profile], properties: { profile: { $ref: "../wire/profile.yaml" } } } } } }
+      responses: { "204": { description: Taken } }
+  /stream/v1/media:
+    get:
+      tags: [delivery]
+      summary: An image from my profile
+      x-auth: peer
+      parameters: [{ name: hash, in: query, required: true, schema: { type: string, pattern: "^[0-9a-f]{64}$" } }]
+      responses: { "200": { description: The file, content: { image/*: {} } } }
+
+  /stream/v1/group/invite:
+    post:
+      tags: [groups]
+      summary: Join my group; here is how it started and who is in it
+      x-auth: peer
+      requestBody: { content: { application/json: { schema: { $ref: "#/components/schemas/GroupInvite" } } } }
+      responses: { "204": { description: Taken } }
+
+components:
+  securitySchemes:
+    streamSignature:
+      type: apiKey
+      in: header
+      name: Puddle-Signature
+      description: |
+        Every request is signed by the sending Puddle: method, path, body hash, time and a nonce, with its current key.
+        `x-auth` on each route says how the key is found: `peer` (a stream we have), `chain` (a chain in the body),
+        `chain-open` (the same, from a stranger). Full rules in docs/streams.md.
+
+  schemas:
+    # ---- keys ----
+    Chain:
+      type: string
+      maxLength: 65536
+      description: A Puddle's identity chain, the text of its chain.jsonl exactly as written, because the signatures cover the bytes
+    ChainBody:
+      type: object
+      required: [chain]
+      properties:
+        chain: { $ref: "#/components/schemas/Chain" }
+    AddressRecord:
+      type: object
+      required: [record, sig]
+      description: |
+        `record` is the exact JSON text {"type":"address","id","addresses","tls_fp","seq","ts"}; `sig` is
+        `<key id>:<base64>` over `puddle-address-v1\n` and those bytes.
+      properties:
+        record: { type: string }
+        sig: { type: string }
+    Peer:
+      type: object
+      required: [id, profile, address, chain]
+      properties:
+        id: { $ref: "../wire/ids.yaml#/$defs/UserId" }
+        profile: { $ref: "../wire/profile.yaml" }
+        address: { type: string, description: "host:port" }
+        chain: { $ref: "#/components/schemas/Chain" }
+
+    # ---- access ----
+    Scope:
+      type: object
+      description: Limits a stream to a group. Absent for a friendship.
+      required: [group, join]
+      properties:
+        group: { $ref: "../wire/ids.yaml#/$defs/ChatId" }
+        join: { $ref: "../events/envelope.yaml", description: "The requester's own member.join" }
+    AccessRequest:
+      type: object
+      required: [requester]
+      properties:
+        requester: { $ref: "#/components/schemas/Peer" }
+        message: { type: string, maxLength: 500 }
+        invite: { type: string, description: The token from an invite link }
+        ticket: { type: string, pattern: "^[0-9a-f]{32}$", description: Made by the requester; the answer repeats it }
+        scope: { $ref: "#/components/schemas/Scope" }
+    AccessResult:
+      type: object
+      required: [responder, approved]
+      properties:
+        responder: { $ref: "#/components/schemas/Peer" }
+        approved: { type: boolean }
+        scoped: { type: boolean }
+        ticket: { type: string, pattern: "^[0-9a-f]{32}$" }
+        scope: { $ref: "#/components/schemas/Scope" }
+    AccessState:
+      type: object
+      required: [state]
+      properties:
+        state: { type: string, enum: [pending, approved, declined] }
+        responder: { $ref: "#/components/schemas/Peer" }
+
+    # ---- delivery ----
+    Delivery:
+      type: object
+      required: [chat, events]
+      properties:
+        chat: { $ref: "../wire/ids.yaml#/$defs/ChatId" }
+        events:
+          type: array
+          maxItems: 100
+          items: { $ref: "../events/envelope.yaml" }
+          description: "Each one's `event` is one of ../events: message, edit, redact, chat.*, member.*"
+    DeliveryResult:
+      type: object
+      required: [accepted, duplicate, rejected]
+      properties:
+        accepted: { type: array, items: { $ref: "../wire/ids.yaml#/$defs/EventId" } }
+        duplicate: { type: array, items: { $ref: "../wire/ids.yaml#/$defs/EventId" } }
+        rejected:
+          type: array
+          items:
+            type: object
+            required: [id, reason]
+            properties:
+              id: { $ref: "../wire/ids.yaml#/$defs/EventId" }
+              reason: { type: string, description: "Which rule it broke: bad_signature, not_member, not_author, bad_time, ..." }
+
+    # ---- groups ----
+    GroupInvite:
+      type: object
+      required: [group, create, invite, members]
+      properties:
+        group: { $ref: "../wire/ids.yaml#/$defs/ChatId" }
+        create: { $ref: "../events/envelope.yaml", description: The group's chat.create }
+        invite: { $ref: "../events/envelope.yaml", description: "The sender's member.invite naming the recipient" }
+        members:
+          type: array
+          items:
+            type: object
+            required: [id, state, ts]
+            properties:
+              id: { $ref: "../wire/ids.yaml#/$defs/UserId" }
+              state: { type: string, enum: [invited, member] }
+              ts: { $ref: "../wire/ids.yaml#/$defs/Timestamp" }
+              address: { type: string }

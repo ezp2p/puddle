@@ -1,0 +1,1 @@
+HTTP for both APIs: TLS, parsing, the server, the router (with {name:Type} path segments and the three ways a caller proves itself), and the client federation uses to reach peers. A failed check is answered 404. Knows nothing of objects or events.

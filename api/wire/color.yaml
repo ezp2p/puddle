@@ -1,0 +1,17 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: Color
+description: One colour is solid; two to five make a gradient
+type: object
+required: [colors]
+additionalProperties: false
+properties:
+  colors:
+    type: array
+    minItems: 1
+    maxItems: 5
+    items: { $ref: "ids.yaml#/$defs/Hex" }
+  angle:
+    type: integer
+    minimum: 0
+    maximum: 360
+    description: Gradient direction in degrees (default 180). Ignored for a solid colour.

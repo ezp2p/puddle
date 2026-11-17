@@ -1,0 +1,15 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: PartialUser
+description: |
+  Enough of a User to draw them: embedded wherever a person appears (a message's author, a group member, a
+  conversation's other person). The full User is GET /api/v1/users/{user}.
+type: object
+required: [id, display_name]
+properties:
+  id: { $ref: "../wire/ids.yaml#/$defs/UserId" }
+  display_name: { type: string, description: Their profile's name, else a short form of the id }
+  avatar: { $ref: "../wire/media_ref.yaml" }
+  color: { $ref: "../wire/color.yaml" }
+x-source:
+  built-from: "records people: the profile's display_name, avatar and color; a short form of the id when there is none"
+  today: "Not sent. The app keeps names, avatars and colours in its own tables (src/gui/app/chats.h names_, avatars_, colors_)."

@@ -1,0 +1,38 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: User
+description: |
+  A person as this Puddle knows them: a friend, someone asking for a stream, someone we share a group with, or
+  someone we blocked. GET /api/v1/users/{user}. Code: objects/user.hpp.
+
+  Built from the Person record (../records/person.yaml), which holds the profile their Puddle sent us over
+  federation, plus the stream state and whether they are blocked. Today there is no such record: the profile sits
+  inside the stream record, so a person with no stream has none.
+type: object
+required: [id]
+properties:
+  id: { $ref: "../wire/ids.yaml#/$defs/UserId" }
+  profile:
+    $ref: "../wire/profile.yaml"
+    description: What they show us; absent until they have (a request we sent, not yet answered)
+  stream:
+    $ref: "stream.yaml#/$defs/StreamState"
+    description: Absent when there is no stream record
+  blocked: { type: boolean, description: "Present, true, when blocked" }
+x-source:
+  built-from:
+    - "records people (core/people.hpp): id, profile"
+    - "records streams: state"
+    - "records blocks: blocked"
+  built-from-today:
+    - "src/core/streams.h puddle_stream: id, state, profile (the profile JSON they sent us)"
+    - "src/core/streams.h puddle_streams_is_blocked"
+    - "src/core/group.h puddle_gmember: members of groups we are in"
+  today: |
+    No route returns a person on their own. The same person appears as `Stream.peer` ({id, profile}), a group
+    member's `id`, a message's `sender`, a conversation's `user` and a block's `user`. The app joins them up.
+x-methods:
+  message: POST /api/v1/conversations/{user}/messages/send
+  block: POST /api/v1/users/{user}/block
+  unblock: POST /api/v1/users/{user}/unblock
+  stream: GET /api/v1/streams/{user}
+  conversation: GET /api/v1/conversations/{user}

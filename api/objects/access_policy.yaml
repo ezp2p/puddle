@@ -1,0 +1,7 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: AccessPolicy
+description: "Who may ask for a stream: `manual` (default) waits for the owner, `open` accepts at once, `closed` ignores strangers silently"
+type: object
+required: [access]
+properties:
+  access: { type: string, enum: [open, manual, closed] }

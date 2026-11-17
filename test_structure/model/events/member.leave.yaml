@@ -1,0 +1,16 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: MemberLeave
+description: Leaves a group, or turns down an invitation.
+allOf:
+  - $ref: "header.yaml"
+  - type: object
+    required: [type]
+    properties:
+      type: { const: "member.leave" }
+
+unevaluatedProperties: false
+x-sent-by: a member or invitee, for themselves
+x-rules:
+  - From a member or an invitee, for themselves
+  - Older than their last change: stale, ignored
+  - Nobody can remove someone else

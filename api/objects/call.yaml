@@ -1,0 +1,54 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: Call
+description: |
+  A call with a friend, or in a group (docs/calls.md). The Puddles carry it; the owner's device records and plays. GET
+  /api/v1/calls lists the call going on, if any, then the group calls going on that the owner is not in, then the last few
+  that ended, newest first.
+type: object
+required: [id, user, direction, state, reason, media, device, group, members, created, answered, ended]
+properties:
+  id: { type: string, pattern: "^[a-z2-7]{26}$" }
+  user: { $ref: "../wire/ids.yaml#/$defs/UserId", description: "The friend; in a group call, the member who started it (perhaps the owner)" }
+  direction: { type: string, enum: [outgoing, incoming], description: "`outgoing`: the owner rang, or started the group call" }
+  state:
+    type: string
+    enum: [calling, ringing, connecting, active, open, ended]
+    description: |
+      `calling`: ours, ringing at theirs (in a group: the owner is in it, nobody else yet). `ringing`: theirs, waiting for the
+      owner (in a group: someone started it, and it rings for 45 s). `connecting`: accepted, finding a path. `active`:
+      connected (in a group: with at least one other). `open`: a group call going on that the owner is not in, and can join.
+  reason:
+    type: [string, "null"]
+    enum: [hung_up, declined, cancelled, no_answer, missed, busy, failed, unreachable, no_calls, null]
+    description: How it ended; null until it has
+  media: { type: boolean, description: "Media can flow: the audio track to the friend is open, and the phone's leg too if a phone has the call" }
+  device:
+    oneOf:
+      - type: "null"
+      - type: object
+        required: [id, name]
+        properties:
+          id: { type: string, description: The phone's device id }
+          name: { type: string, description: What the owner called it }
+    description: |
+      Which of the owner's devices has the call: null for the one in the Puddle's own process (the window), and for a call
+      ringing here that nobody has answered yet; otherwise the phone that started or answered it. Always null once ended.
+  group: { oneOf: [{ $ref: "../wire/ids.yaml#/$defs/UserId" }, { type: "null" }], description: "The group, for a group call; null with a friend" }
+  members:
+    type: array
+    description: In a group call, the others in it (not the owner); empty with a friend, and once ended
+    items:
+      type: object
+      required: [user, media, slot]
+      properties:
+        user: { $ref: "../wire/ids.yaml#/$defs/UserId" }
+        media: { type: boolean, description: Connected with them, and their audio track open }
+        slot: { type: integer, minimum: 0, maximum: 255, description: "Their number in what goes to a phone's leg (docs/calls.md, \"Group calls on a phone\"); 0 until connected" }
+  created: { $ref: "../wire/ids.yaml#/$defs/Timestamp" }
+  answered: { oneOf: [{ $ref: "../wire/ids.yaml#/$defs/Timestamp" }, { type: "null" }], description: When it connected }
+  ended: { oneOf: [{ $ref: "../wire/ids.yaml#/$defs/Timestamp" }, { type: "null" }] }
+x-methods:
+  accept: POST /api/v1/calls/{call}/accept
+  decline: POST /api/v1/calls/{call}/decline
+  end: POST /api/v1/calls/{call}/end
+  media: POST /api/v1/calls/{call}/media

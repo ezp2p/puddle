@@ -1,0 +1,55 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: Message
+description: |
+  One entry in a conversation, as the owner sees it. It is the message's events folded together (../events/message,
+  edit, redact, or one of the group events), plus what only this Puddle knows: `outgoing`, `received_at` and
+  `delivery`.
+type: object
+required: [id, conversation, type, author, ts, outgoing, received_at]
+properties:
+  id: { $ref: "../wire/ids.yaml#/$defs/EventId" }
+  conversation: { type: string, description: "The Conversation's id: the other person's UserId for a DM, the ChatId for a group" }
+  type:
+    type: string
+    enum: [default, group_create, group_rename, group_invite, group_join, group_leave]
+    description: "`default` is something someone wrote; the others are what happened to a group"
+  author: { $ref: "partial_user.yaml" }
+  ts: { $ref: "../wire/ids.yaml#/$defs/Timestamp", description: "The author's clock" }
+  body: { type: string, maxLength: 4000, description: The current text, edits applied; absent once taken back, and on group notices }
+  reply_to: { $ref: "../wire/ids.yaml#/$defs/EventId" }
+  edited_at: { $ref: "../wire/ids.yaml#/$defs/Timestamp", description: The latest edit that counts; absent if never edited or taken back }
+  deleted: { type: boolean, description: "Present, true, once the author took it back" }
+  member: { $ref: "partial_user.yaml", description: "group_invite: who was invited" }
+  name: { type: string, description: "group_create, group_rename: the group's name" }
+  outgoing: { type: boolean, description: Sent by the owner }
+  received_at: { $ref: "../wire/ids.yaml#/$defs/Timestamp", description: When this Puddle stored it }
+  delivery:
+    description: "Only on the owner's own messages that are not delivered yet; absent once they are"
+    type: object
+    required: [state, attempts]
+    properties:
+      state:
+        type: string
+        enum: [queued, retrying, failed, held]
+        description: "`queued` not tried yet, `retrying` could not reach them (see next_at), `failed` given up (retry asks again), `held` waiting for the owner to trust their changed certificate"
+      reason: { type: string }
+      next_at: { $ref: "../wire/ids.yaml#/$defs/Timestamp", description: "With retrying" }
+      attempts: { type: integer, minimum: 0 }
+x-source:
+  struct: "src/core/message.h puddle_view_msg (the fold: puddle_chat_view); src/core/group.h puddle_gevent for notices"
+  writer: "src/core/messages.c view_json; src/core/groupapi.c write_notices"
+  stored: "chats/<chat id>/<day>.jsonl: the signed events (src/core/store.h puddle_event: id, ts, rts, event, sig)"
+  built-by: |
+    Message::get(conversation, id). The conversation names the chat log. The id finds the message through the
+    storage driver's index (core::Chats::get), with no scan of day files. Its edits and redaction come from the
+    ref index (core::Chats::about), because they can be in any later day, and events::foldMessage applies them by
+    the same rules as a whole chat. The outbox adds `delivery` for the owner's own messages.
+  delivery-from: "src/core/outbox.h puddle_ob_item (state, attempts, next_ms, reason), matched to the message by event id"
+  today: |
+    `chat` is the internal chat id, so a DM's is a hash of both user ids rather than the other person's id.
+    `sender` is a bare id. `edited` is a flag next to `edited_at`. Group notices come from a separate `notices` list
+    ({id, type, sender, ts, member, name}, types create, rename, invite, join, leave), which the app merges in.
+x-methods:
+  edit: POST /api/v1/conversations/{conversation}/messages/{message}/edit
+  remove: POST /api/v1/conversations/{conversation}/messages/{message}/delete
+  reply: POST /api/v1/conversations/{conversation}/messages/send (with reply_to)

@@ -1,0 +1,8 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: Error
+description: What an owner route answers when it can't do something. Never sent to a caller that failed authentication; they get a bare 404.
+type: object
+required: [error]
+properties:
+  error: { type: string, description: "Stable code: no_stream, blocked, not_found, bad_request, ..." }
+  message: { type: string, description: For a person to read }

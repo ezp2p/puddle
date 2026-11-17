@@ -1,0 +1,1 @@
+A check, not a unit test: reads every #include under each layer folder and fails if it names a folder that layer may not use (the table in the top README). Catches what linking cannot, such as objects/ including storage/log.hpp.

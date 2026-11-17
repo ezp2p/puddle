@@ -1,0 +1,52 @@
+Puddles run on the users computer.
+
+Users can add other peoples Puddles as "friends" because one puddle per user.
+
+User A asks User B to become friends. User B accepts. This forms a "Stream", ie 
+an authorized connection between the two Puddles.
+
+User A can send messages to User B via that Stream.
+
+So we need Stream management endpoints:
+- /api/v1/stream/request
+- /api/v1/stream/accept
+- /api/v1/stream/update
+
+"Stream" is more conceptual. It's just a word to describe the connection between 
+two puddles at the moment.
+
+We then need messaging APIs
+
+Direct messages, one-on-one:
+
+- /api/v1/dm/send
+- /api/v1/dm/edit
+- /api/v1/dm/delete
+
+Group messages, one to many:
+
+- /api/v1/gm/send
+- /api/v1/gm/edit
+- /api/v1/gm/delete
+
+Direct messages require a Stream between the two users for messages to send 
+between the two. The user should be able to add a message to the stream request 
+incase they need to say 'hey its jayden from work' or something.
+
+Group messages should only require that someone in the group add another person 
+whom they already share a stream with.
+
+Because there's no central server to confirm things, the "hey do you trust me" 
+"yeah I trust you" handshake between puddles users is required for DMs. But we 
+can't do a similar check for group messages.
+
+For group messages, the inviters Puddle needs to ask the Invitees Puddle if they 
+are okay to be added to the group. The Invitees Puddle handshakes that a stream 
+is valid, and that the group does not contain a user who the invitee has blocked.
+
+Worth noting there; please add a /api/v1/user/block api for a user to block a 
+specific Puddle by unique hash ID (because they might jsut change their address 
+if we block by address).
+
+A block is different to a deleted Stream. A deleted Stream is a dried up stream, 
+nothing more. A block is a hard block that "if this ID tries to add me, fuck them"
