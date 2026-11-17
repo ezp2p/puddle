@@ -181,15 +181,16 @@ jobs:
         id: ldc
         with:
           path: deps
-          key: ldc-${{ env.LIBDATACHANNEL }}-windows-ucrt64
+          key: ldc-${{ env.LIBDATACHANNEL }}-windows-ucrt64-2
 
       - name: Build libdatachannel
         if: steps.ldc.outputs.cache-hit != 'true'
         run: |
           git clone --depth 1 --branch "$LIBDATACHANNEL" --recurse-submodules --shallow-submodules \
             https://github.com/paullouisageneau/libdatachannel.git ldc
+          # ENABLE_WARNINGS_AS_ERRORS: libSRTP's own -Werror trips on MinGW's printf format checks
           cmake -S ldc -B ldc/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DNO_EXAMPLES=ON -DNO_TESTS=ON -DNO_WEBSOCKET=ON \
-            -DCMAKE_INSTALL_PREFIX="$PWD/deps"
+            -DENABLE_WARNINGS_AS_ERRORS=OFF -DCMAKE_INSTALL_PREFIX="$PWD/deps"
           cmake --build ldc/build --parallel 4
           cmake --install ldc/build
 
