@@ -1,14 +1,32 @@
 # Running a Puddle in Docker
 
-`puddled`, the headless Puddle, is published as a container image for amd64 (arm64 to come) with each release:
+`puddled`, the headless Puddle, is published as a container image for amd64 and arm64:
 
 ```
-ghcr.io/ezp2p/puddle:latest      the newest release
-ghcr.io/ezp2p/puddle:0.1.0       one release
-ghcr.io/ezp2p/puddle:0.1         the newest 0.1.x
+ghcr.io/ezp2p/puddle:latest          the newest release
+ghcr.io/ezp2p/puddle:0.1.0           one release
+ghcr.io/ezp2p/puddle:0.1             the newest 0.1.x
+ghcr.io/ezp2p/puddle:dev             the newest build of the dev branch, replaced on every push to it: for trying
+ghcr.io/ezp2p/puddle:dev-<commit>    the build of that commit of dev
 ```
 
-Prereleases (tags with a `-`, such as `0.2.0-rc.1`) get only their own tag, never `latest`.
+Prereleases (tags with a `-`, such as `0.2.0-rc.1`) get only their own tag, never `latest`. A pull request builds the
+image for both and publishes nothing (`.github/workflows/docker.yml`).
+
+## Quick start
+
+`compose.yaml` and `.env.example` in the repository are all it takes, without the rest of the checkout:
+
+```sh
+mkdir puddle && cd puddle
+curl -fsSLO https://raw.githubusercontent.com/ezp2p/puddle/main/compose.yaml
+curl -fsSL https://raw.githubusercontent.com/ezp2p/puddle/main/.env.example -o .env
+$EDITOR .env                                  # PUDDLE_ADVERTISE at least; PUDDLE_IMAGE=…:dev for the newest build
+docker compose up -d
+docker exec -it puddle puddled --init         # once: your identity and recovery phrase; then it starts
+```
+
+Then connect your phone (step 4 below). The steps below say the same with `docker run`, and why.
 
 ## From scratch
 
@@ -62,21 +80,21 @@ curl -sk -X POST -H "Authorization: Bearer $TOKEN" -d '{}' https://127.0.0.1:844
 
 ## Testing with two Puddles
 
-`compose.yaml` in the repository is for testing only: two Puddles, Alice and Bob, built from the checkout, on a
+`compose.test.yaml` in the repository is for testing only: two Puddles, Alice and Bob, built from the checkout, on a
 network of their own, so streams can be tried without two computers. Their links are `alice:8443` and `bob:8443`;
 from the host they are on `127.0.0.1:18443` and `127.0.0.1:28443`.
 
 ```sh
-docker compose up -d --build
-docker compose exec alice puddled --init
-docker compose exec bob puddled --init
+docker compose -f compose.test.yaml up -d --build
+docker compose -f compose.test.yaml exec alice puddled --init
+docker compose -f compose.test.yaml exec bob puddled --init
 ```
 
 Then, for example, Alice asks Bob and he accepts:
 
 ```sh
-TA=$(docker compose exec -T alice cat /data/data/state/owner-token)
-TB=$(docker compose exec -T bob cat /data/data/state/owner-token)
+TA=$(docker compose -f compose.test.yaml exec -T alice cat /data/data/state/owner-token)
+TB=$(docker compose -f compose.test.yaml exec -T bob cat /data/data/state/owner-token)
 curl -sk -H "Authorization: Bearer $TA" -d '{"target":"bob:8443","message":"hi","profile":"main"}' https://127.0.0.1:18443/api/v1/streams/request
 curl -sk -H "Authorization: Bearer $TB" https://127.0.0.1:28443/api/v1/streams            # Alice's id is in "id"
 curl -sk -H "Authorization: Bearer $TB" -d '{"profile":"main"}' https://127.0.0.1:28443/api/v1/streams/<Alice'"'"'s id>/accept
@@ -85,7 +103,7 @@ curl -sk -H "Authorization: Bearer $TB" -d '{"profile":"main"}' https://127.0.0.
 To pair the desktop app in phone mode with one of them, change the address in the pairing link to the host's
 (`puddle-pair://127.0.0.1:18443?id=...`): the phone goes by the Puddle's id and keys, not its address.
 
-`docker compose down -v` deletes both, keys and all.
+`docker compose -f compose.test.yaml down -v` deletes both, keys and all.
 
 ## What is in /data
 

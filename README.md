@@ -118,11 +118,12 @@ You'll need Qt headers to run though.
 There are no official installation steps just yet. We just ship compiled 
 binaries for you to run.
 
-To run the headless Puddle in Docker, see [docs/docker.md](docs/docker.md):
+To run the headless Puddle in Docker, take [compose.yaml](compose.yaml) and [.env.example](.env.example) (as `.env`),
+and see [docs/docker.md](docs/docker.md):
 
 ```sh
-docker run -d --name puddle -p 8443:8443 -v puddle:/data -e PUDDLE_ADVERTISE=home.example.org:8443 ghcr.io/ezp2p/puddle
-docker exec -it puddle puddled --init    # once: shows your recovery phrase, then the Puddle starts
+docker compose up -d                      # with PUDDLE_ADVERTISE set in .env
+docker exec -it puddle puddled --init     # once: shows your recovery phrase, then the Puddle starts
 ```
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
