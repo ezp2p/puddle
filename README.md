@@ -101,8 +101,9 @@ its video is H.264 with OpenH264.
 <!-- GETTING STARTED -->
 ## Getting Started
 
-Getting starts is as simple as downloading the binary from [our releases][releases-url]
-and running it in the environment you with to run it on.
+Getting started is as simple as downloading the app from [our releases][releases-url] and running it: Windows, macOS
+and Linux (an AppImage), or `puddled` alone for a server. The newest build of `dev`, untested beyond the automated tests,
+is always at [dev-build](https://github.com/ezp2p/puddle/releases/tag/dev-build). See `docs/releases.md`.
 
 You can preconfigure with the configuration file.
 

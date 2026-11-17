@@ -196,6 +196,10 @@ add_executable(puddled src/service/main.cpp)
 target_link_libraries(puddled PRIVATE puddle_service)
 install(TARGETS puddled RUNTIME DESTINATION bin)
 
+# A project that builds on these layers (a Pond, from ../pond) turns them off.
+option(PUDDLE_BUILD_TESTS "Build the tests" ${PROJECT_IS_TOP_LEVEL})
+# (the release builds turn them off too: they use POSIX headers, so not on Windows yet)
+
 # --- Puddle: the desktop app (Qt). Embeds the server, so nothing else is needed.
 option(PUDDLE_BUILD_GUI "Build the Qt desktop app" ON)
 if(PUDDLE_BUILD_GUI)
@@ -379,83 +383,84 @@ if(PUDDLE_BUILD_GUI)
       MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/Info.plist.in)
     install(TARGETS puddle BUNDLE DESTINATION . RUNTIME DESTINATION bin)
 
-    # The first-run state machine, against the real core, with no window (needs the offscreen platform).
-    add_executable(backend_test tests/backend_test.cpp src/gui/app/backend.cpp src/gui/app/backend.h src/gui/app/chats.cpp src/gui/app/chats.h
-      src/gui/app/apiclient.cpp src/gui/app/apiclient.h src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h src/gui/app/callmodel.cpp src/gui/app/callmodel.h src/gui/app/callleg.cpp src/gui/app/callleg.h
-      src/gui/app/phone.cpp src/gui/app/phone.h)
-    target_include_directories(backend_test PRIVATE src/gui/app)
-    target_sources(backend_test PRIVATE src/gui/app/callaudio.cpp src/gui/app/callaudio.h src/gui/app/callvideo.cpp src/gui/app/callvideo.h)
-    target_link_libraries(backend_test PRIVATE puddle_service Qt6::Gui Qt6::Network Qt6::Multimedia)
-    if(APPLE)
-      target_sources(backend_test PRIVATE src/gui/app/dock_mac.mm)
-      target_link_libraries(backend_test PRIVATE "-framework AppKit" "-framework UserNotifications")
+    if(PUDDLE_BUILD_TESTS)
+      # The first-run state machine, against the real core, with no window (needs the offscreen platform).
+      add_executable(backend_test tests/backend_test.cpp src/gui/app/backend.cpp src/gui/app/backend.h src/gui/app/chats.cpp src/gui/app/chats.h
+        src/gui/app/apiclient.cpp src/gui/app/apiclient.h src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h src/gui/app/callmodel.cpp src/gui/app/callmodel.h src/gui/app/callleg.cpp src/gui/app/callleg.h
+        src/gui/app/phone.cpp src/gui/app/phone.h)
+      target_include_directories(backend_test PRIVATE src/gui/app)
+      target_sources(backend_test PRIVATE src/gui/app/callaudio.cpp src/gui/app/callaudio.h src/gui/app/callvideo.cpp src/gui/app/callvideo.h)
+      target_link_libraries(backend_test PRIVATE puddle_service Qt6::Gui Qt6::Network Qt6::Multimedia)
+      if(APPLE)
+        target_sources(backend_test PRIVATE src/gui/app/dock_mac.mm)
+        target_link_libraries(backend_test PRIVATE "-framework AppKit" "-framework UserNotifications")
+      endif()
+      add_test(NAME backend COMMAND backend_test)
+
+      # The app's view of a Puddle (owner API over pinned TLS), against two real Puddles talking to each other.
+      add_executable(chats_test tests/chats_test.cpp src/gui/app/chats.cpp src/gui/app/chats.h src/gui/app/apiclient.cpp src/gui/app/apiclient.h
+        src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h src/gui/app/callmodel.cpp src/gui/app/callmodel.h src/gui/app/callleg.cpp src/gui/app/callleg.h)
+      set_target_properties(chats_test PROPERTIES AUTOMOC ON)
+      target_link_libraries(chats_test PRIVATE puddle_service Qt6::Core Qt6::Gui Qt6::Network Qt6::Test)
+      add_test(NAME chats COMMAND chats_test)
+
+      # The app as a phone: pairing with a real Puddle, then using it as a thin client (docs/identity.md, "Devices").
+      add_executable(phone_test tests/phone_test.cpp src/gui/app/chats.cpp src/gui/app/chats.h src/gui/app/apiclient.cpp src/gui/app/apiclient.h
+        src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h src/gui/app/callmodel.cpp src/gui/app/callmodel.h src/gui/app/callleg.cpp src/gui/app/callleg.h src/gui/app/phone.cpp src/gui/app/phone.h)
+      set_target_properties(phone_test PROPERTIES AUTOMOC ON)
+      target_link_libraries(phone_test PRIVATE puddle_service Qt6::Core Qt6::Gui Qt6::Network Qt6::Test)
+      add_test(NAME phone COMMAND phone_test)
+      add_executable(pondvoice_test tests/pondvoice_test.cpp src/gui/app/chats.cpp src/gui/app/chats.h src/gui/app/apiclient.cpp src/gui/app/apiclient.h
+        src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h src/gui/app/callmodel.cpp src/gui/app/callmodel.h src/gui/app/callleg.cpp src/gui/app/callleg.h)
+      set_target_properties(pondvoice_test PROPERTIES AUTOMOC ON)
+      target_link_libraries(pondvoice_test PRIVATE puddle_service Qt6::Core Qt6::Gui Qt6::Network Qt6::Test)
+      add_test(NAME pondvoice COMMAND pondvoice_test)
+      set_tests_properties(phone PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 120)
+      set_tests_properties(pondvoice PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 120 SKIP_RETURN_CODE 77)
+
+      # The window, driven with real mouse and key events against two real Puddles.
+      add_executable(ui_test tests/ui_test.cpp src/gui/app/backend.cpp src/gui/app/backend.h src/gui/app/chats.cpp src/gui/app/chats.h
+        src/gui/app/apiclient.cpp src/gui/app/apiclient.h src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h src/gui/app/callmodel.cpp src/gui/app/callmodel.h src/gui/app/callleg.cpp src/gui/app/callleg.h src/gui/app/composer.cpp src/gui/app/composer.h
+        src/gui/app/phone.cpp src/gui/app/phone.h)
+      set_target_properties(ui_test PROPERTIES AUTOMOC ON)
+      target_include_directories(ui_test PRIVATE src/gui/app)
+      target_compile_definitions(ui_test PRIVATE PUDDLE_GUI_DIR="${CMAKE_SOURCE_DIR}/src/gui/qml")
+      target_link_libraries(ui_test PRIVATE puddle_service Qt6::Quick Qt6::QuickControls2 Qt6::Network Qt6::Multimedia Qt6::Test)
+      target_sources(ui_test PRIVATE src/gui/app/callaudio.cpp src/gui/app/callaudio.h src/gui/app/callvideo.cpp src/gui/app/callvideo.h)
+      puddle_call_sound(backend_test)
+      puddle_call_sound(ui_test)
+
+      # A call's sound without devices: the jitter buffer, Opus there and back, and the echo canceller (callaudio.h).
+      add_executable(callaudio_test tests/callaudio_test.cpp src/gui/app/callaudio.cpp src/gui/app/callaudio.h)
+      set_target_properties(callaudio_test PROPERTIES AUTOMOC ON)
+      target_include_directories(callaudio_test PRIVATE src/gui/app)
+      target_link_libraries(callaudio_test PRIVATE Qt6::Core Qt6::Multimedia)
+      puddle_call_sound(callaudio_test)
+      add_test(NAME callaudio COMMAND callaudio_test)
+      # A call's video without a camera: pictures to I420 and back, H.264 there and back, and senders coming and going.
+      add_executable(callvideo_test tests/callvideo_test.cpp src/gui/app/callvideo.cpp src/gui/app/callvideo.h)
+      set_target_properties(callvideo_test PROPERTIES AUTOMOC ON)
+      target_include_directories(callvideo_test PRIVATE src/gui/app)
+      target_link_libraries(callvideo_test PRIVATE Qt6::Gui Qt6::Multimedia)
+      puddle_call_sound(callvideo_test)
+      add_test(NAME callvideo COMMAND callvideo_test)
+      set_tests_properties(callvideo PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PUDDLE_TEST_NO_AUDIO=1")
+      if(APPLE)
+        target_sources(ui_test PRIVATE src/gui/app/dock_mac.mm)
+        target_link_libraries(ui_test PRIVATE "-framework AppKit" "-framework UserNotifications")
+      endif()
+      add_test(NAME ui COMMAND ui_test)
+      set_tests_properties(ui PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 180)
+      set_tests_properties(chats PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 120)
+      set_tests_properties(backend PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     endif()
-    add_test(NAME backend COMMAND backend_test)
-
-    # The app's view of a Puddle (owner API over pinned TLS), against two real Puddles talking to each other.
-    add_executable(chats_test tests/chats_test.cpp src/gui/app/chats.cpp src/gui/app/chats.h src/gui/app/apiclient.cpp src/gui/app/apiclient.h
-      src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h src/gui/app/callmodel.cpp src/gui/app/callmodel.h src/gui/app/callleg.cpp src/gui/app/callleg.h)
-    set_target_properties(chats_test PROPERTIES AUTOMOC ON)
-    target_link_libraries(chats_test PRIVATE puddle_service Qt6::Core Qt6::Gui Qt6::Network Qt6::Test)
-    add_test(NAME chats COMMAND chats_test)
-
-    # The app as a phone: pairing with a real Puddle, then using it as a thin client (docs/identity.md, "Devices").
-    add_executable(phone_test tests/phone_test.cpp src/gui/app/chats.cpp src/gui/app/chats.h src/gui/app/apiclient.cpp src/gui/app/apiclient.h
-      src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h src/gui/app/callmodel.cpp src/gui/app/callmodel.h src/gui/app/callleg.cpp src/gui/app/callleg.h src/gui/app/phone.cpp src/gui/app/phone.h)
-    set_target_properties(phone_test PROPERTIES AUTOMOC ON)
-    target_link_libraries(phone_test PRIVATE puddle_service Qt6::Core Qt6::Gui Qt6::Network Qt6::Test)
-    add_test(NAME phone COMMAND phone_test)
-    add_executable(pondvoice_test tests/pondvoice_test.cpp src/gui/app/chats.cpp src/gui/app/chats.h src/gui/app/apiclient.cpp src/gui/app/apiclient.h
-      src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h src/gui/app/callmodel.cpp src/gui/app/callmodel.h src/gui/app/callleg.cpp src/gui/app/callleg.h)
-    set_target_properties(pondvoice_test PROPERTIES AUTOMOC ON)
-    target_link_libraries(pondvoice_test PRIVATE puddle_service Qt6::Core Qt6::Gui Qt6::Network Qt6::Test)
-    add_test(NAME pondvoice COMMAND pondvoice_test)
-    set_tests_properties(phone PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 120)
-    set_tests_properties(pondvoice PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 120 SKIP_RETURN_CODE 77)
-
-    # The window, driven with real mouse and key events against two real Puddles.
-    add_executable(ui_test tests/ui_test.cpp src/gui/app/backend.cpp src/gui/app/backend.h src/gui/app/chats.cpp src/gui/app/chats.h
-      src/gui/app/apiclient.cpp src/gui/app/apiclient.h src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h src/gui/app/callmodel.cpp src/gui/app/callmodel.h src/gui/app/callleg.cpp src/gui/app/callleg.h src/gui/app/composer.cpp src/gui/app/composer.h
-      src/gui/app/phone.cpp src/gui/app/phone.h)
-    set_target_properties(ui_test PROPERTIES AUTOMOC ON)
-    target_include_directories(ui_test PRIVATE src/gui/app)
-    target_compile_definitions(ui_test PRIVATE PUDDLE_GUI_DIR="${CMAKE_SOURCE_DIR}/src/gui/qml")
-    target_link_libraries(ui_test PRIVATE puddle_service Qt6::Quick Qt6::QuickControls2 Qt6::Network Qt6::Multimedia Qt6::Test)
-    target_sources(ui_test PRIVATE src/gui/app/callaudio.cpp src/gui/app/callaudio.h src/gui/app/callvideo.cpp src/gui/app/callvideo.h)
-    puddle_call_sound(backend_test)
-    puddle_call_sound(ui_test)
-
-    # A call's sound without devices: the jitter buffer, Opus there and back, and the echo canceller (callaudio.h).
-    add_executable(callaudio_test tests/callaudio_test.cpp src/gui/app/callaudio.cpp src/gui/app/callaudio.h)
-    set_target_properties(callaudio_test PROPERTIES AUTOMOC ON)
-    target_include_directories(callaudio_test PRIVATE src/gui/app)
-    target_link_libraries(callaudio_test PRIVATE Qt6::Core Qt6::Multimedia)
-    puddle_call_sound(callaudio_test)
-    add_test(NAME callaudio COMMAND callaudio_test)
-    # A call's video without a camera: pictures to I420 and back, H.264 there and back, and senders coming and going.
-    add_executable(callvideo_test tests/callvideo_test.cpp src/gui/app/callvideo.cpp src/gui/app/callvideo.h)
-    set_target_properties(callvideo_test PROPERTIES AUTOMOC ON)
-    target_include_directories(callvideo_test PRIVATE src/gui/app)
-    target_link_libraries(callvideo_test PRIVATE Qt6::Gui Qt6::Multimedia)
-    puddle_call_sound(callvideo_test)
-    add_test(NAME callvideo COMMAND callvideo_test)
-    set_tests_properties(callvideo PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PUDDLE_TEST_NO_AUDIO=1")
-    if(APPLE)
-      target_sources(ui_test PRIVATE src/gui/app/dock_mac.mm)
-      target_link_libraries(ui_test PRIVATE "-framework AppKit" "-framework UserNotifications")
-    endif()
-    add_test(NAME ui COMMAND ui_test)
-    set_tests_properties(ui PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 180)
-    set_tests_properties(chats PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 120)
-    set_tests_properties(backend PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
   else()
     message(WARNING "Qt6 Quick not found; skipping the Puddle app (set -DPUDDLE_BUILD_GUI=OFF to silence)")
   endif()
 endif()
 
 # --- tests --------------------------------------------------------------------
-# A project that builds on these layers (a Pond, from ../pond) turns them off.
-option(PUDDLE_BUILD_TESTS "Build the tests" ${PROJECT_IS_TOP_LEVEL})
+# (PUDDLE_BUILD_TESTS, the option, is set near the top)
 if(PUDDLE_BUILD_TESTS)
 enable_testing()
 # Each layer of src/ includes only the layers it may (tests/layers.cmake).
