@@ -75,7 +75,11 @@ static int day_of_ts(int64_t ts, char day[11])
         return -1;
     time_t sec = (time_t)(ts / 1000);
     struct tm tm;
+#ifdef _WIN32
+    if (gmtime_s(&tm, &sec) != 0)
+#else
     if (!gmtime_r(&sec, &tm))
+#endif
         return -1;
     return strftime(day, 11, "%Y-%m-%d", &tm) == 10 ? 0 : -1;
 }

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Puddle
+Comment=Chat that runs on your own computer
+Exec=Puddle
+Icon=puddle
+Categories=Network;InstantMessaging;
+Terminal=false

@@ -1,13 +1,27 @@
 name: build
 
+# Every platform's build, tested, and what can be downloaded (docs/releases.md):
+#   a pull request        built and tested, nothing published
+#   a push to dev         the "dev-build" prerelease is replaced with this commit's downloads (one link to hand friends)
+#   a tag like 0.3.0      a release of that version (a tag with a "-", such as 0.3.0-rc.1, a prerelease)
+# Downloads: the desktop app for Linux (AppImage), macOS (arm64 and Intel) and Windows; puddled alone for Linux servers.
+
 on:
   push:
-    branches: [main]
+    branches: [dev, main]
     tags: ['[0-9]*.[0-9]*.[0-9]*']   # releases are tags like 0.0.0 (no "v")
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:   # a newer push to the same branch replaces a build still running; tags always finish
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+env:
+  LIBDATACHANNEL: v0.24.5   # calls: no Ubuntu, Homebrew or MSYS2 package, so every desktop build makes its own
 
 jobs:
   build:
@@ -17,60 +31,125 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux: headless service only, built on the oldest supported LTS for glibc compatibility
-          - { name: linux-amd64, os: ubuntu-22.04,     gui: OFF }
-          - { name: linux-arm64, os: ubuntu-22.04-arm, gui: OFF }
-          # macOS: the Puddle app (embeds the server)
-          - { name: macos-arm64, os: macos-15,         gui: ON }
-          - { name: macos-amd64, os: macos-15-intel,   gui: ON }
+          # Linux servers: puddled alone, built on the oldest supported LTS for glibc compatibility, OpenSSL inside it
+          - { name: server-linux-amd64,  os: ubuntu-22.04,     kind: server }
+          - { name: server-linux-arm64,  os: ubuntu-22.04-arm, kind: server }
+          # the desktop app (it embeds the Puddle, so nothing else is needed)
+          - { name: desktop-linux-x86_64, os: ubuntu-22.04,    kind: desktop }
+          - { name: desktop-macos-arm64, os: macos-15,         kind: desktop }
+          - { name: desktop-macos-intel, os: macos-15-intel,   kind: desktop }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - name: Install dependencies (Linux)
-        if: runner.os == 'Linux'
+      - name: Version
+        run: |
+          if [ "${{ github.ref_type }}" = tag ]; then V="${{ github.ref_name }}"; else V="dev-${GITHUB_SHA::7}"; fi
+          echo "VERSION=$V" >> "$GITHUB_ENV"
+
+      - name: Install dependencies (Linux server)
+        if: runner.os == 'Linux' && matrix.kind == 'server'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cmake libssl-dev libyaml-dev
 
+      - name: Install dependencies (Linux desktop)
+        if: runner.os == 'Linux' && matrix.kind == 'desktop'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build pkg-config libssl-dev libyaml-dev \
+            libopus-dev libspeexdsp-dev libopenh264-dev \
+            libgl1-mesa-dev libegl1 libxkbcommon-dev libxkbcommon-x11-0 libfontconfig1 libdbus-1-3 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 \
+            libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 libpulse0 file
+
+      - name: Qt (Linux desktop)
+        if: runner.os == 'Linux' && matrix.kind == 'desktop'
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.10.*'
+          modules: 'qtmultimedia qtshadertools'
+          cache: true
+
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
-        run: brew install openssl@3 libyaml qt libdatachannel opus speexdsp openh264  # libdatachannel: calls (Ubuntu has no package, so Linux builds without); opus: their sound in the window; speexdsp: its echo canceller; openh264: their video
+        run: brew install ninja openssl@3 libyaml qt opus speexdsp openh264  # opus: calls' sound in the window; speexdsp: its echo canceller; openh264: their video
+
+      - name: libdatachannel (desktop)
+        if: matrix.kind == 'desktop'
+        uses: actions/cache@v4
+        id: ldc
+        with:
+          path: ~/deps
+          key: ldc-${{ env.LIBDATACHANNEL }}-${{ matrix.os }}
+
+      - name: Build libdatachannel (desktop)
+        if: matrix.kind == 'desktop' && steps.ldc.outputs.cache-hit != 'true'
+        run: |
+          EXTRA=()
+          # macOS: Homebrew's keg-only OpenSSL, and an absolute install name so macdeployqt finds the library and bundles it
+          if [ "${{ runner.os }}" = macOS ]; then
+            EXTRA+=("-DOPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" "-DCMAKE_INSTALL_NAME_DIR=$HOME/deps/lib")
+          fi
+          git clone --depth 1 --branch "$LIBDATACHANNEL" --recurse-submodules --shallow-submodules \
+            https://github.com/paullouisageneau/libdatachannel.git ldc
+          cmake -S ldc -B ldc/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DNO_EXAMPLES=ON -DNO_TESTS=ON -DNO_WEBSOCKET=ON \
+            -DCMAKE_INSTALL_PREFIX="$HOME/deps" "${EXTRA[@]}"
+          cmake --build ldc/build --parallel 4
+          cmake --install ldc/build
 
       - name: Configure
         run: |
           EXTRA=()
           # Homebrew's OpenSSL is keg-only (prefix differs on Intel vs Apple Silicon)
           if [ "${{ runner.os }}" = macOS ]; then EXTRA+=("-DOPENSSL_ROOT_DIR=$(brew --prefix openssl@3)"); fi
-          cmake -S . -B build \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DPUDDLE_STATIC_OPENSSL=ON \
-            -DPUDDLE_BUILD_GUI=${{ matrix.gui }} \
-            "${EXTRA[@]}"
+          if [ "${{ matrix.kind }}" = server ]; then
+            # one file to copy anywhere: OpenSSL inside it
+            EXTRA+=(-DPUDDLE_BUILD_GUI=OFF -DPUDDLE_STATIC_OPENSSL=ON)
+          else
+            # the desktop app shares the system's OpenSSL with libdatachannel and Qt (one copy in the process)
+            EXTRA+=(-DPUDDLE_BUILD_GUI=ON -DPUDDLE_STATIC_OPENSSL=OFF)
+            EXTRA+=(-G Ninja "-DCMAKE_PREFIX_PATH=$HOME/deps")
+          fi
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release "${EXTRA[@]}" | tee configure.log
+          # libdatachannel is looked for quietly; a desktop build without it would have no calls, so stop here instead
+          if [ "${{ matrix.kind }}" = desktop ]; then grep -q 'calls: with libdatachannel' configure.log; fi
 
       - name: Build
         run: cmake --build build --parallel 4   # a bare --parallel is unlimited with Makefiles
 
       - name: Test
-        run: ctest --test-dir build --output-on-failure
+        run: |
+          # LD_LIBRARY_PATH: the Linux desktop's libdatachannel
+          if ! LD_LIBRARY_PATH="$HOME/deps/lib" ctest --test-dir build --output-on-failure 2>&1 | tee test.log; then
+            # which tests failed, and the end of what they said, as an annotation: readable without signing in for the log
+            tail -n 80 test.log | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}' | sed 's/^/::error title=Tests failed::/'; echo
+            exit 1
+          fi
 
       - name: Package
         run: |
-          if [ "${{ github.ref_type }}" = tag ]; then VERSION="${{ github.ref_name }}"; else VERSION="${GITHUB_SHA::7}"; fi
-          NAME="puddle-$VERSION-${{ matrix.name }}"
-          mkdir -p "stage/$NAME" out
-          cp README.md "stage/$NAME/"
-          if [ "${{ runner.os }}" = Linux ]; then
-            strip build/puddled
-            cp build/puddled dist/puddled.service "stage/$NAME/"
-            tar -C stage -czf "out/$NAME.tar.gz" "$NAME"
-          else
-            "$(brew --prefix qt)/bin/macdeployqt" build/Puddle.app -qmldir=src/gui/qml || true  # noisy with Homebrew's split Qt
-            # macdeployqt's own signature is invalid afterwards (macOS kills the app); re-sign ad hoc
-            codesign --force --deep -s - build/Puddle.app
-            codesign --verify --deep --strict build/Puddle.app
-            cp -R build/Puddle.app "stage/$NAME/"
-            ditto -c -k --keepParent "stage/$NAME" "out/$NAME.zip"
-          fi
+          mkdir -p out
+          case "${{ matrix.name }}" in
+            server-*)
+              NAME="puddled-$VERSION-${{ matrix.name }}"; NAME="${NAME/-server-/-}"
+              mkdir -p "stage/$NAME"
+              strip build/puddled
+              cp README.md build/puddled dist/puddled.service "stage/$NAME/"
+              tar -C stage -czf "out/$NAME.tar.gz" "$NAME" ;;
+            desktop-linux-*)
+              LD_LIBRARY_PATH="$HOME/deps/lib" QMAKE="$QT_ROOT_DIR/bin/qmake" \
+                scripts/package-appimage.sh build "$PWD/out/Puddle-$VERSION-linux-x86_64.AppImage" ;;
+            desktop-macos-*)
+              NAME="Puddle-$VERSION-${{ matrix.name }}"; NAME="${NAME/-desktop-/-}"
+              mkdir -p "stage/$NAME"
+              "$(brew --prefix qt)/bin/macdeployqt" build/Puddle.app -qmldir=src/gui/qml || true  # noisy with Homebrew's split Qt
+              # macdeployqt's own signature is invalid afterwards (macOS kills the app); re-sign ad hoc
+              codesign --force --deep -s - build/Puddle.app
+              codesign --verify --deep --strict build/Puddle.app
+              cp -R build/Puddle.app "stage/$NAME/"
+              ditto -c -k --keepParent "stage/$NAME" "out/$NAME.zip" ;;
+          esac
+          ls -la out
 
       - uses: actions/upload-artifact@v4
         with:
@@ -78,19 +157,91 @@ jobs:
           path: out/*
           if-no-files-found: error
 
+  # Windows: the desktop app, built with MSYS2's UCRT64 (GCC, and every library as a package). No tests yet: they use POSIX headers.
+  windows:
+    name: desktop-windows-x64
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: zip git
+          pacboy: >-
+            toolchain:p cmake:p ninja:p pkgconf:p ntldd:p
+            openssl:p libyaml:p opus:p speexdsp:p openh264:p
+            qt6-base:p qt6-declarative:p qt6-multimedia:p qt6-svg:p qt6-shadertools:p qt6-tools:p
+
+      - name: Version
+        run: |
+          if [ "${{ github.ref_type }}" = tag ]; then V="${{ github.ref_name }}"; else V="dev-${GITHUB_SHA::7}"; fi
+          echo "VERSION=$V" >> "$GITHUB_ENV"
+
+      - name: libdatachannel
+        uses: actions/cache@v4
+        id: ldc
+        with:
+          path: deps
+          key: ldc-${{ env.LIBDATACHANNEL }}-windows-ucrt64-2
+
+      - name: Build libdatachannel
+        if: steps.ldc.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch "$LIBDATACHANNEL" --recurse-submodules --shallow-submodules \
+            https://github.com/paullouisageneau/libdatachannel.git ldc
+          # ENABLE_WARNINGS_AS_ERRORS: libSRTP's own -Werror trips on MinGW's printf format checks
+          cmake -S ldc -B ldc/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DNO_EXAMPLES=ON -DNO_TESTS=ON -DNO_WEBSOCKET=ON \
+            -DENABLE_WARNINGS_AS_ERRORS=OFF -DCMAKE_INSTALL_PREFIX="$PWD/deps"
+          cmake --build ldc/build --parallel 4
+          cmake --install ldc/build
+
+      - name: Install libdatachannel   # into UCRT64 itself: CMake finds it there, and the packaging takes its DLL like any other
+        run: cp -r deps/. "$MINGW_PREFIX/"
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPUDDLE_BUILD_GUI=ON -DPUDDLE_STATIC_OPENSSL=OFF \
+            -DPUDDLE_BUILD_TESTS=OFF | tee configure.log
+          grep -q 'calls: with libdatachannel' configure.log   # a build without calls stops here
+
+      - name: Build
+        run: cmake --build build --parallel 4
+
+      - name: Package
+        run: |
+          NAME="Puddle-$VERSION-windows-x64"
+          scripts/package-windows.sh build "stage/$NAME"
+          mkdir -p out
+          (cd stage && zip -qr "../out/$NAME.zip" "$NAME")
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-windows-x64
+          path: out/*
+          if-no-files-found: error
+
   release:
-    if: github.ref_type == 'tag'
-    needs: build
+    if: github.event_name == 'push' && (github.ref_type == 'tag' || github.ref == 'refs/heads/dev')
+    needs: [build, windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    concurrency:   # one dev-build at a time; a newer one waits rather than racing it
+      group: release-${{ github.ref_type == 'tag' && github.ref_name || 'dev-build' }}
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: out
           merge-multiple: true
 
-      - name: Publish release
+      - name: Publish a release (tag)
+        if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
@@ -99,3 +250,24 @@ jobs:
           sha256sum * > SHA256SUMS
           case "$TAG" in *-*) PRE=--prerelease ;; *) PRE= ;; esac
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes $PRE *
+
+      - name: Replace the dev build
+        if: github.ref == 'refs/heads/dev'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd out
+          sha256sum * > SHA256SUMS
+          SHORT="${GITHUB_SHA::7}"
+          cat > ../notes.md <<EOF
+          The newest build of \`dev\`: commit [\`$SHORT\`](https://github.com/$GITHUB_REPOSITORY/commit/$GITHUB_SHA), built $(date -u '+%Y-%m-%d %H:%M UTC').
+          Untested beyond the automated tests, and replaced by the next push to \`dev\`. It doesn't update itself: download it again for a newer one.
+
+          - **Windows**: \`Puddle-…-windows-x64.zip\`. Unzip it anywhere and run \`Puddle.exe\`. Windows may say it "protected your PC": *More info* → *Run anyway* (the build isn't signed).
+          - **macOS**: \`…-macos-arm64.zip\` (Apple silicon) or \`…-macos-intel.zip\`. Unzip, then right-click \`Puddle.app\` → *Open* the first time (it isn't notarized).
+          - **Linux**: \`Puddle-…-linux-x86_64.AppImage\`. \`chmod +x\` it and run it.
+          - **Linux servers**: \`puddled-…\` is the Puddle without a window (\`puddled.service\` inside runs it under systemd --user).
+          EOF
+          gh release delete dev-build --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes || true
+          gh release create dev-build --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \
+            --title "Dev build ($SHORT)" --notes-file ../notes.md *

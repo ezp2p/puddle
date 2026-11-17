@@ -162,7 +162,8 @@ void CallLeg::open(const QString &id, std::function<void(const QString &)> ready
         auto rtp = std::make_shared<rtc::RtpPacketizationConfig>(assrc, "puddle", OPUS_PT, rtc::OpusRtpPacketizer::DefaultClockRate);
         auto pack = std::make_shared<rtc::OpusRtpPacketizer>(rtp);
         pack->addToChain(std::make_shared<rtc::RtcpSrReporter>(rtp));
-        pack->addToChain(std::make_shared<rtc::OpusRtpDepacketizer>());
+        // rtc::OpusRtpDepacketizer is the same at 48 kHz, but a template its Windows DLL doesn't export
+        pack->addToChain(std::make_shared<rtc::RtpDepacketizer>(rtc::OpusRtpPacketizer::DefaultClockRate));
         track->setMediaHandler(pack);
 
         track->onOpen([weak, gen] {
