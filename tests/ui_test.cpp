@@ -466,10 +466,22 @@ int main(int argc, char **argv)
             CHECK(until([&] { return find("videoPane") == nullptr; }, 2000));
             CHECK(click(find("callName")));
             CHECK(until([&] { return A.current() == bob.uid && find("videoPane") != nullptr; }, 3000));
+            /* and so does the voice panel above your row in the sidebar, which has the call's controls too */
+            CHECK(find("voicePanel") != nullptr && find("voicePanelMute") != nullptr && find("voicePanelLeave") != nullptr);
+            CHECK(clickName("settingsButton"));
+            CHECK(until([&] { return find("videoPane") == nullptr; }, 2000));
+            CHECK(click(find("voicePanelName")));
+            CHECK(until([&] { return A.current() == bob.uid && find("videoPane") != nullptr; }, 3000));
+            CHECK(ca.muted()); /* (muted from the bar earlier) */
+            CHECK(click(find("voicePanelMute")));
+            CHECK(until([&] { return !ca.muted() && find("muteButton")->property("checked") == false; }, 2000));
+            CHECK(click(find("voicePanelMute")));
+            CHECK(until([&] { return ca.muted(); }, 2000));
         }
         CHECK(click(find("hangUpButton")));
         CHECK(until([&] { return ca.state().isEmpty() && cb.state().isEmpty(); }, 10000));
         CHECK(until([&] { return find("callBar") == nullptr && note("You called Bob · 0:0"); }, 5000));
+        CHECK(until([&] { return find("voicePanel") == nullptr; }, 2000)); /* slid away */
         CHECK(!ca.muted()); /* the next call starts unmuted */
 
         /* Bob calls the window: the bar rings; declined */

@@ -226,8 +226,11 @@ voice channel who is in it (`voice`).
 
 In the window (`PondSidebar.qml`), a voice channel has a speaker instead of `#`, and who is in it underneath, ringed while
 they talk. Clicking it shows its messages, as for any channel (a voice channel takes text too); the phone beside it joins
-its voice, with nothing to answer, and while in it becomes a red one to leave. While in one, in any Pond, a bar at the
-bottom of the channel list says which, with mute, deafen and leave. Who is talking comes from the frames arriving (the Mixer
+its voice, with nothing to answer, and while in it becomes a red one to leave. While in one, it shows in two places, both
+on whatever page is open, to see which reads better: a bar floating over the top of the page (`VoiceToast.qml`), and a
+panel that slides up at the foot of the left-hand list, above your own row (`VoicePanel.qml`, as Discord has it; a call
+shows there too). Each has the channel and Pond (a click on the name goes to the channel), whether it is connected, and
+mute, deafen, camera, screen, pop out and leave. Your row under it keeps Settings in reach. Who is talking comes from the frames arriving (the Mixer
 in `callaudio.*`: anyone heard from in the last 300 ms), and this end from its own microphone. How the microphone goes is
 the owner's choice in Settings (`TalkGate`): voice activation (the default: sent while louder than a threshold, held 300 ms
 after so word endings aren't cut off; the Settings show how loud you are against it), or push to talk (only while a key of
@@ -240,7 +243,7 @@ sent while on (`/voice/state {camera, screen}`, which the Pond tells everyone), 
 takes the first free track and keeps it until it goes, so nobody's picture moves, up to 16 at once. They reach the device
 as from the member's id, or `<id>/screen`. In the window the video pane (as in calls: `docs/calls.md`, "The video pane")
 sits above the voice channel's messages while you are in it and someone's camera or screen is on; full size and pop out
-work the same, and the voice bar has the camera and screen buttons.
+work the same, from the buttons on the pane, the floating bar or the panel.
 
 Tested in `pondvoice_test` (a real Puddle and its window models against a stand-in Pond that speaks the voice routes with
 libdatachannel: also cameras and screens both ways, and watching), `callaudio_test` (the gate, and who is talking), and the

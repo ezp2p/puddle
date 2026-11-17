@@ -104,6 +104,15 @@ Pane {
     function goHome() { sidebarDrawer.close(); page = "home"; chats.close() }
     // the conversation most recently open, which the Home button goes back to ({} until one was opened, or once it is gone)
     property var lastChat: ({})
+    // the call's conversation, or the Pond voice channel you are in (the floating bars and the voice panel)
+    function goToCall() { chats.calls.group !== "" ? openChat(chats.calls.group, "group") : openChat(chats.calls.user, "dm") }
+    function goToVoice() {
+        const pond = ponds.voicePond, channel = ponds.voiceChannel
+        if (page !== "pond" || ponds.current !== pond)
+            openPond(pond)
+        ponds.openChannel(channel)
+    }
+    function goToVoiceOrCall() { ponds.voiceState !== "" ? goToVoice() : goToCall() }
     function openChat(id, kind) { sidebarDrawer.close(); chats.open(id, kind || "dm"); page = "chat"; lastChat = { id: id, kind: kind || "dm" } }
     // the Home button: back into the last conversation; from inside one it stays put (the empty page is for when there is nothing to go back to)
     function homeButton() {
@@ -257,7 +266,7 @@ Pane {
                 anchors.top: parent.top
                 anchors.topMargin: Theme.headerHeight + 8
                 anchors.horizontalCenter: parent.horizontalCenter
-                onOpenRequested: shell.chats.calls.group !== "" ? shell.openChat(shell.chats.calls.group, "group") : shell.openChat(shell.chats.calls.user, "dm")
+                onOpenRequested: shell.goToCall()
             }
             // the Pond voice channel you are in, likewise (never with a call: one at a time)
             VoiceToast {
@@ -268,12 +277,7 @@ Pane {
                 anchors.top: callBar.visible ? callBar.bottom : parent.top
                 anchors.topMargin: callBar.visible ? 8 : Theme.headerHeight + 8
                 anchors.horizontalCenter: parent.horizontalCenter
-                onOpenRequested: {
-                    const pond = shell.ponds.voicePond, channel = shell.ponds.voiceChannel
-                    if (shell.page !== "pond" || shell.ponds.current !== pond)
-                        shell.openPond(pond)
-                    shell.ponds.openChannel(channel)
-                }
+                onOpenRequested: shell.goToVoice()
             }
         }
 
@@ -428,6 +432,9 @@ Pane {
 
             PondSidebar {
                 id: pondSidebar
+                video: shell.backend.video
+                view: videoView
+                onVoiceOpenRequested: shell.goToVoiceOrCall()
                 visible: shell.page === "pond"
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
@@ -445,6 +452,9 @@ Pane {
             }
             Sidebar {
                 id: sidebar
+                video: shell.backend.video
+                view: videoView
+                onVoiceOpenRequested: shell.goToVoiceOrCall()
                 visible: shell.page !== "pond"
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom

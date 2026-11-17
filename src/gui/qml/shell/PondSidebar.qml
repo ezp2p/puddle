@@ -21,6 +21,9 @@ Rectangle {
     signal leaveRequested()
     signal settingsRequested()
     signal appSettingsRequested()      // the app's Settings (not the Pond's)
+    signal voiceOpenRequested()      // the name in the voice panel was clicked
+    property var video: null         // CallVideo (the voice panel)
+    property var view: null          // the shell's video pane state (the voice panel)
     signal notice(string text)
 
     // Alt+Up and Alt+Down walk through the channels
@@ -281,6 +284,15 @@ Rectangle {
             wrapMode: Text.Wrap
             opacity: 0.6
             text: bar.ponds.currentStatus === "connecting" ? qsTr("Connecting…") : qsTr("This Pond has no channels yet.")
+        }
+
+        // the voice you are in, sliding up above your row (VoicePanel.qml)
+        VoicePanel {
+            Layout.fillWidth: true
+            chats: bar.chats
+            video: bar.video
+            view: bar.view
+            onOpenRequested: bar.voiceOpenRequested()
         }
 
         // you: who you are here, and the settings (reachable whatever is going on, a voice channel too)
