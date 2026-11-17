@@ -21,7 +21,7 @@ concurrency:   # a newer push to the same branch replaces a build still running;
   cancel-in-progress: ${{ github.ref_type != 'tag' }}
 
 env:
-  LIBDATACHANNEL: v0.24.5   # calls (Ubuntu has no package for it, so the Linux desktop build makes its own)
+  LIBDATACHANNEL: v0.24.5   # calls: no Ubuntu, Homebrew or MSYS2 package, so every desktop build makes its own
 
 jobs:
   build:
@@ -39,7 +39,7 @@ jobs:
           - { name: desktop-macos-arm64, os: macos-15,         kind: desktop }
           - { name: desktop-macos-intel, os: macos-15-intel,   kind: desktop }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Version
         run: |
@@ -70,27 +70,32 @@ jobs:
           modules: 'qtmultimedia qtshadertools'
           cache: true
 
-      - name: libdatachannel (Linux desktop)
-        if: runner.os == 'Linux' && matrix.kind == 'desktop'
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja openssl@3 libyaml qt opus speexdsp openh264  # opus: calls' sound in the window; speexdsp: its echo canceller; openh264: their video
+
+      - name: libdatachannel (desktop)
+        if: matrix.kind == 'desktop'
         uses: actions/cache@v4
         id: ldc
         with:
           path: ~/deps
           key: ldc-${{ env.LIBDATACHANNEL }}-${{ matrix.os }}
 
-      - name: Build libdatachannel (Linux desktop)
-        if: runner.os == 'Linux' && matrix.kind == 'desktop' && steps.ldc.outputs.cache-hit != 'true'
+      - name: Build libdatachannel (desktop)
+        if: matrix.kind == 'desktop' && steps.ldc.outputs.cache-hit != 'true'
         run: |
+          EXTRA=()
+          # macOS: Homebrew's keg-only OpenSSL, and an absolute install name so macdeployqt finds the library and bundles it
+          if [ "${{ runner.os }}" = macOS ]; then
+            EXTRA+=("-DOPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" "-DCMAKE_INSTALL_NAME_DIR=$HOME/deps/lib")
+          fi
           git clone --depth 1 --branch "$LIBDATACHANNEL" --recurse-submodules --shallow-submodules \
             https://github.com/paullouisageneau/libdatachannel.git ldc
           cmake -S ldc -B ldc/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DNO_EXAMPLES=ON -DNO_TESTS=ON -DNO_WEBSOCKET=ON \
-            -DCMAKE_INSTALL_PREFIX="$HOME/deps"
+            -DCMAKE_INSTALL_PREFIX="$HOME/deps" "${EXTRA[@]}"
           cmake --build ldc/build --parallel 4
           cmake --install ldc/build
-
-      - name: Install dependencies (macOS)
-        if: runner.os == 'macOS'
-        run: brew install openssl@3 libyaml qt libdatachannel opus speexdsp openh264  # libdatachannel: calls; opus: their sound in the window; speexdsp: its echo canceller; openh264: their video
 
       - name: Configure
         run: |
@@ -103,9 +108,11 @@ jobs:
           else
             # the desktop app shares the system's OpenSSL with libdatachannel and Qt (one copy in the process)
             EXTRA+=(-DPUDDLE_BUILD_GUI=ON -DPUDDLE_STATIC_OPENSSL=OFF)
-            if [ "${{ runner.os }}" = Linux ]; then EXTRA+=(-G Ninja "-DCMAKE_PREFIX_PATH=$HOME/deps"); fi
+            EXTRA+=(-G Ninja "-DCMAKE_PREFIX_PATH=$HOME/deps")
           fi
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release "${EXTRA[@]}"
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release "${EXTRA[@]}" | tee configure.log
+          # libdatachannel is looked for quietly; a desktop build without it would have no calls, so stop here instead
+          if [ "${{ matrix.kind }}" = desktop ]; then grep -q 'calls: with libdatachannel' configure.log; fi
 
       - name: Build
         run: cmake --build build --parallel 4   # a bare --parallel is unlimited with Makefiles
@@ -152,16 +159,16 @@ jobs:
       run:
         shell: msys2 {0}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: msys2/setup-msys2@v2
         with:
           msystem: UCRT64
           update: true
-          install: zip
+          install: zip git
           pacboy: >-
             toolchain:p cmake:p ninja:p pkgconf:p ntldd:p
-            openssl:p libyaml:p opus:p speexdsp:p openh264:p libdatachannel:p
+            openssl:p libyaml:p opus:p speexdsp:p openh264:p
             qt6-base:p qt6-declarative:p qt6-multimedia:p qt6-svg:p qt6-shadertools:p qt6-tools:p
 
       - name: Version
@@ -169,8 +176,31 @@ jobs:
           if [ "${{ github.ref_type }}" = tag ]; then V="${{ github.ref_name }}"; else V="dev-${GITHUB_SHA::7}"; fi
           echo "VERSION=$V" >> "$GITHUB_ENV"
 
+      - name: libdatachannel
+        uses: actions/cache@v4
+        id: ldc
+        with:
+          path: deps
+          key: ldc-${{ env.LIBDATACHANNEL }}-windows-ucrt64
+
+      - name: Build libdatachannel
+        if: steps.ldc.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch "$LIBDATACHANNEL" --recurse-submodules --shallow-submodules \
+            https://github.com/paullouisageneau/libdatachannel.git ldc
+          cmake -S ldc -B ldc/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DNO_EXAMPLES=ON -DNO_TESTS=ON -DNO_WEBSOCKET=ON \
+            -DCMAKE_INSTALL_PREFIX="$PWD/deps"
+          cmake --build ldc/build --parallel 4
+          cmake --install ldc/build
+
+      - name: Install libdatachannel   # into UCRT64 itself: CMake finds it there, and the packaging takes its DLL like any other
+        run: cp -r deps/. "$MINGW_PREFIX/"
+
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPUDDLE_BUILD_GUI=ON -DPUDDLE_STATIC_OPENSSL=OFF -DPUDDLE_BUILD_TESTS=OFF
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPUDDLE_BUILD_GUI=ON -DPUDDLE_STATIC_OPENSSL=OFF \
+            -DPUDDLE_BUILD_TESTS=OFF | tee configure.log
+          grep -q 'calls: with libdatachannel' configure.log   # a build without calls stops here
 
       - name: Build
         run: cmake --build build --parallel 4

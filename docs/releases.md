@@ -34,10 +34,14 @@ How each is made:
 
 - **Linux desktop**: Ubuntu 22.04 (so it runs on any glibc from 2.35), Qt from Qt's own builds, libdatachannel built from
   source (Ubuntu has no package), then `scripts/package-appimage.sh` (linuxdeploy and its Qt plugin).
-- **macOS**: Homebrew's Qt and libraries, `macdeployqt`, re-signed ad hoc.
-- **Windows**: MSYS2's UCRT64 (GCC, Qt and every library as a package), then `scripts/package-windows.sh` (`windeployqt`,
-  and every other DLL the programs need). Not tested on CI yet: the tests use POSIX headers (`PUDDLE_BUILD_TESTS=OFF`).
+- **macOS**: Homebrew's Qt and libraries, libdatachannel built from source (Homebrew has none), `macdeployqt`, re-signed ad
+  hoc.
+- **Windows**: MSYS2's UCRT64 (GCC, Qt and the libraries as packages; libdatachannel built from source, as MSYS2 has
+  none), then `scripts/package-windows.sh` (`windeployqt`, and every other DLL the programs need). Not tested on CI yet:
+  the tests use POSIX headers (`PUDDLE_BUILD_TESTS=OFF`).
 - **Linux server**: as before, `puddled` alone with OpenSSL linked in.
+
+Every desktop build stops if CMake did not find libdatachannel, rather than publishing an app without calls.
 
 ## Not yet
 
