@@ -6,6 +6,8 @@
 #include <QAudioSource>
 #include <QMediaDevices>
 
+#include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 
@@ -254,6 +256,7 @@ void Mixer::push(const QString &from, uint32_t rtpTs, QByteArray frame)
 #endif
     }
     v->buffer.push(rtpTs, std::move(frame));
+    v->heard = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
 void Mixer::pull(int16_t out[kFrameSamples])
@@ -293,6 +296,49 @@ void Mixer::reset()
     for (auto &[from, v] : voices_)
         freeDecoder(v->decoder);
     voices_.clear();
+}
+
+QStringList Mixer::speaking(int ms) const
+{
+    const int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    std::lock_guard<std::mutex> g(mu_);
+    QStringList out;
+    for (auto &[from, v] : voices_)
+        if (v->heard && now - v->heard < ms)
+            out << from;
+    return out;
+}
+
+double TalkGate::level(const int16_t *pcm, int samples)
+{
+    if (samples <= 0)
+        return -100;
+    double sum = 0;
+    for (int i = 0; i < samples; i++)
+        sum += double(pcm[i]) * pcm[i];
+    const double rms = std::sqrt(sum / samples) / 32768.0;
+    return rms > 1e-5 ? 20 * std::log10(rms) : -100;
+}
+
+bool TalkGate::pass(const int16_t *pcm, int samples, int64_t nowMs)
+{
+    const double l = level(pcm, samples);
+    level_ = l;
+    bool go;
+    switch (mode_.load()) {
+    case VoiceActivity:
+        if (l >= threshold_)
+            openUntil_ = nowMs + kHangMs;
+        go = nowMs < openUntil_;
+        break;
+    case PushToTalk:
+        go = pushed_;
+        break;
+    default:
+        go = true;
+    }
+    talking_ = go && l >= threshold_ - 10; /* going, and more than a room's hum */
+    return go;
 }
 
 int Mixer::voices() const
@@ -481,7 +527,9 @@ void CallAudio::readMicrophone()
         captured_.remove(0, kFrameSamples * 2);
         if (echo_) // even when muted, so it stays in step with the room
             echo_->process(reinterpret_cast<int16_t *>(pcm.data()), kFrameSamples);
-        if (muted_ || !send_)
+        const bool go = gate_.pass(reinterpret_cast<const int16_t *>(pcm.constData()), kFrameSamples,
+                                   std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+        if (muted_ || !send_ || !go)
             continue;
 #ifdef PUDDLE_HAVE_OPUS
         unsigned char out[1500];

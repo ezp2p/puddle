@@ -82,6 +82,11 @@ typedef struct {
     int (*calls_write)(puddle_ctx *ctx, const char *id, const char *user, const char *group, int limit, puddle_jw *w);
     int (*call_media)(puddle_ctx *ctx, const char *id, const char *device, const char *sdp, char **answer, int *udp, const char **code);
     int (*call_start_group)(puddle_ctx *ctx, const char *gid, const char *device, char id[27], const char **code);
+    /* a Pond's voice channels (docs/ponds.md, "Voice channels"): join one, leave, muted and deafened, and which we are in */
+    int (*voice_join)(puddle_ctx *ctx, const char *pond, int64_t channel, const char **code);
+    int (*voice_leave)(puddle_ctx *ctx, const char **code);
+    int (*voice_state)(puddle_ctx *ctx, int muted, int deafened, int camera, int screen, const char **code);
+    void (*voice_write)(puddle_ctx *ctx, puddle_jw *w);
 } puddle_courier;
 
 /* What handlers can reach. */

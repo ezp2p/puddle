@@ -84,6 +84,37 @@ void puddle_calls_on_video(puddle_calls *c, puddle_call_frame_fn fn, void *user)
 /* Send one frame of the owner's camera on the active call `id` (to everyone connected, in a group call), stamped with the
  * time now. 0 sent, -1 not (no such active call, its video track isn't open yet, or too large). */
 int puddle_call_send_video(puddle_calls *c, const char *id, const unsigned char *frame, size_t len);
+/* The same for a shared screen (docs/calls.md, "Sharing a screen"), on its own track. What a friend shares comes to
+ * puddle_calls_on_video's function as from "<their id>/screen". */
+int puddle_call_send_screen(puddle_calls *c, const char *id, const unsigned char *frame, size_t len);
+
+/* ---- voice channels in Ponds (docs/ponds.md, "Voice channels"; the Pond's docs/voice.md) ----
+ * Not a call: you join one and sit there; nothing rings, nothing goes in the history, and it isn't in puddle_calls_write. It
+ * is carried here because it is the same kind of connection, on the same UDP port, with the same device at the end of it, and
+ * because the owner talks in one place at a time: in a voice channel, a friend's ring is answered `busy` ("already in a
+ * call"), and starting or answering a call is `busy`; while in a call, joining a voice channel is `busy`.
+ * For now the owner's device in this process (the window) has it; a phone's leg comes later. */
+
+/* Join voice channel `channel` of Pond `pond` (leaving any other voice channel). Returns once the Pond has answered; the
+ * connection comes up a moment later (`state` connecting, then active). 0, or -1 with `code`: no_calls, no_pond, no_channel,
+ * not_voice (a text channel, or a Pond without voice), busy, full, removed (the Pond no longer has us), unreachable, failed. */
+int puddle_voice_join(puddle_ctx *ctx, const char *pond, int64_t channel, const char **code);
+/* Leave it (the Pond is told). 0, also when in none. */
+int puddle_voice_leave(puddle_ctx *ctx, const char **code);
+/* Muted (nothing of ours goes), deafened (nothing comes to us), our camera on, our screen shared; -1 leaves one as it is. The
+ * Pond is told, and tells everyone. 0, or -1 with `code` no_voice (in none), or one of join's.
+ * Everyone else's camera and screen in the channel is watched by itself (up to POND_WATCH: 16), each on a track of its own
+ * from when it comes until it goes, so nobody's picture moves; they come to puddle_calls_on_video's function with `call`
+ * "voice" and `from` the member's id, or "<id>/screen". */
+int puddle_voice_state(puddle_ctx *ctx, int muted, int deafened, int camera, int screen, const char **code);
+/* The voice channel we are in: {pond, channel, state, slot, muted, deafened, camera, screen}, with `reason` when it ended
+ * without us leaving (failed, removed); or null. */
+void puddle_voice_write(puddle_ctx *ctx, puddle_jw *w);
+/* Send one Opus frame of 20 ms of the owner's voice to the voice channel. 0 sent, -1 not (in none, not connected, or muted).
+ * Frames from the others come to puddle_calls_on_audio's function, with `call` "voice" and `from` the member's id. */
+int puddle_voice_send_audio(puddle_calls *c, const unsigned char *frame, size_t len);
+/* A frame of the owner's camera, or (`screen`) of the screen they share, to the voice channel: only while it is on. 0 sent, -1 not. */
+int puddle_voice_send_video(puddle_calls *c, const unsigned char *frame, size_t len, int screen);
 
 /* For tests: how long ringing (the caller's and the callee's) and connecting may take, in ms; 0 leaves one as it is. */
 void puddle_calls_set_timeouts(puddle_calls *c, int64_t ring_ms, int64_t ring_in_ms, int64_t connect_ms);

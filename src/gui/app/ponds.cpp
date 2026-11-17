@@ -1,6 +1,8 @@
 #include "ponds.h"
 
 #include <QDateTime>
+
+#include <algorithm>
 #include <QJsonArray>
 #include <QUrl>
 
@@ -8,7 +10,7 @@ Ponds::Ponds(ApiClient *api, QObject *parent)
     : QObject(parent),
       api_(api),
       list_({ "id", "name", "status", "address" }),
-      channels_({ "id", "name", "topic" }),
+      channels_({ "id", "name", "topic", "kind", "voice" }),
       members_({ "id", "name", "color", "isMe", "role" }),
       messages_({ "id", "author", "name", "tint", "text", "files", "ts", "mine", "grouped", "dayStart" }),
       bans_({ "member", "name", "by", "byName", "reason", "ts" }, nullptr, QStringLiteral("member"))
@@ -60,17 +62,36 @@ QString Ponds::why(int status, const QJsonDocument &json, const QString &doing) 
         return tr("The Pond's certificate changed, so nothing was sent.");
     if (code == QLatin1String("not_proven"))
         return tr("Something answered for the Pond without proving it's the Pond, so nothing was sent.");
+    if (code == QLatin1String("busy"))
+        return tr("You're already in a call.");
+    if (code == QLatin1String("full"))
+        return tr("That voice channel is full.");
+    if (code == QLatin1String("not_voice"))
+        return tr("That isn't a voice channel.");
+    if (code == QLatin1String("no_calls"))
+        return tr("This Puddle was built without calls, so it can't join voice channels.");
     return tr("Couldn't %1.").arg(doing);
 }
 
-// A channel id comes as a number; the window keeps them as text, like every other id.
-static QJsonObject channelRow(const QJsonObject &c)
+// A channel id comes as a number; the window keeps them as text, like every other id. A voice channel says who is in it, by
+// name, as the members list knows them.
+QJsonObject Ponds::channelRow(const QJsonObject &c) const
 {
-    return { { "id", QString::number(qint64(c.value("id").toDouble())) }, { "name", c.value("name") }, { "topic", c.value("topic") } };
+    QJsonArray in;
+    for (const QJsonValue &v : c.value("voice").toArray()) {
+        const QJsonObject vo = v.toObject();
+        const QString mid = vo.value("member").toString();
+        const QJsonObject who = people_.value(mid);
+        in.append(QJsonObject{ { "id", mid }, { "name", who.value("name").toString(mid.left(8)) }, { "color", who.value("color") },
+                               { "muted", vo.value("muted") }, { "deafened", vo.value("deafened") }, { "isMe", mid == me_ } });
+    }
+    return { { "id", QString::number(qint64(c.value("id").toDouble())) }, { "name", c.value("name") }, { "topic", c.value("topic") },
+             { "kind", c.value("kind").toString(QStringLiteral("text")) }, { "voice", in } };
 }
 
 void Ponds::refresh()
 {
+    refreshVoice();
     if (busyList_ || !api_->ready())
         return;
     busyList_ = true;
@@ -87,11 +108,29 @@ void Ponds::refresh()
         bool stillThere = false;
         for (const QJsonValue &p : o.value("items").toArray()) {
             const QJsonObject po = p.toObject();
+            QHash<QString, QString> names;
+            for (const QJsonValue &c : po.value("channels").toArray())
+                names.insert(QString::number(qint64(c.toObject().value("id").toDouble())), c.toObject().value("name").toString());
+            channelNames_.insert(po.value("id").toString(), names);
+            QHash<QString, QStringList> in;
+            for (const QJsonValue &c : po.value("channels").toArray()) {
+                QList<QPair<int, QString>> bySlot;
+                for (const QJsonValue &v : c.toObject().value("voice").toArray())
+                    bySlot.append({ v.toObject().value("slot").toInt(), v.toObject().value("member").toString() });
+                std::sort(bySlot.begin(), bySlot.end());
+                QStringList ids;
+                for (auto &[slot, id] : bySlot)
+                    ids << id;
+                in.insert(QString::number(qint64(c.toObject().value("id").toDouble())), ids);
+            }
+            voiceIn_.insert(po.value("id").toString(), in);
+            pondNames_.insert(po.value("id").toString(), po.value("name").toString());
             rows.append({ { "id", po.value("id") }, { "name", po.value("name") }, { "status", po.value("status") }, { "address", po.value("address") } });
             if (po.value("id").toString() == current_)
                 stillThere = true;
         }
         list_.setItems(rows);
+        updateVoicePeople();
         if (!current_.isEmpty() && !stillThere) { // we left it (here or on another device)
             close();
             return;
@@ -208,7 +247,7 @@ void Ponds::rebuildMessages()
         const bool mine = author == me_;
         QJsonObject r{ { "id", QString::number(qint64(m.value("id").toDouble())) },
                        { "author", author },
-                       { "name", mine ? tr("You") : who.isEmpty() ? author.left(8) : who.value("name").toString() },
+                       { "name", !who.value("name").toString().isEmpty() ? who.value("name").toString() : mine ? tr("You") : author.left(8) },
                        { "tint", who.value("color").toString() },
                        { "text", m.value("text") },
                        { "files", m.value("files") },
@@ -286,10 +325,12 @@ void Ponds::saveOverview(const QString &name, const QString &description)
     admin(QStringLiteral("pond"), { { "name", name.trimmed() }, { "description", description.trimmed() } }, tr("Saved."), tr("save that"));
 }
 
-void Ponds::createChannel(const QString &name, const QString &topic)
+void Ponds::createChannel(const QString &name, const QString &topic, const QString &kind)
 {
-    admin(QStringLiteral("channels/create"), { { "name", name.trimmed() }, { "topic", topic.trimmed() } },
-          tr("#%1 made.").arg(name.trimmed()), tr("make that channel"));
+    const bool voice = kind == QLatin1String("voice");
+    admin(QStringLiteral("channels/create"),
+          { { "name", name.trimmed() }, { "topic", topic.trimmed() }, { "kind", voice ? QStringLiteral("voice") : QStringLiteral("text") } },
+          voice ? tr("Voice channel %1 made.").arg(name.trimmed()) : tr("#%1 made.").arg(name.trimmed()), tr("make that channel"));
 }
 
 void Ponds::editChannel(const QString &channelId, const QString &name, const QString &topic)
@@ -487,3 +528,83 @@ void Ponds::setProfile(const QString &pondId, const QString &profile)
             emit failed(why(status, json, tr("change how you appear there")));
     });
 }
+
+// ---- voice channels ----
+
+void Ponds::takeVoice(const QJsonObject &voice)
+{
+    if (voice == voice_)
+        return;
+    voice_ = voice;
+    voicePeople_ = voiceIn_.value(voicePond()).value(voiceChannel());
+    emit voiceChanged();
+}
+
+// who is in our voice channel, as the Pond last said (slots are given in turn, so by slot is about the order they came)
+void Ponds::updateVoicePeople()
+{
+    const QStringList now = voiceIn_.value(voicePond()).value(voiceChannel());
+    if (now == voicePeople_)
+        return;
+    voicePeople_ = now;
+    emit voiceChanged();
+}
+
+void Ponds::refreshVoice()
+{
+    if (busyVoice_ || !api_->ready())
+        return;
+    busyVoice_ = true;
+    const int gen = voiceGen_;
+    api_->get(QStringLiteral("/api/v1/voice"), [this, gen](int status, const QJsonDocument &json) {
+        busyVoice_ = false;
+        if (status == 200 && gen == voiceGen_)
+            takeVoice(json.object().value("voice").toObject());
+    });
+}
+
+void Ponds::joinVoice(const QString &channelId)
+{
+    if (current_.isEmpty() || channelId.isEmpty())
+        return;
+    if (voicePond() == current_ && voiceChannel() == channelId && voiceState() != QLatin1String("ended"))
+        return; /* there already */
+    ++voiceGen_;
+    api_->post(QStringLiteral("/api/v1/ponds/%1/channels/%2/voice/join").arg(current_, channelId), QJsonObject(),
+               [this](int status, const QJsonDocument &json) {
+                   if (status == 200)
+                       takeVoice(json.object().value("voice").toObject());
+                   else
+                       emit failed(why(status, json, tr("join the voice channel")));
+               });
+}
+
+void Ponds::leaveVoice()
+{
+    ++voiceGen_;
+    takeVoice(QJsonObject()); /* at once: the Puddle lets it go whatever happens */
+    api_->post(QStringLiteral("/api/v1/voice/leave"), QJsonObject(), [this](int, const QJsonDocument &) { refreshVoice(); });
+}
+
+// Muted, deafened, camera or screen: shown at once; the Puddle's answer has the last word
+void Ponds::setVoiceFlag(const QString &name, bool on)
+{
+    if (voice_.isEmpty())
+        return;
+    voice_.insert(name, on);
+    emit voiceChanged();
+    const int gen = ++voiceGen_;
+    api_->post(QStringLiteral("/api/v1/voice/state"), QJsonObject{ { name, on } }, [this, gen](int status, const QJsonDocument &json) {
+        if (gen != voiceGen_)
+            return;
+        if (status == 200)
+            takeVoice(json.object().value("voice").toObject());
+        else
+            refreshVoice();
+    });
+}
+
+void Ponds::setVoiceMuted(bool muted) { setVoiceFlag(QStringLiteral("muted"), muted); }
+void Ponds::setVoiceDeafened(bool deafened) { setVoiceFlag(QStringLiteral("deafened"), deafened); }
+void Ponds::setVoiceCamera(bool on) { setVoiceFlag(QStringLiteral("camera"), on); }
+void Ponds::setVoiceScreen(bool on) { setVoiceFlag(QStringLiteral("screen"), on); }

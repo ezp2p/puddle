@@ -38,6 +38,7 @@ x-methods:
   download: POST /api/v1/ponds/{pond}/channels/{channel}/messages/{message}/files/{file}/download
   profile: POST /api/v1/ponds/{pond}/profile
   leave: POST /api/v1/ponds/{pond}/leave
+  join_voice: POST /api/v1/ponds/{pond}/channels/{channel}/voice/join
 $defs:
   Channel:
     type: object
@@ -46,6 +47,19 @@ $defs:
       name: { type: string, pattern: "^[a-z0-9-]{1,32}$" }
       topic: { type: string, maxLength: 1024 }
       last: { type: integer, description: The newest message id kept; 0 for none }
+      kind: { enum: [text, voice], description: "A voice channel (docs/ponds.md, \"Voice channels\") takes messages too" }
+      voice:
+        type: array
+        description: A voice channel's people now, as the Pond last said
+        items:
+          type: object
+          properties:
+            member: { $ref: "../wire/ids.yaml#/$defs/UserId" }
+            slot: { type: integer, description: "Their number in the channel: the frames the Pond forwards are marked with it" }
+            muted: { type: boolean }
+            deafened: { type: boolean }
+            camera: { type: boolean }
+            screen: { type: boolean, description: Sharing a screen }
   Member:
     type: object
     properties:

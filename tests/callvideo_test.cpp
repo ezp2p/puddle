@@ -63,6 +63,17 @@ int main(int argc, char **argv)
         CHECK(f.isValid() && f.size() == QSize(640, 480) && f.pixelFormat() == QVideoFrameFormat::Format_YUV420P);
     }
 
+    /* ---- a screen is fitted, never cut: a wide desktop keeps its edges, with black above and below ---- */
+    {
+        QImage wide(1600, 400, QImage::Format_RGB32);
+        wide.fill(qRgb(255, 255, 255));
+        const Picture p = pictureFitted(wide, 1280, 720);
+        CHECK(p.width == 1280 && p.height == 720);
+        CHECK(uint8_t(p.y[10 * 1280 + 640]) < 20);           /* the top: black */
+        CHECK(uint8_t(p.y[360 * 1280 + 2]) > 230);           /* the left edge, half way down: the desktop's white */
+        CHECK(uint8_t(p.y[360 * 1280 + 1277]) > 230);        /* and the right */
+    }
+
     if (!CallVideo::isBuilt()) {
         printf("callvideo_test: ok (built without OpenH264: video not tested)\n");
         return failures ? 1 : 0;
@@ -126,8 +137,30 @@ int main(int argc, char **argv)
         v.received(QStringLiteral("bob"), 0, sent.last());
         CHECK(until([&] { return frames >= 2; }));
         CHECK(until([&] { return v.sources().isEmpty(); }, 4000));                  /* nothing more from bob: gone */
+        /* a shared screen: its own sender, its own encoder; nothing without one to send it */
+        CHECK(!v.canShareScreen());
+        v.setScreen(true);
+        CHECK(!v.screenOn());
         v.stop();
-        CHECK(!v.running() && !v.cameraOn());
+        QList<QByteArray> shared;
+        v.start([](const QByteArray &) {}, [&](const QByteArray &au) { QMetaObject::invokeMethod(&app, [&shared, au] { shared.append(au); }); });
+        CHECK(v.canShareScreen());
+        v.setScreen(true);
+        CHECK(v.screenOn());
+        for (int k = 0; k < 6; k++) {
+            v.feedScreen(scene(k));
+            until([] { return false; }, 100);
+        }
+        CHECK(until([&] { return shared.size() >= 4; }));
+        CHECK(shared.value(0).startsWith(QByteArray("\x00\x00\x00\x01\x67", 5)));
+        H264Decoder sd;
+        Picture last;
+        for (const QByteArray &au : shared)
+            if (Picture p = sd.decode(au); !p.isNull())
+                last = p;
+        CHECK(last.width == CallVideo::kScreenWidth && last.height == CallVideo::kScreenHeight);
+        v.stop();
+        CHECK(!v.running() && !v.cameraOn() && !v.screenOn());
     }
 
     if (failures) {

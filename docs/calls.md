@@ -131,12 +131,15 @@ has moved.
 
 - A friend's conversation has a call button in its header (one call at a time, so it is off during one); so does a group's,
   which starts a call there, or says "Join (2)" while one goes on that the owner is not in.
-- A bar floats over the top of whatever page is open while a call goes on: a friend ringing (Answer, Decline), ours
-  ringing at theirs, connecting, or the call with how long it has run, mute and hang up. A friend ringing is also a
-  notification.
+- While a call goes on, a panel slides up at the foot of the left-hand list, above the owner's own row (`VoicePanel.qml`,
+  the same one a Pond's voice channel has, so the two feel alike): who (a click goes to the call's chat), and a friend
+  ringing (Answer, Decline), ours ringing at theirs, connecting, or the call with how long it has run; then mute, camera,
+  screen, the video in its own window, and hang up. Something going wrong says so there, until dismissed. With the list
+  out of sight (a narrow window, or folded away), a friend ringing also floats over the top of the page (`CallBar.qml`),
+  to answer or decline. A friend ringing is also a notification.
 - Each call is a note in the chat among the messages ("You called Bob · 3:12", "Missed call from Bob", "Alice started a
   call · 12:40"), shown once the messages around it are loaded.
-- A group call's bar shows the group, and how many others are in it; hanging up leaves it to them.
+- A group call's panel shows the group, and how many others are in it; hanging up leaves it to them.
 
 ## On a phone
 
@@ -206,7 +209,9 @@ What the owner sees is a call with `group` set and its `members` (the others in 
 the owner is not in. The history notes each call left (`hung_up`, `cancelled`, `no_answer`, `failed`), and each one rung
 for and never joined (`missed`, or `declined`), under the group; `user` is who started it.
 
-One call at a time still: in a group call, a friend's ring is answered `busy`, and the other way round.
+One call at a time still: in a group call, a friend's ring is answered `busy`, and the other way round. So is being in a
+Pond's voice channel (`ponds.md`, "Voice channels"): a friend who rings then is answered `busy`, and their window says
+"*Ann* is already in a call".
 
 `groupcall_test` has four Puddles, three of them in a group, two of whom have never met: starting, ringing, joining,
 frames between every pair marked with whose they are (over the group-only stream too), leaving and coming back, busy, a
@@ -240,9 +245,30 @@ Encoding and decoding run on a thread of their own. A sender with nothing for 2 
 and its decoder goes, so it starts again from a key frame. Without OpenH264 the app builds and calls are voice only
 (`-DPUDDLE_VIDEO=OFF` too).
 
-The camera is off at the start of every call; the bar has a button for it once the call is connected. While anyone's
-camera is on, tiles show under the bar: one for each sender, named, and this end's own, small and mirrored. On a Mac the
-app says why it wants the camera (and the microphone) in its `Info.plist`, and asks the first time.
+The camera is off at the start of every call; the voice panel has a button for it once the call is connected. On a Mac the app says
+why it wants the camera (and the microphone) in its `Info.plist`, and asks the first time.
+
+### Sharing a screen
+
+Every connection of a call has a second video track, `screen`, beside the camera's: H.264 the same way, sent while the
+owner shares their screen (the panel's button beside the camera). Several can share at once. The device captures the primary
+screen with Qt Multimedia (`QScreenCapture`; on Wayland the system asks which screen, through its portal) and encodes it
+apart from the camera: 1280×720, the whole screen fitted in with black around it (never cut), 10 frames a second, about
+2.5 Mbit/s, so text stays sharp. A Puddle passes it on as it does a camera; what a friend or member shares reaches the
+device as from `<their id>/screen`. A phone's leg carries no screen yet, either way.
+
+A Puddle from before this, which knows no `screen` track, would take it for sound: calls were not released before it, so
+nothing out there is that old. From now on a track a Puddle doesn't know is left alone.
+
+### The video pane
+
+What everyone's camera and screen look like (`VideoPane.qml`, shared with a Pond's voice channels): a grid above the
+call's chat, while that chat is open (elsewhere, the panel's pop-out button shows it in a window of its own), with a tile for each camera and each shared
+screen coming in and this end's own (its camera mirrored, its screen small). The tiles stay in the order they came, so
+nobody moves when someone comes or goes; the owner may choose "who's talking first" in Settings instead. A tile is ringed
+while its owner talks. Clicking one pins it large, the others in a strip under it: that is how one of several shared
+screens is chosen to look at. Its corner has full size (the pane covers the messages) and pop out (a window of its own,
+put back from there or by closing it).
 
 On a phone, its leg has a `video` track both ways (its camera, and the friend's back) and seven that only come in, `v1` to
 `v7`: in a group call, each other member's video comes on the track for their number (`slot`), which is the smallest not
@@ -251,11 +277,11 @@ dozens of packets, and losing one would lose it all.
 
 `call_test` and `groupcall_test` pass H.264-shaped frames of 6 KB (cut into a few packets each) between every pair;
 `callvideo_test` encodes and decodes real pictures, and a decoder that starts late waits for the key frame; `phone_test`
-sends video both ways on a phone's leg, and a member's on `v1`; `ui_test` turns the camera on from the bar (pictures fed in
+sends video both ways on a phone's leg, and a member's on `v1`; `ui_test` turns the camera on from the panel (pictures fed in
 place of a camera) and shows the friend's.
 
 ## Later steps
 
 - **Asking for a key frame** (RTCP PLI) instead of one every 2 seconds, and resending lost packets (NACK).
 - **Bitrate that follows the connection** (REMB or transport-wide feedback), and a smaller picture in a big group call.
-- **Screen sharing**, as a second video track.
+

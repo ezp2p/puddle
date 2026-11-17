@@ -488,6 +488,39 @@ paths:
   /api/v1/ponds/{pond}/admin/bans/{member}/unban:
     parameters: [{ $ref: "#/components/parameters/Pond" }, { name: member, in: path, required: true, schema: { $ref: "wire/ids.yaml#/$defs/UserId" } }]
     post: { tags: [ponds], summary: Lift a ban, responses: { "204": { description: Lifted } } }
+  /api/v1/ponds/{pond}/channels/{channel}/voice/join:
+    parameters: [{ $ref: "#/components/parameters/Pond" }, { $ref: "#/components/parameters/Channel" }]
+    post:
+      tags: [ponds]
+      summary: Join a voice channel (docs/ponds.md, "Voice channels")
+      description: |
+        Not a call: nothing rings and nothing is noted in a chat. This Puddle connects to the Pond (WebRTC, on the calls port)
+        and the owner's device in this process has the sound; joining another voice channel leaves this one. Answers once the
+        Pond has: the connection comes up a moment later (`state` connecting, then active). While in one, a friend's ring is
+        answered `busy` and starting a call is `409 busy`; while in a call, so is this.
+      responses:
+        "200": { $ref: "#/components/responses/Voice" }
+        "404": { description: "`no_pond`, `no_channel`" }
+        "409": { description: "`not_voice` (a text channel, or a Pond without voice), `busy` (in a call), `full`, `removed`, `no_calls`" }
+        "502": { description: "`unreachable`, `certificate_changed`, `not_proven`, `failed`" }
+  /api/v1/voice:
+    get:
+      tags: [ponds]
+      summary: The voice channel this Puddle is in, if any
+      responses: { "200": { $ref: "#/components/responses/Voice" } }
+  /api/v1/voice/state:
+    post:
+      tags: [ponds]
+      summary: Muted (nothing of ours goes), deafened (nothing comes to us), camera on, screen shared; any may be left out. The Pond tells everyone.
+      requestBody: { content: { application/json: { schema: { type: object, properties: { muted: { type: boolean }, deafened: { type: boolean }, camera: { type: boolean }, screen: { type: boolean } } } } } }
+      responses:
+        "200": { $ref: "#/components/responses/Voice" }
+        "404": { description: "`no_voice`: in none (or the Pond let us go: then `voice` says `ended`, `removed`)" }
+  /api/v1/voice/leave:
+    post:
+      tags: [ponds]
+      summary: Leave the voice channel (the Pond is told), or let go of one that ended
+      responses: { "204": { description: Left } }
   /api/v1/identity:
     get: { tags: [identity], summary: This Puddle's keys, responses: { "200": { $ref: "#/components/responses/Identity" } } }
   /api/v1/identity/roll:
@@ -884,6 +917,27 @@ components:
     Upload: { description: OK, content: { application/json: { schema: { $ref: "objects/upload.yaml" } } } }
     Group: { description: OK, content: { application/json: { schema: { $ref: "objects/group.yaml" } } } }
     Pond: { description: OK, content: { application/json: { schema: { $ref: "objects/pond.yaml" } } } }
+    Voice:
+      description: The voice channel this Puddle is in
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              voice:
+                oneOf:
+                  - type: "null"
+                  - type: object
+                    properties:
+                      pond: { $ref: "wire/ids.yaml#/$defs/UserId" }
+                      channel: { type: integer }
+                      state: { enum: [connecting, active, ended] }
+                      reason: { enum: [failed, removed], description: "Why it ended, when it did without the owner leaving" }
+                      slot: { type: integer }
+                      muted: { type: boolean }
+                      deafened: { type: boolean }
+                      camera: { type: boolean }
+                      screen: { type: boolean }
     Identity: { description: OK, content: { application/json: { schema: { $ref: "objects/identity.yaml" } } } }
     Error: { description: Not possible now, content: { application/json: { schema: { $ref: "objects/error.yaml" } } } }
     NotFound: { description: No such thing, or not allowed (the same answer), content: { application/json: { schema: { $ref: "objects/error.yaml" } } } }

@@ -23,6 +23,53 @@ Pane {
 
     required property var backend
     readonly property var chats: backend.chats
+
+    // the video pane's (VideoPane.qml): shared by the page it is in and the window it pops out to
+    QtObject {
+        id: videoView
+        objectName: "videoView"
+        property bool full: false      // covers the messages
+        property bool popped: false    // in a window of its own
+        property string pinned: ""     // the tile shown large
+        property real share: 0.5       // how much of the page it takes, above the messages
+    }
+    // the call's chat is open, so its video is in that chat's pane
+    readonly property bool videoInPage: page === "chat" && chats.calls.state === "active" &&
+                                        chats.current === (chats.calls.group !== "" ? chats.calls.group : chats.calls.user)
+    // whose a tile is, wherever the pane is: a Pond voice channel's member, or a call's friend or member
+    function videoName(key) {
+        if (chats.ponds.voiceState === "active" && chats.calls.state === "")
+            return chats.ponds.nameOf(key)
+        if (key === "")
+            return chats.calls.name
+        if (key.startsWith("slot:"))
+            return chats.nameOf(chats.calls.slotUser(parseInt(key.substring(5))))
+        return chats.nameOf(key)
+    }
+    // the pane, popped out
+    Window {
+        id: videoWindow
+        objectName: "videoWindow"
+        title: qsTr("Puddle: video")
+        width: 960
+        height: 600
+        color: "black"
+        visible: videoView.popped && shell.backend.video.running
+        onClosing: videoView.popped = false
+        // put back (or the call over): the main window has the keyboard again
+        onVisibleChanged: if (!visible && shell.Window.window) shell.Window.window.requestActivate()
+        VideoPane {
+            anchors.fill: parent
+            inWindow: true
+            video: shell.backend.video
+            view: videoView
+            backend: shell.backend
+            chats: shell.chats
+            people: shell.backend.phone ? [] : shell.chats.calls.state !== "" ? shell.chats.calls.people
+                                                                                : shell.chats.ponds.voicePeople.filter(id => id !== shell.backend.myId)
+            nameOf: key => shell.videoName(key)
+        }
+    }
     readonly property var ponds: chats.ponds
     readonly property bool wide: width >= Theme.wideBreakpoint
     // "home" (nothing open), "chat", "pond" (a Pond's channel) or "log" (the settings, for now)
@@ -57,6 +104,15 @@ Pane {
     function goHome() { sidebarDrawer.close(); page = "home"; chats.close() }
     // the conversation most recently open, which the Home button goes back to ({} until one was opened, or once it is gone)
     property var lastChat: ({})
+    // the call's conversation, or the Pond voice channel you are in (a click on the voice panel's name)
+    function goToCall() { chats.calls.group !== "" ? openChat(chats.calls.group, "group") : openChat(chats.calls.user, "dm") }
+    function goToVoice() {
+        const pond = ponds.voicePond, channel = ponds.voiceChannel
+        if (page !== "pond" || ponds.current !== pond)
+            openPond(pond)
+        ponds.openChannel(channel)
+    }
+    function goToVoiceOrCall() { ponds.voiceState !== "" ? goToVoice() : goToCall() }
     function openChat(id, kind) { sidebarDrawer.close(); chats.open(id, kind || "dm"); page = "chat"; lastChat = { id: id, kind: kind || "dm" } }
     // the Home button: back into the last conversation; from inside one it stays put (the empty page is for when there is nothing to go back to)
     function homeButton() {
@@ -173,6 +229,9 @@ Pane {
                 onToggleSidebar: shell.toggleSidebar()
             }
             PondPage {
+                video: shell.backend.video
+                backend: shell.backend
+                view: videoView
                 objectName: "pondPage"
                 anchors.fill: parent
                 visible: shell.page === "pond"
@@ -184,6 +243,9 @@ Pane {
                 onToggleContext: shell.toggleContext()
             }
             ChatPage {
+                video: shell.backend.video
+                backend: shell.backend
+                view: videoView
                 objectName: "chatPage"
                 anchors.fill: parent
                 visible: shell.page === "chat"
@@ -194,23 +256,13 @@ Pane {
                 onToggleSidebar: shell.toggleSidebar()
                 onToggleContext: shell.toggleContext()
             }
-            // the call going on, over whatever page is open
+            // a friend ringing while the left-hand list (and its voice panel) is out of sight
             CallBar {
-                id: callBar
                 chats: shell.chats
-                video: shell.backend.video
+                sidebarShown: shell.sidebarOpen
                 z: 10
                 anchors.top: parent.top
                 anchors.topMargin: Theme.headerHeight + 8
-                anchors.horizontalCenter: parent.horizontalCenter
-            }
-            // and its video, under it
-            CallVideoView {
-                chats: shell.chats
-                video: shell.backend.video
-                z: 10
-                anchors.top: callBar.bottom
-                anchors.topMargin: 8
                 anchors.horizontalCenter: parent.horizontalCenter
             }
         }
@@ -366,6 +418,9 @@ Pane {
 
             PondSidebar {
                 id: pondSidebar
+                video: shell.backend.video
+                view: videoView
+                onVoiceOpenRequested: shell.goToVoiceOrCall()
                 visible: shell.page === "pond"
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
@@ -373,7 +428,9 @@ Pane {
                 anchors.leftMargin: Theme.railWidth + 1
                 anchors.right: parent.right
                 chats: shell.chats
+                backend: shell.backend
                 onSettingsRequested: pondSettings.show("overview")
+                onAppSettingsRequested: shell.openLog()
                 onNotice: text => toast.show(text)
                 onLeaveRequested: leaveConfirm.ask(qsTr("Leave %1?").arg(shell.ponds.currentName),
                                                    qsTr("You will need a new invite to join again. What your Puddle kept of it is forgotten."),
@@ -381,6 +438,9 @@ Pane {
             }
             Sidebar {
                 id: sidebar
+                video: shell.backend.video
+                view: videoView
+                onVoiceOpenRequested: shell.goToVoiceOrCall()
                 visible: shell.page !== "pond"
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom

@@ -13,6 +13,9 @@ Pane {
 
     required property var chats
     readonly property var ponds: chats.ponds
+    property var video: null      // CallVideo: a voice channel's cameras and screens
+    property var backend: null
+    property var view: null       // the shell's video pane state
     property bool narrow: false
     property bool sidebarShown: true
     signal toggleSidebar()
@@ -137,9 +140,52 @@ Pane {
             }
         }
 
+        VideoPane {
+            id: videoPane
+            // in this channel's voice, and someone's camera or screen is on
+            readonly property bool here: page.ponds.voiceState === "active" && page.ponds.voicePond === page.ponds.current &&
+                                         page.ponds.voiceChannel === page.ponds.channel
+            visible: here && page.video !== null && page.view !== null && !page.view.popped
+            video: page.video
+            view: page.view
+            backend: page.backend
+            chats: page.chats
+            people: page.ponds.voicePeople.filter(id => id !== page.ponds.myId)
+            nameOf: key => page.ponds.nameOf(key)
+            Layout.fillWidth: true
+            Layout.leftMargin: 8
+            Layout.rightMargin: 8
+            Layout.topMargin: 8
+            Layout.preferredHeight: page.view ? Math.max(160, page.height * page.view.share) : 0
+            Layout.fillHeight: page.view !== null && page.view.full
+        }
+        // the split between the video and the messages: dragged to make either bigger
+        Rectangle {
+            objectName: "videoSplit"
+            visible: videoPane.visible && !page.view.full
+            Layout.fillWidth: true
+            implicitHeight: 7
+            color: splitDrag.containsMouse || splitDrag.pressed ? Theme.tint(Theme.text, Theme.hover) : "transparent"
+            Rectangle { anchors.centerIn: parent; width: 40; height: 3; radius: 2; color: Theme.hairline }
+            MouseArea {
+                id: splitDrag
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.SplitVCursor
+                property real startY: 0
+                property real startShare: 0
+                onPressed: mouse => { startY = mapToItem(page, 0, mouse.y).y; startShare = page.view.share }
+                onPositionChanged: mouse => {
+                    if (pressed)
+                        page.view.share = Math.max(0.2, Math.min(0.8, startShare + (mapToItem(page, 0, mouse.y).y - startY) / page.height))
+                }
+            }
+        }
+
         ScrollList {
             id: list
             objectName: "pondMessageList"
+            visible: !(videoPane.visible && page.view.full)
             Layout.fillWidth: true
             Layout.fillHeight: true
             model: page.ponds.messages

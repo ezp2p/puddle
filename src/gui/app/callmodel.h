@@ -26,6 +26,7 @@ class Calls : public QObject {
     Q_PROPERTY(QString user READ user NOTIFY changed)           // the friend; who started it, in a group call
     Q_PROPERTY(QString group READ group NOTIFY changed)         // the group, in a group call; "" with a friend
     Q_PROPERTY(int others READ others NOTIFY changed)           // in a group call: how many others are in it
+    Q_PROPERTY(QStringList people READ people NOTIFY changed)   // the others in the call, by id: the friend, or the members in it
     Q_PROPERTY(QString name READ name NOTIFY changed)           // the friend's name, or the group's
     Q_PROPERTY(bool incoming READ incoming NOTIFY changed)
     Q_PROPERTY(qint64 answeredAt READ answeredAt NOTIFY changed) // ms since the epoch, 0 until it connected
@@ -33,6 +34,7 @@ class Calls : public QObject {
     Q_PROPERTY(QString elsewhere READ elsewhere NOTIFY changed)  // where it is if not here, in words: "on Pixel", "on the computer"
     Q_PROPERTY(bool muted READ muted NOTIFY mutedChanged)
     Q_PROPERTY(bool camera READ camera NOTIFY cameraChanged)    // this end's camera is on (off at the start of every call)
+    Q_PROPERTY(bool screen READ screen NOTIFY screenChanged)    // this end shares its screen (off at the start of every call)
     Q_PROPERTY(QString error READ error NOTIFY errorChanged)     // the last thing that went wrong starting or answering, in words
 public:
     explicit Calls(ApiClient *api, QObject *parent = nullptr);
@@ -42,6 +44,7 @@ public:
     QString user() const { return user_; }
     QString group() const { return group_; }
     int others() const { return others_; }
+    QStringList people() const { return people_; }
     QString name() const { return nameOf_ ? nameOf_(group_.isEmpty() ? user_ : group_) : user_; }
     bool incoming() const { return incoming_; }
     qint64 answeredAt() const { return answered_; }
@@ -49,6 +52,7 @@ public:
     QString elsewhere() const;
     bool muted() const { return muted_; }
     bool camera() const { return camera_; }
+    bool screen() const { return screen_; }
     QString error() const { return error_; }
     quint64 version() const { return version_; }
 
@@ -69,10 +73,14 @@ public:
     Q_INVOKABLE void accept();
     Q_INVOKABLE void decline();
     Q_INVOKABLE void hangUp();
+    // The error shown is put away (the owner dismissed it)
+    Q_INVOKABLE void dismissError() { setError(QString()); }
     Q_INVOKABLE void setMuted(bool muted);
     Q_INVOKABLE void toggleMute() { setMuted(!muted_); }
     Q_INVOKABLE void setCamera(bool on);
     Q_INVOKABLE void toggleCamera() { setCamera(!camera_); }
+    Q_INVOKABLE void setScreen(bool on);
+    Q_INVOKABLE void toggleScreen() { setScreen(!screen_); }
     // Who has number `slot` in a group call (a phone's video from "slot:<n>"), "" if nobody
     Q_INVOKABLE QString slotUser(int slot) const { return slots_.value(slot); }
     // Words for how a call ended, as a chat shows it
@@ -84,6 +92,7 @@ signals:
     void changed();
     void mutedChanged();
     void cameraChanged();
+    void screenChanged();
     void errorChanged();
     void ringing(const QString &user, const QString &group); // a friend's call (or a call in a group) just started ringing here
     void groupCallsChanged();            // the calls going on in groups
@@ -104,9 +113,10 @@ private:
     quint64 version_ = 0;
     bool busy_ = false;
     QString state_, id_, user_, group_, error_;
+    QStringList people_;
     int others_ = 0;
     QHash<QString, int> groupCalls_;
-    bool incoming_ = false, muted_ = false, camera_ = false;
+    bool incoming_ = false, muted_ = false, camera_ = false, screen_ = false;
     QHash<int, QString> slots_;
     qint64 answered_ = 0;
 };

@@ -121,7 +121,7 @@ int main(int argc, char **argv)
     CHECK(row(side_a, "key", "dm:" + bob.uid).value("preview").toString() == "You: hello Bob" || until([&] { return row(side_a, "key", "dm:" + bob.uid).value("preview").toString() == "You: hello Bob"; }));
     CHECK(incoming.count() == 1 && incoming.at(0).at(1).toInt() == 1);
     CHECK(until([&] { return msgs_a->rowCount() == 1; }));
-    CHECK(msgs_a->at(0).value("outgoing").toBool() && msgs_a->at(0).value("senderName").toString() == "You");
+    CHECK(until([&] { return msgs_a->at(0).value("outgoing").toBool() && msgs_a->at(0).value("senderName").toString() == "Alice"; })); /* our own name, not "You" */
 
     /* opening the chat shows it, and reads it */
     B.open(alice.uid);
@@ -161,10 +161,10 @@ int main(int argc, char **argv)
     CHECK(msgs_b->at(0).value("dayStart").toBool() && !msgs_b->at(1).value("dayStart").toBool() && !msgs_b->at(0).value("grouped").toBool());
     B.send("two");
     CHECK(until([&] { return msgs_b->rowCount() == 3; }));
-    CHECK(msgs_b->at(2).value("grouped").toBool() && msgs_b->at(2).value("senderName").toString() == "You"); /* same sender, minutes apart */
+    CHECK(msgs_b->at(2).value("grouped").toBool() && msgs_b->at(2).value("senderName").toString() == "Bob"); /* same sender, minutes apart */
     B.send("replying to myself", msgs_b->at(1).value("id").toString());
     CHECK(until([&] { return msgs_b->rowCount() == 4; }));
-    CHECK(!msgs_b->at(3).value("grouped").toBool() && msgs_b->at(3).value("replyText").toString() == "hi Alice" && msgs_b->at(3).value("replyName").toString() == "You");
+    CHECK(!msgs_b->at(3).value("grouped").toBool() && msgs_b->at(3).value("replyText").toString() == "hi Alice" && msgs_b->at(3).value("replyName").toString() == "Bob");
     {
         JsonListModel lm({ "id" });
         QSignalSpy ins(&lm, &QAbstractItemModel::rowsInserted), rst(&lm, &QAbstractItemModel::modelReset);

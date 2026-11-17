@@ -23,6 +23,8 @@
 #define H264_PT 96
 #define MID "audio"
 #define VIDEO_MID "video"
+#define SCREEN_MID "screen" /* a shared screen: a second video track (docs/calls.md, "Sharing a screen") */
+#define POND_WATCH 16 /* a Pond voice channel: cameras and screens we watch at once, on v1 .. v16 (the Pond's docs/voice.md) */
 #define PHONE_SLOTS 7 /* a phone's leg has a video track for each other member a group call can have: v1 .. v7 */
 #define LOST_MS 10000 /* a connection that dropped and hasn't come back in this long is over */
 
@@ -65,6 +67,8 @@ struct Call {
     LegPtr leg;             /* that phone's leg, once it has asked for one */
     std::shared_ptr<rtc::Track> vtrack; /* the video, beside the sound */
     uint32_t vbase = 0;     /* our video's RTP timestamps are this plus the time */
+    std::shared_ptr<rtc::Track> strack; /* a shared screen, beside that */
+    uint32_t sbase = 0;
 };
 
 using CallPtr = std::shared_ptr<Call>;
@@ -82,6 +86,8 @@ struct Pair {
     bool have_in = false;
     std::shared_ptr<rtc::Track> vtrack;
     uint32_t vbase = 0;
+    std::shared_ptr<rtc::Track> strack; /* a shared screen */
+    uint32_t sbase = 0;
 };
 
 using PairPtr = std::shared_ptr<Pair>;
@@ -103,6 +109,31 @@ struct GroupCall {
 
 using GroupPtr = std::shared_ptr<GroupCall>;
 
+/* Our connection to a Pond's voice channel (docs/ponds.md, "Voice channels"; the Pond's docs/voice.md). Not a call: nothing
+ * rings and nothing goes in the history. We offer, the Pond answers; our voice goes up `track`, everyone else's comes back over
+ * `dc` (`frames`), each marked with its sender's slot in the channel. */
+struct PondVoice {
+    std::string pond, session;
+    int64_t channel = 0;
+    int slot = 0;
+    std::string state;      /* connecting, active, ended */
+    std::string reason;     /* ended: why ("failed": the connection never came or dropped; "removed": the Pond let us go) */
+    std::mutex state_mu;    /* one state to the Pond at a time, each built as it goes, so the last it hears is the newest */
+    bool muted = false, deafened = false, camera = false, screen = false;
+    std::shared_ptr<rtc::PeerConnection> pc;
+    std::shared_ptr<rtc::Track> track;
+    std::shared_ptr<rtc::DataChannel> dc;
+    std::shared_ptr<rtc::Track> vtrack, strack;      /* our camera, and the screen we share, to the Pond */
+    uint32_t vbase = 0, sbase = 0;
+    std::shared_ptr<rtc::Track> watch[POND_WATCH + 1]; /* v1 .. v16: what we watch, from the Pond */
+    std::string watching[POND_WATCH + 1];            /* on each, as the Pond has it: a member's id (camera), "<id>/screen", or "" */
+    bool watch_busy = false;                         /* telling the Pond what to change */
+    bool open = false;      /* the track: our voice can go */
+    int64_t started = 0, lost_since = 0;
+    uint32_t next_ts = 0;   /* the RTP timestamp of our next frame */
+};
+using VoicePtr = std::shared_ptr<PondVoice>;
+
 /* An ended call, as the owner's history keeps it (<data_dir>/state/calls.jsonl, one per line, oldest first). */
 struct Record {
     std::string id, peer, reason, group;
@@ -122,6 +153,7 @@ struct puddle_calls {
     callsx::CallPtr current;                 /* the call with a friend going on, if any */
     callsx::GroupPtr group;                  /* or the group call we are in */
     std::map<std::string, callsx::GroupPtr> heard; /* calls going on in our groups that we are not in, by group */
+    callsx::VoicePtr voice;                  /* or the Pond voice channel we are in (or were, when it ended without us leaving) */
     std::deque<callsx::CallPtr> ended;       /* newest first: their connections, until the worker lets them go */
     std::deque<callsx::GroupPtr> ended_groups;
     std::deque<callsx::Record> history;      /* every ended call kept, oldest first (PUDDLE_CALL_HISTORY) */
@@ -177,6 +209,11 @@ std::string answer_leg(puddle_calls *cs, const LegPtr &leg, const std::string &o
                        std::function<void(const rtc::binary &, uint32_t)> vframe);
 void write_device(puddle_ctx *ctx, puddle_jw *w, const std::string &device);
 
+/* ---- pondvoice.cpp ---- */
+bool in_voice(puddle_calls *cs);                      /* lock held: in a Pond's voice channel (one that hasn't ended) */
+void voice_tick(puddle_calls *cs, int64_t now);       /* from the worker, lock not held */
+void voice_stop(puddle_calls *cs);                    /* leaving, before the worker stops: the Pond is told */
+
 /* ---- groupcalls.cpp ---- */
 void group_tick(puddle_calls *cs, int64_t now);       /* from the worker, lock not held */
 void group_stop(puddle_calls *cs);                    /* leaving, before the worker stops */
@@ -189,7 +226,7 @@ int group_decline(puddle_ctx *ctx, const char *id, const char **code);
 int group_end(puddle_ctx *ctx, const char *id, const char **code);
 int group_media(puddle_ctx *ctx, const char *id, const char *device, const char *sdp, char **answer, int *udp, const char **code);
 int group_send_audio(puddle_calls *cs, const char *id, const unsigned char *frame, size_t len); /* 1: not a group call's */
-int group_send_video(puddle_calls *cs, const char *id, const unsigned char *frame, size_t len); /* 1: not a group call's */
+int group_send_video(puddle_calls *cs, const char *id, const unsigned char *frame, size_t len, bool screen = false); /* 1: not a group call's */
 /* lock held. write_call for a group call; the joined one and those heard of (first), in a list */
 void write_group(puddle_ctx *ctx, puddle_jw *w, const GroupCall &g);
 int group_write_one(puddle_ctx *ctx, puddle_jw *w, const char *id); /* 0 written, 1 none */

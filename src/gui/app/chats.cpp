@@ -273,6 +273,12 @@ void Chats::refreshProfiles()
         profilesLoaded_ = true;
         profiles_.setItems(rows);
         emit profilesChanged();
+        // the owner's own messages and member row carry their name: show the one just loaded
+        if (!current_.isEmpty()) {
+            renderMessages();
+            if (currentIsGroup())
+                rebuildMembers();
+        }
     });
 }
 
@@ -836,7 +842,7 @@ void Chats::renderMessages()
             m.insert("deliveryNext", d.value("next_at"));
         }
         const QJsonValue author = m.value("author");
-        m.insert("senderName", mine ? tr("You") : !nameIn(author).isEmpty() ? nameIn(author) : nameOf(sender));
+        m.insert("senderName", mine ? selfName(author) : !nameIn(author).isEmpty() ? nameIn(author) : nameOf(sender));
         m.insert("avatar", mine ? myAvatar_ : author.isObject() ? avatarIn(author) : avatars_.value(sender));
         m.insert("tint", mine ? QString() : colors_.value(sender));
         m.insert("grouped", !first && !newDay && prev.value("kind").toString() == QLatin1String("message") && prev.value("sender") == m.value("sender") &&
@@ -846,7 +852,7 @@ void Chats::renderMessages()
             if (r.isEmpty()) {
                 m.insert("replyMissing", true);
             } else {
-                m.insert("replyName", r.value("outgoing").toBool() ? tr("You") : !nameIn(r.value("author")).isEmpty() ? nameIn(r.value("author")) : nameOf(r.value("sender").toString()));
+                m.insert("replyName", r.value("outgoing").toBool() ? selfName(r.value("author")) : !nameIn(r.value("author")).isEmpty() ? nameIn(r.value("author")) : nameOf(r.value("sender").toString()));
                 const QString said = r.value("body").toString().simplified().left(100);
                 const QJsonArray rf = r.value("files").toArray();
                 m.insert("replyText", r.value("deleted").toBool() ? QString() : !said.isEmpty() || rf.isEmpty() ? said : rf.at(0).toObject().value("name").toString());
@@ -1344,7 +1350,7 @@ void Chats::rebuildMembers()
             QJsonObject r;
             r.insert("id", id);
             const bool me = !self_.isEmpty() && id == self_;
-            r.insert("name", me ? tr("You") : !nameIn(m.value("user")).isEmpty() ? nameIn(m.value("user")) : nameOf(id));
+            r.insert("name", me ? selfName(m.value("user")) : !nameIn(m.value("user")).isEmpty() ? nameIn(m.value("user")) : nameOf(id));
             r.insert("avatar", me ? myAvatar_ : avatarIn(m.value("user")));
             r.insert("color", me ? QString() : colors_.value(id));
             r.insert("state", m.value("state"));
@@ -1463,6 +1469,28 @@ void Chats::renameGroup(const QString &name)
 void Chats::renameGroup(const QString &id, const QString &name)
 {
     post(path("groups", id, "rename"), QJsonObject{ { "name", name.trimmed() } }, tr("The group could not be renamed."));
+}
+
+QString Chats::selfName(const QJsonValue &author) const
+{
+    if (const QString n = nameIn(author); !n.isEmpty())
+        return n;
+    if (currentIsGroup()) {
+        for (const QJsonValue &v : groups_.value(current_).value("members").toArray())
+            if (idOf(v.toObject().value("user")) == self_)
+                if (const QString n = nameIn(v.toObject().value("user")); !n.isEmpty())
+                    return n;
+    } else {
+        QString profile;
+        for (const QJsonObject &p : people_.items())
+            if (p.value("id").toString() == current_)
+                profile = p.value("profile").toString();
+        if (!profile.isEmpty())
+            for (const QJsonObject &p : profiles_.items())
+                if (p.value("id").toString() == profile && !p.value("display_name").toString().isEmpty())
+                    return p.value("display_name").toString();
+    }
+    return myName_.isEmpty() ? tr("You") : myName_;
 }
 
 QString Chats::nameOf(const QString &userId) const

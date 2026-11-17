@@ -194,6 +194,59 @@ Errors: `no_pond`, `no_channel` and `no_profile` are `404`. `bad_text` is `400`.
 `invite_refused`, `removed`, `no_file`, `files_off`, `too_large` and `no_role` are `409`. The admin routes pass on
 what the Pond says: `204` when done, `400` with a `message` to show, `404 no_channel`, `409 outranked` or `not_yourself`. `unreachable`, `not_a_pond`, `certificate_changed`, `not_proven` and `failed` are `502`.
 
+## Voice channels
+
+A Pond's voice channel (its `docs/voice.md`) is a place to drop into and talk, as on Discord. It is not a call: nothing rings,
+nothing alerts anyone, nothing is noted in a chat, and it isn't in `/api/v1/calls`. The Pond forwards: each member's Puddle
+makes one WebRTC connection to it, sends its owner's voice up an Opus track, and gets every other voice back over a data
+channel (`frames`), each frame marked with its sender's slot in the channel (2 bytes), its RTP timestamp (4) and the Opus
+frame.
+
+- **Who carries it.** The Puddle, beside its calls (`federation/pondvoice.cpp`): the same UDP port (`calls.port`), the same
+  device at the end of it (the window, for now; a phone's leg later), and one at a time with calls. In a voice channel, a
+  friend's ring is answered `busy`, and their window says "*Ann* is already in a call"; starting or answering a call is
+  `busy` too, and so is joining a voice channel while in a call. The owner leaves one to start the other. Joining another
+  voice channel leaves this one, keeping muted and deafened.
+- **The path.** The Puddle offers, signed like every request to a Pond (`POST /pond/v1/channels/{c}/voice/join` with
+  `{sdp, udp}`), and the Pond answers with its own description, its voice UDP port and our slot. The Puddle adds the Pond's
+  address at that port as a candidate: the Pond is the one with a public address, so this works from behind NAT, with no
+  STUN or TURN. The Pond adds the address the request came from.
+- **Whose voice.** Who has which slot comes from the Pond's `voice` and `voice_left` events, and `voice` in `/info`, kept in
+  memory by `core/ponds` (`puddle_ponds_voice_member`). A frame from a slot not heard of yet goes to the device as
+  `slot:<n>` until the event comes.
+- **Muted, deafened.** `POST /pond/v1/voice/{session}/state` tells the Pond, which tells everyone. Muted, the Puddle sends
+  nothing and the Pond forwards nothing; deafened, the Pond sends nothing and the Puddle drops anything that comes.
+- **Going away.** A connection that doesn't come up within 20 seconds, or drops and isn't back within 10, has ended
+  (`failed`); one the Pond no longer has (`404 no_session`) has ended (`removed`). An ended one stays, with why, until the
+  owner leaves it or joins again, so the window can say so. Leaving tells the Pond; so does stopping the Puddle.
+
+The owner's routes: `POST /api/v1/ponds/{pond}/channels/{channel}/voice/join`, `GET /api/v1/voice`,
+`POST /api/v1/voice/state {muted?, deafened?}` and `POST /api/v1/voice/leave`. A Pond's channels say their `kind`, and a
+voice channel who is in it (`voice`).
+
+In the window (`PondSidebar.qml`), a voice channel has a speaker instead of `#`, and who is in it underneath, ringed while
+they talk. Clicking it shows its messages, as for any channel (a voice channel takes text too); the phone beside it joins
+its voice, with nothing to answer, and while in it becomes a red one to leave. While in one, a panel slides up at the foot of the
+left-hand list, above your own row (`VoicePanel.qml`, as Discord has it, and the same for a call: `docs/calls.md`). It has the channel and Pond (a click on the name goes to the channel), whether it is connected, and
+mute, deafen, camera, screen, pop out and leave. Your row under it keeps Settings in reach. Who is talking comes from the frames arriving (the Mixer
+in `callaudio.*`: anyone heard from in the last 300 ms), and this end from its own microphone. How the microphone goes is
+the owner's choice in Settings (`TalkGate`): voice activation (the default: sent while louder than a threshold, held 300 ms
+after so word endings aren't cut off; the Settings show how loud you are against it), or push to talk (only while a key of
+the owner's choosing is held, while the window is in front). Between, nothing is sent at all, which is how the others see
+who is talking. A call sends the microphone always, unless muted.
+
+**Cameras and screens.** The connection to the Pond also carries the owner's camera (`video`) and shared screen (`screen`),
+sent while on (`/voice/state {camera, screen}`, which the Pond tells everyone), and 16 tracks that only come in, `v1` to
+`v16`. The Puddle watches everyone else's camera and screen by itself (`POST /pond/v1/voice/{session}/watch`): each new one
+takes the first free track and keeps it until it goes, so nobody's picture moves, up to 16 at once. They reach the device
+as from the member's id, or `<id>/screen`. In the window the video pane (as in calls: `docs/calls.md`, "The video pane")
+sits above the voice channel's messages while you are in it and someone's camera or screen is on; full size and pop out
+work the same, from the buttons on the pane or the panel.
+
+Tested in `pondvoice_test` (a real Puddle and its window models against a stand-in Pond that speaks the voice routes with
+libdatachannel: also cameras and screens both ways, and watching), `callaudio_test` (the gate, and who is talking), and the
+pond repository's `e2e_test` (two real Puddles in a real Pond's voice channel).
+
 ## In the app
 
 The rail at the left of the window shows a round icon for each Pond (its initials), then a **+** to join one. Opening a
@@ -216,5 +269,7 @@ open channel instead of the open chat.
 - Asking again, refusals and the other notes between Puddles (`docs/files.md`) do not apply to a Pond: it serves
   any member.
 - Mentions, replies, edits and reactions.
+- In a voice channel: a phone (roadmap 9.3), and admins disconnecting or muting someone (9.5). Push to talk works only
+  while the window is in front. More than 16 cameras and screens at once are not all watched.
 - A Pond changing its certificate: today the member must leave and join again. See the Pond's design, "Not yet".
 - Whether a Pond sees the same key as everyone else, or one derived for it (`discuss-later.md`).

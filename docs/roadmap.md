@@ -576,6 +576,29 @@ to one in the window first, then phones, group calls and video.
   `callvideo_test`, `call_test`, `groupcall_test`, `phone_test` and `ui_test`. Not yet: key frames on request, resending,
   a bitrate that follows the connection.
 
+## Phase 9: Voice channels in Ponds
+
+Design in the Pond's `docs/voice.md`, with the Puddle's side in `docs/ponds.md` ("Voice channels"). Decided with the owner:
+a voice channel is Discord's, not a call (you join and sit there; nothing rings), administrators make them, voice
+activation or push to talk, no cap on people or voices, cameras too, and the Pond hearing everything is fine for now
+(encryption only members can undo comes later).
+
+- [x] **9.1 The Pond's side.** In the pond repository: channels gain a kind, members join with a WebRTC offer, and the Pond
+  forwards every voice to everyone else over a data channel, marked with the sender's slot; cameras to those who watch.
+- [x] **9.2 Joining from the window.** `federation/pondvoice.cpp`, beside calls (the same UDP port, the same device, one at a
+  time: in a voice channel, a friend's ring is `busy` and they see "already in a call"). The owner's routes
+  (`/api/v1/ponds/{pond}/channels/{channel}/voice/join`, `/api/v1/voice...`), who is in each voice channel from the Pond's
+  events, and in the window: voice channels in the list with who is in them, lit while they talk, a bar to mute, deafen and
+  leave, and voice activation or push to talk in Settings. Tested in `pondvoice_test` against a stand-in Pond, in
+  `callaudio_test` (the talk gate), and in the pond repository's `e2e_test` against a real one.
+- [ ] **9.3 On the phone.** Over its leg, as for a group call.
+- [x] **9.4 Video, and sharing screens.** Cameras in a voice channel, everyone's watched by the Puddle (each on a track
+  it keeps), and a shared screen as a second video track, in voice channels and in calls between Puddles alike. One video
+  pane for both (`VideoPane.qml`): a grid in a fixed order (or who's talking first, in Settings), click to pin (how one of
+  several shared screens is picked), full size over the messages, or popped out. Tested in `pondvoice_test`, `call_test`,
+  `groupcall_test`, `callvideo_test`, `ui_test` and the pond repository's `voice_test`.
+- [ ] **9.5 Moderation.** Disconnecting and muting someone, by administrators.
+
 ## Later, not planned in detail
 
 Removing a member, a display name for the group-only connection, more of Ponds (docs/ponds.md, "Not yet"), encrypting message

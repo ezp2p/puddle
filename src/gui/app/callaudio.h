@@ -7,7 +7,9 @@
 #include <QByteArray>
 #include <QIODevice>
 #include <QObject>
+#include <QStringList>
 
+#include <atomic>
 #include <climits>
 #include <cstdint>
 #include <functional>
@@ -105,12 +107,15 @@ public:
     void pull(int16_t out[960]); // the next 20 ms, mono at 48 kHz: silence where there is nothing
     void reset();
     int voices() const;
+    // Who has sent anything in the last `ms`: those talking (a voice channel's members send nothing while quiet)
+    QStringList speaking(int ms = 300) const;
 
 private:
     struct Voice {
         JitterBuffer buffer;
         void *decoder = nullptr;
         int quiet = 0; // 20 ms in a row with nothing
+        int64_t heard = 0; // when its last frame came, ms of a steady clock
     };
     mutable std::mutex mu_;
     std::map<QString, std::unique_ptr<Voice>> voices_;
@@ -136,6 +141,36 @@ private:
     QByteArray pcm_; // decoded, Int16, interleaved for `channels_`
 };
 
+// When the microphone goes out (docs/ponds.md, "Voice channels"). In a call, always (Open). In a voice channel, as the owner
+// chooses: while it hears speech (VoiceActivity: louder than `threshold` dBFS after the echo canceller, held kHangMs more so
+// the ends of words aren't cut off), or only while the push-to-talk key is held (PushToTalk). Shut, nothing is sent at all,
+// which is how the others see who is talking.
+class TalkGate {
+public:
+    enum Mode { Open, VoiceActivity, PushToTalk };
+    static constexpr int kHangMs = 300;
+    static constexpr double kDefaultThreshold = -45; // dBFS: speech close to a microphone, not a room's hum
+
+    void setMode(Mode m) { mode_ = m; }
+    Mode mode() const { return mode_; }
+    void setThreshold(double dbfs) { threshold_ = dbfs; }
+    double threshold() const { return threshold_; }
+    void setPushed(bool down) { pushed_ = down; }
+    bool pushed() const { return pushed_; }
+    // 20 ms of the microphone, at `nowMs` of a steady clock: does it go?
+    bool pass(const int16_t *pcm, int samples, int64_t nowMs);
+    bool talking() const { return talking_; } // the last 20 ms went, and wasn't silence
+    double lastLevel() const { return level_; }
+    // How loud, in dBFS (0 is the loudest there is; silence is -100)
+    static double level(const int16_t *pcm, int samples);
+
+private:
+    std::atomic<Mode> mode_{Open};
+    std::atomic<double> threshold_{kDefaultThreshold}, level_{-100};
+    std::atomic<bool> pushed_{false}, talking_{false};
+    int64_t openUntil_ = 0;
+};
+
 class CallAudio : public QObject {
     Q_OBJECT
 public:
@@ -153,6 +188,12 @@ public:
     // A frame from the friend, or from member `from` in a group call: any thread.
     void received(const QString &from, uint32_t rtpTs, const QByteArray &frame) { mixer_.push(from, rtpTs, frame); }
     void setMuted(bool muted) { muted_ = muted; }
+    // When the microphone goes (TalkGate): Open in a call; the owner's choice in a voice channel
+    TalkGate &gate() { return gate_; }
+    double gateThreshold() const { return gate_.threshold(); }
+    // This end is talking now (sending, and not silence); and who of the others is (by the `from` their frames came with)
+    bool talking() const { return running_ && !muted_ && gate_.talking(); }
+    QStringList speaking() const { return mixer_.speaking(); }
     bool hasInput() const { return source_ != nullptr; }
     bool hasOutput() const { return sink_ != nullptr; }
     bool cancelsEcho() const { return echo_ != nullptr; } // both devices open, and built with an echo canceller
@@ -164,6 +205,7 @@ public:
 private:
     void readMicrophone();
     Mixer mixer_;
+    TalkGate gate_;
     Send send_;
     QAudioSource *source_ = nullptr;
     QAudioSink *sink_ = nullptr;

@@ -46,4 +46,8 @@ const puddle_courier puddle_federation_courier = {
     puddle_calls_write,
     puddle_call_media,
     puddle_call_start_group,
+    puddle_voice_join,
+    puddle_voice_leave,
+    puddle_voice_state,
+    puddle_voice_write,
 };

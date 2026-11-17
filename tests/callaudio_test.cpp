@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <unistd.h>
 #include <vector>
 
 static int failures;
@@ -250,6 +251,48 @@ int main(int argc, char **argv)
         for (int i = 0; i < 520; i++) /* 10 s of nothing more from either */
             m.pull(both);
         CHECK(m.voices() == 0);
+    }
+
+    /* ---- the talk gate (a voice channel): voice activation opens on speech and holds a little after; push to talk only while
+     * held; a call's always open ---- */
+    {
+        int16_t speech[960], hush[960];
+        for (int i = 0; i < 960; i++) {
+            speech[i] = int16_t(8000 * std::sin(i * 2 * M_PI * 220 / 48000)); /* about -15 dBFS */
+            hush[i] = int16_t((i % 7) - 3);                                   /* a room's hum, far below the threshold */
+        }
+        CHECK(TalkGate::level(speech, 960) > -20 && TalkGate::level(speech, 960) < -10);
+        CHECK(TalkGate::level(hush, 960) < -70);
+        TalkGate g;
+        CHECK(g.pass(hush, 960, 0) && g.pass(speech, 960, 20)); /* Open: whatever it hears */
+        g.setMode(TalkGate::VoiceActivity);
+        CHECK(!g.pass(hush, 960, 1000) && !g.talking());
+        CHECK(g.pass(speech, 960, 1020) && g.talking());
+        CHECK(g.pass(hush, 960, 1040) && g.pass(hush, 960, 1300)); /* the end of a word: held kHangMs */
+        CHECK(!g.pass(hush, 960, 1340) && !g.talking());
+        g.setThreshold(-5); /* less sensitive: the same speech isn't loud enough */
+        CHECK(!g.pass(speech, 960, 5000));
+        g.setMode(TalkGate::PushToTalk);
+        CHECK(!g.pass(speech, 960, 6000));
+        g.setPushed(true);
+        CHECK(g.pass(hush, 960, 6020) && !g.talking()); /* held: it goes, though there is nothing to hear */
+        g.setThreshold(TalkGate::kDefaultThreshold);
+        CHECK(g.pass(speech, 960, 6040) && g.talking());
+        g.setPushed(false);
+        CHECK(!g.pass(speech, 960, 6060) && !g.talking());
+    }
+
+    /* ---- who is talking: those whose frames came in the last moment ---- */
+    {
+        Mixer m;
+        const QByteArray f = CallAudio::encodeForTest(QByteArray(960 * 2, 0));
+        m.push("ann", 960, f);
+        m.push("ben", 960, f);
+        CHECK(m.speaking() == (QStringList{ "ann", "ben" }));
+        usleep(350 * 1000);
+        m.push("ben", 1920, f);
+        CHECK(m.speaking() == QStringList{ "ben" });
+        CHECK(m.speaking(1000).size() == 2);
     }
 
     if (failures) {

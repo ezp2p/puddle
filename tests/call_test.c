@@ -278,7 +278,7 @@ static void send_frames(node *n, const char *call, int count, unsigned char seed
 typedef struct {
     pthread_mutex_t mu;
     int good, bad;
-    char from[PUDDLE_USER_ID_LEN + 1];
+    char from[PUDDLE_USER_ID_LEN + 16]; /* an id, or "<id>/screen" */
 } seen_video;
 
 /* access unit `k`: SPS, PPS, then an IDR slice of 6000 bytes, none of them zero (so no start code inside) */
@@ -408,6 +408,23 @@ int main(void)
         unsigned char big[16];
         memset(big, 1, sizeof big);
         CHECK(puddle_call_send_video(puddle_server_calls(a.srv), "nosuchcallnosuchcallnosuch", big, sizeof big) == -1);
+    }
+
+    /* ---- a shared screen: its own track, and it comes as "<them>/screen" ---- */
+    {
+        seen_video vs = { PTHREAD_MUTEX_INITIALIZER, 0, 0, "" };
+        puddle_calls_on_video(puddle_server_calls(b.srv), on_video, &vs);
+        unsigned char au[7000];
+        for (int k = 0; k < 12; k++) {
+            size_t len = video_au(k, au);
+            CHECK(puddle_call_send_screen(puddle_server_calls(a.srv), id, au, len) == 0);
+            usleep(66000);
+        }
+        for (int i = 0; i < 100 && video_good(&vs) < 9; i++) usleep(20000);
+        char want[PUDDLE_USER_ID_LEN + 16];
+        snprintf(want, sizeof want, "%s/screen", a.uid);
+        CHECK(video_good(&vs) >= 9 && vs.bad == 0 && !strcmp(vs.from, want));
+        puddle_calls_on_video(puddle_server_calls(b.srv), on_video, &vb);
     }
 
     snprintf(path, sizeof path, "/api/v1/calls/%s/end", id);

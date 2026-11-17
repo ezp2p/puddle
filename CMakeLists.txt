@@ -157,6 +157,7 @@ target_link_libraries(puddle_api PUBLIC puddle_objects puddle_http)
 add_library(puddle_federation STATIC
   src/federation/calls.cpp
   src/federation/groupcalls.cpp
+  src/federation/pondvoice.cpp
   src/federation/files.cpp
   src/federation/access.cpp
   src/federation/courier.cpp
@@ -307,7 +308,7 @@ if(PUDDLE_BUILD_GUI)
         src/gui/qml/setup/Setup.qml
         src/gui/qml/setup/Pair.qml
         src/gui/qml/shell/CallBar.qml
-        src/gui/qml/shell/CallVideoView.qml
+        src/gui/qml/shell/VoicePanel.qml
         src/gui/qml/shell/Shell.qml
         src/gui/qml/shell/Sidebar.qml
         src/gui/qml/shell/SidebarRow.qml
@@ -331,6 +332,7 @@ if(PUDDLE_BUILD_GUI)
         src/gui/qml/components/Button.qml
         src/gui/qml/components/Card.qml
         src/gui/qml/components/SettingsGroup.qml
+        src/gui/qml/components/VideoPane.qml
         src/gui/qml/components/RoleBadge.qml
         src/gui/qml/components/Dialog.qml
         src/gui/qml/components/DialogButtonBox.qml
@@ -403,7 +405,13 @@ if(PUDDLE_BUILD_GUI)
     set_target_properties(phone_test PROPERTIES AUTOMOC ON)
     target_link_libraries(phone_test PRIVATE puddle_service Qt6::Core Qt6::Gui Qt6::Network Qt6::Test)
     add_test(NAME phone COMMAND phone_test)
+    add_executable(pondvoice_test tests/pondvoice_test.cpp src/gui/app/chats.cpp src/gui/app/chats.h src/gui/app/apiclient.cpp src/gui/app/apiclient.h
+      src/gui/app/jsonlistmodel.cpp src/gui/app/jsonlistmodel.h src/gui/app/ponds.cpp src/gui/app/ponds.h src/gui/app/callmodel.cpp src/gui/app/callmodel.h src/gui/app/callleg.cpp src/gui/app/callleg.h)
+    set_target_properties(pondvoice_test PROPERTIES AUTOMOC ON)
+    target_link_libraries(pondvoice_test PRIVATE puddle_service Qt6::Core Qt6::Gui Qt6::Network Qt6::Test)
+    add_test(NAME pondvoice COMMAND pondvoice_test)
     set_tests_properties(phone PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 120)
+    set_tests_properties(pondvoice PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 120 SKIP_RETURN_CODE 77)
 
     # The window, driven with real mouse and key events against two real Puddles.
     add_executable(ui_test tests/ui_test.cpp src/gui/app/backend.cpp src/gui/app/backend.h src/gui/app/chats.cpp src/gui/app/chats.h
