@@ -295,11 +295,10 @@ int puddle_voice_state(puddle_ctx *ctx, int muted, int deafened, int camera, int
     puddle_calls *cs = ctx->calls;
     if (!cs)
         return *code = "no_voice", -1;
-    std::string pond, session;
-    std::string body = "{";
+    VoicePtr v;
     {
         std::lock_guard<std::mutex> g(cs->mu);
-        VoicePtr v = cs->voice;
+        v = cs->voice;
         if (!v || v->state == "ended")
             return *code = "no_voice", -1;
         if (muted >= 0)
@@ -310,10 +309,17 @@ int puddle_voice_state(puddle_ctx *ctx, int muted, int deafened, int camera, int
             v->camera = camera;
         if (screen >= 0)
             v->screen = screen;
-        pond = v->pond, session = v->session;
-        body += std::string("\"muted\":") + (v->muted ? "true" : "false") + ",\"deafened\":" + (v->deafened ? "true" : "false") +
-                ",\"camera\":" + (v->camera ? "true" : "false") + ",\"screen\":" + (v->screen ? "true" : "false") + "}";
         cs->version++;
+    }
+    /* Two changes close together (camera off, then screen off) are sent one after the other, each saying everything as it
+     * is when it goes: sent side by side, the older could reach the Pond last and undo the newer. */
+    std::lock_guard<std::mutex> one(v->state_mu);
+    std::string pond, session, body;
+    {
+        std::lock_guard<std::mutex> g(cs->mu);
+        pond = v->pond, session = v->session;
+        body = std::string("{\"muted\":") + (v->muted ? "true" : "false") + ",\"deafened\":" + (v->deafened ? "true" : "false") +
+               ",\"camera\":" + (v->camera ? "true" : "false") + ",\"screen\":" + (v->screen ? "true" : "false") + "}";
     }
     if (session.empty())
         return 0; /* still joining: join tells the Pond once it has a session */

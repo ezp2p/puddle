@@ -473,7 +473,7 @@ int main(int argc, char **argv)
             CHECK(click(find("voicePanelMute")));
             CHECK(until([&] { return ca.muted(); }, 2000));
         }
-        CHECK(click(find("voicePanelLeave")));
+        CHECK(clickName("voicePanelLeave"));
         CHECK(until([&] { return ca.state().isEmpty() && cb.state().isEmpty(); }, 10000));
         CHECK(until([&] { return find("voicePanel") == nullptr && note("You called Bob · 0:0"); }, 5000)); /* slid away */
         CHECK(!ca.muted()); /* the next call starts unmuted */
@@ -708,12 +708,12 @@ int main(int argc, char **argv)
             CHECK(until([&] { return ca.state() == "active" && ca.others() == 2; }, 15000));
             CHECK(until([&] { return status().endsWith("2 others"); }, 5000));
             CHECK(until([&] { return cb.others() == 2 && cd.others() == 2 && cd.state() == "active"; }, 15000));
-            CHECK(click(find("voicePanelLeave")));
+            CHECK(clickName("voicePanelLeave"));
             CHECK(until([&] { return ca.state().isEmpty() && cb.others() == 1 && cd.others() == 1; }, 10000));
             CHECK(until([&] { return find("callButton") && find("callButton")->property("text").toString() == "Join (2)"; }, 5000));
             CHECK(click(find("callButton")));
             CHECK(until([&] { return ca.state() == "active" && ca.others() == 2; }, 15000));
-            CHECK(click(find("voicePanelLeave")));
+            CHECK(clickName("voicePanelLeave"));
             cb.hangUp();
             cd.hangUp();
             CHECK(until([&] { return ca.state().isEmpty() && cb.state().isEmpty() && cd.state().isEmpty() && ca.groupCall(gid) == 0; }, 10000));

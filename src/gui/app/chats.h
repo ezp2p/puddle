@@ -193,6 +193,9 @@ public:
 
     // What the person is called here: their display name, else a short form of the id.
     Q_INVOKABLE QString nameOf(const QString &userId) const;
+    // How the owner appears in the open conversation, for their own messages and their row among a group's members: the
+    // name on the message (`author`, if it carries one), else the profile that friend or group sees, else the first profile
+    QString selfName(const QJsonValue &author = QJsonValue()) const;
 
 signals:
     void currentChanged();

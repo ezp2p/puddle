@@ -35,7 +35,7 @@ Item {
     clip: true
     implicitHeight: shown ? box.implicitHeight : 0
     Behavior on implicitHeight { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
-    visible: implicitHeight > 0
+    visible: shown || implicitHeight > 0   // at once when it comes, until it has slid away when it goes
 
     // the time since the call connected
     property real now: Date.now()

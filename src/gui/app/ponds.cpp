@@ -247,7 +247,7 @@ void Ponds::rebuildMessages()
         const bool mine = author == me_;
         QJsonObject r{ { "id", QString::number(qint64(m.value("id").toDouble())) },
                        { "author", author },
-                       { "name", mine ? tr("You") : who.isEmpty() ? author.left(8) : who.value("name").toString() },
+                       { "name", !who.value("name").toString().isEmpty() ? who.value("name").toString() : mine ? tr("You") : author.left(8) },
                        { "tint", who.value("color").toString() },
                        { "text", m.value("text") },
                        { "files", m.value("files") },

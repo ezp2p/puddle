@@ -118,6 +118,7 @@ struct PondVoice {
     int slot = 0;
     std::string state;      /* connecting, active, ended */
     std::string reason;     /* ended: why ("failed": the connection never came or dropped; "removed": the Pond let us go) */
+    std::mutex state_mu;    /* one state to the Pond at a time, each built as it goes, so the last it hears is the newest */
     bool muted = false, deafened = false, camera = false, screen = false;
     std::shared_ptr<rtc::PeerConnection> pc;
     std::shared_ptr<rtc::Track> track;
