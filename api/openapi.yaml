@@ -34,7 +34,7 @@ tags:
   - { name: groups, description: Group chats }
   - { name: ponds, description: "Community servers the owner is in: their channels and messages, through this Puddle (docs/ponds.md)" }
   - { name: identity, description: This Puddle's keys }
-  - { name: profiles, description: "The owner's profiles: files in the data folder, each shown only where the owner chooses (docs/profiles.md)" }
+  - { name: profiles, description: "The owner's profiles: files beside puddle.yaml, each shown only where the owner chooses (docs/profiles.md)" }
   - { name: invites, description: Links that are accepted automatically }
   - { name: files, description: "Files sent in chats: uploaded a chunk at a time, then sent in a message (docs/files.md)" }
   - { name: devices, description: "Phones paired with this Puddle: thin clients that sign every request with a key of their own (docs/identity.md, \"Devices\")" }

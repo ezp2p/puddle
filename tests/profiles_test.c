@@ -632,7 +632,7 @@ int main(void)
               strstr(body_of(r), hash) && strstr(body_of(r), "\"places\":[]"));
         CHECK(owner_call("POST", "/api/v1/profiles/create", b)->status == 409);                  /* the id is taken */
         CHECK(queued(alice.uid, NULL) == 0);                                                     /* made: shown nowhere yet, sent nowhere */
-        snprintf(path, sizeof path, "%s/profiles/gaming.yaml", data);
+        snprintf(path, sizeof path, "%s/profiles/gaming.yaml", root);
         CHECK(access(path, F_OK) == 0);
         /* what it refuses, and why */
         r = owner_call("POST", "/api/v1/profiles/create", "{\"id\":\"x\",\"display_name\":\"x\",\"links\":[{\"text\":\"t\",\"url\":\"javascript:1\"}]}");

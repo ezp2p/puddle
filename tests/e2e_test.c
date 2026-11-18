@@ -986,7 +986,7 @@ int main(void)
         CHECK(wait_state(&gus, fay.uid, PUDDLE_STREAM_ACTIVE) && outboxes_empty(&fay, &gus) && has_profile(&gus, fay.uid, "\"Fay\""));
         node_down(&gus);                                                                            /* away: what Fay sends waits, and can be counted */
         char file[900];
-        snprintf(file, sizeof file, "%s/profiles/main.yaml", fay.cfg.data_dir);
+        snprintf(file, sizeof file, "%s/profiles/main.yaml", fay.cfg.dir);
 
         node_down(&fay);
         CHECK(node_up(&fay) == 0);

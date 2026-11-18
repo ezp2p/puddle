@@ -2,7 +2,7 @@
 #define PUDDLE_PROFILE_H
 
 /* Profiles: how the owner appears to others (docs/profiles.md). The owner has several (work, friends, family...), each a
- * YAML file in <data_dir>/profiles/<id>.yaml, and chooses which one each place sees: a direct conversation with someone,
+ * YAML file in profiles/<id>.yaml beside puddle.yaml, and chooses which one each place sees: a direct conversation with someone,
  * a group, later a Pond. Nothing is shown anywhere the owner has not chosen a profile for: that choice is their consent
  * for it to be sent there. Images live in <data_dir>/media/<sha256> and a profile names them by hash. */
 
@@ -89,8 +89,8 @@ void puddle_profile_write_fields(puddle_jw *w, const puddle_profile *p);
 
 typedef struct puddle_profiles puddle_profiles;
 
-/* Read every <data_dir>/profiles/<id>.yaml. A file with a mistake in it is left out with a warning naming the line, so one bad
- * edit cannot stop the Puddle; an image that is missing is dropped from its profile the same way.
+/* Read every profiles/<id>.yaml beside puddle.yaml, first moving them there from <data_dir>/profiles where they were once
+ * kept. A file with a mistake in it is left out with a warning naming the line, so one bad edit cannot stop the Puddle; an image that is missing is dropped from its profile the same way.
  *
  * The first time (no profiles folder yet), the profiles in the files `cfg->profile_files` names (the `profiles:` setting
  * Puddles used before) are imported: each becomes a file here. The first of them was then shown to everyone the owner had

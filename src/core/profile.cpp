@@ -732,7 +732,7 @@ static std::string to_yaml(const puddle_profile *p)
 /* ------------------------------------------------------------- the store */
 
 struct puddle_profiles {
-    std::string data_dir, dir; /* dir: <data_dir>/profiles */
+    std::string data_dir, dir; /* dir: the profiles folder beside puddle.yaml */
     std::mutex mu;
     std::vector<puddle_profile> items; /* sorted by id */
     puddle_storage *storage;           /* for SUMS */
@@ -882,6 +882,56 @@ static int make_folder(puddle_profiles *p, const puddle_config *cfg, char old_de
     return 0;
 }
 
+/* the whole of a small file into `out`; 0, or -1 with errno set */
+static int read_whole(const std::string &path, std::string &out)
+{
+    FILE *f = fopen(path.c_str(), "rb");
+    if (!f)
+        return -1;
+    char buf[8192];
+    size_t n;
+    out.clear();
+    while ((n = fread(buf, 1, sizeof buf, f)) > 0)
+        out.append(buf, n);
+    int bad = ferror(f);
+    fclose(f);
+    return bad ? -1 : 0;
+}
+
+/* Profiles were kept in <data_dir>/profiles before they moved beside puddle.yaml: move that folder to `to`. A rename where
+ * it can be one; otherwise (another disk) its files are copied into a folder beside `to` that takes its name once every
+ * file is in, and only then is the old folder emptied. 0, or -1 (error set) with the old folder as it was. */
+static int move_old_folder(const std::string &from, const std::string &to, char *err, size_t errlen)
+{
+    if (rename(from.c_str(), to.c_str()) == 0)
+        return 0;
+    std::string fresh = to + ".new";
+    std::vector<std::string> names;
+    int bad = puddle_mkdir_p(fresh.c_str()) != 0;
+    puddle_dir *d = bad ? NULL : puddle_dir_open(from.c_str());
+    bad = bad || !d;
+    const char *name;
+    while (!bad && (name = puddle_dir_next(d))) {
+        std::string body, src = from + "/" + name;
+        if (read_whole(src, body) != 0) {
+            bad = 1;
+            break;
+        }
+        bad = puddle_write_file_atomic(fresh.c_str(), (fresh + "/" + name).c_str(), body.data(), body.size()) != 0;
+        names.push_back(name);
+    }
+    if (d)
+        puddle_dir_close(d);
+    if (bad || rename(fresh.c_str(), to.c_str()) != 0) {
+        seterr(err, errlen, "cannot move the profiles in %s to %s: %s", from.c_str(), to.c_str(), strerror(errno));
+        return -1;
+    }
+    for (const auto &n : names)
+        remove((from + "/" + n).c_str());
+    remove(from.c_str());
+    return 0;
+}
+
 puddle_profiles *puddle_profiles_open(const puddle_config *cfg, char old_default[PUDDLE_PROFILE_ID_MAX + 1], char *err, size_t errlen)
 {
     old_default[0] = '\0';
@@ -891,13 +941,30 @@ puddle_profiles *puddle_profiles_open(const puddle_config *cfg, char old_default
         return NULL;
     }
     p->data_dir = cfg->data_dir;
-    p->dir = p->data_dir + "/profiles";
+    p->dir = std::string(cfg->dir) + "/profiles"; /* settings are kept beside puddle.yaml, everything else in the data folder */
     p->storage = puddle_storage_open_files(cfg->data_dir, err, errlen);
     if (!p->storage) {
         puddle_profiles_close(p);
         return NULL;
     }
-    if (!puddle_path_exists(p->dir.c_str()) && make_folder(p, cfg, old_default, err, errlen) != 0) {
+    {
+        std::string was = p->data_dir + "/profiles";
+        if (was != p->dir && puddle_path_exists(was.c_str())) {
+            if (puddle_path_exists(p->dir.c_str())) {
+                puddle_log(PUDDLE_LOG_WARN, "%s is not read: profiles are kept in %s", was.c_str(), p->dir.c_str());
+            } else if (move_old_folder(was, p->dir, err, errlen) != 0) {
+                puddle_profiles_close(p);
+                return NULL;
+            } else {
+                puddle_log(PUDDLE_LOG_INFO, "profiles moved from %s to %s", was.c_str(), p->dir.c_str());
+            }
+        }
+    }
+    if (puddle_path_exists(p->dir.c_str())) {
+        if (cfg->nprofile_files)
+            puddle_log(PUDDLE_LOG_WARN, "the `profiles:` setting in puddle.yaml is no longer read: each profile is a file in %s",
+                       p->dir.c_str());
+    } else if (make_folder(p, cfg, old_default, err, errlen) != 0) {
         puddle_profiles_close(p);
         return NULL;
     }

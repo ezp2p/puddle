@@ -18,7 +18,7 @@ typedef struct {
     uint16_t port;
     char advertise[128];       /* host:port others should use to reach this Puddle; "" = work it out from address/port */
     char dir[PUDDLE_PATH_MAX]; /* directory of the config file; TLS material lives here */
-    char data_dir[PUDDLE_PATH_MAX]; /* chats, keys, profiles, pictures (docs/storage.md) */
+    char data_dir[PUDDLE_PATH_MAX]; /* chats, keys, pictures (docs/storage.md); profiles are beside the config */
     /* the `profiles:` setting, absolute or config-relative, resolved: where profiles lived before the data folder. Only read
      * once, to bring them into it (core/profile.h). */
     char profile_files[PUDDLE_MAX_PROFILE_FILES][PUDDLE_PATH_MAX];

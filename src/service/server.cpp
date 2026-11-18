@@ -279,7 +279,7 @@ puddle_server *puddle_server_create(const puddle_config *cfg, char *err, size_t 
     s->router.routes = puddle_all_routes(&s->router.count);
     {
         size_t np = puddle_profiles_ids(s->profiles, NULL, 0);
-        puddle_log(PUDDLE_LOG_INFO, "%zu profile%s in %s/profiles", np, np == 1 ? "" : "s", cfg->data_dir);
+        puddle_log(PUDDLE_LOG_INFO, "%zu profile%s in %s/profiles", np, np == 1 ? "" : "s", cfg->dir);
         /* a profile edited by hand while we were stopped: everyone shown it hears, as after an edit in the app */
         char edited[PUDDLE_MAX_PROFILES][PUDDLE_PROFILE_ID_MAX + 1];
         size_t ne = puddle_profiles_take_edited(s->profiles, edited, PUDDLE_MAX_PROFILES);
