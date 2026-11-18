@@ -365,6 +365,16 @@ static char *peer_body(puddle_identity *who, const char *who_id, const char *key
 }
 
 /* send `body` as `who` to `to`'s `path`; the HTTP status (or -1) */
+/* `n`'s sealing key, to seal to as its friends do (spec/09); good until the fourth call after */
+static const unsigned char *seal_key_of(node *n)
+{
+    static unsigned char keys[4][32];
+    static int at;
+    unsigned char *k = keys[at++ % 4];
+    puddle_identity_public(puddle_server_identity(n->srv), NULL, k, NULL);
+    return k;
+}
+
 static int send_as(node *to, puddle_identity *who, const char *path, const char *body, size_t len)
 {
     puddle_address at;
@@ -372,7 +382,8 @@ static int send_as(node *to, puddle_identity *who, const char *path, const char 
     snprintf(t, sizeof t, "127.0.0.1:%u", to->cfg.port);
     puddle_address_parse(t, &at);
     puddle_net_reply r;
-    puddle_net_request(&at, "POST", path, body, len, who, to->uid, NULL, &r);
+    puddle_net_opts so = { .seal_pub = seal_key_of(to) };
+    puddle_net_request(&at, "POST", path, body, len, who, to->uid, &so, &r);
     int st = r.result == PUDDLE_NET_OK ? r.status : -1;
     if (st == 403 && r.body && strstr(r.body, "no_stream")) st = 4030;
     puddle_net_reply_free(&r);
@@ -410,7 +421,7 @@ static const char *status_of(node *to, puddle_identity *who, const char *who_id)
     puddle_net_reply r;
     unsigned char pub[32];
     puddle_identity_public(puddle_server_identity(to->srv), pub, NULL, NULL);
-    puddle_net_opts o = { .peer_pub = pub };
+    puddle_net_opts o = { .peer_pub = pub, .seal_pub = seal_key_of(to) };
     puddle_net_request(&at, "POST", "/stream/v1/access/status", big, n, who, to->uid, &o, &r);
     snprintf(state, sizeof state, "error");
     status_signed = r.result == PUDDLE_NET_OK;
@@ -636,12 +647,14 @@ int main(void)
             snprintf(t, sizeof t, "127.0.0.1:%u", alice.cfg.port);
             puddle_address_parse(t, &at);
             snprintf(target, sizeof target, "/stream/v1/media?hash=%s", ah_work);
-            puddle_net_request(&at, "GET", target, NULL, 0, puddle_server_identity(bob.srv), alice.uid, NULL, &nr);
+            puddle_net_opts so = { .seal_pub = seal_key_of(&alice) };
+            puddle_net_request(&at, "GET", target, NULL, 0, puddle_server_identity(bob.srv), alice.uid, &so, &nr);
             CHECK(nr.result == PUDDLE_NET_OK && nr.status == 404);
             puddle_net_reply_free(&nr);
             snprintf(target, sizeof target, "/stream/v1/media?hash=%s", ah_main);
-            puddle_net_request(&at, "GET", target, NULL, 0, puddle_server_identity(bob.srv), alice.uid, NULL, &nr);
-            CHECK(nr.result == PUDDLE_NET_OK && nr.status == 200 && !strcmp(nr.content_type, "image/png") && nr.body_len == 2008 && nr.body_len == ah_main_size);
+            puddle_net_request(&at, "GET", target, NULL, 0, puddle_server_identity(bob.srv), alice.uid, &so, &nr);
+            CHECK(nr.result == PUDDLE_NET_OK && nr.status == 200 && nr.body_len == 2008 && nr.body_len == ah_main_size &&
+                  !memcmp(nr.body, "\x89PNG", 4)); /* sealed on the way, opened here */
             puddle_net_reply_free(&nr);
         }
     }
@@ -715,7 +728,8 @@ int main(void)
         puddle_address_parse(t, &at);
         puddle_identity *bid = NULL;
         (void)bid;
-        puddle_net_request(&at, "POST", "/stream/v1/close", "{}", 2, puddle_server_identity(carol.srv), alice.uid, NULL, &r);
+        puddle_net_opts so = { .seal_pub = seal_key_of(&alice) };
+        puddle_net_request(&at, "POST", "/stream/v1/close", "{}", 2, puddle_server_identity(carol.srv), alice.uid, &so, &r);
         CHECK(r.result == PUDDLE_NET_OK && r.status == 404);                                      /* Carol: a stranger to Alice's close */
         puddle_net_reply_free(&r);
     }
@@ -829,12 +843,13 @@ int main(void)
             snprintf(t, sizeof t, "127.0.0.1:%u", alice.cfg.port);
             CHECK(puddle_address_parse(t, &at) == 0);
             puddle_identity_public(puddle_server_identity(alice.srv), pub, NULL, NULL);
-            puddle_net_opts o = { .peer_pub = pub };
+            puddle_net_opts o = { .peer_pub = pub, .seal_pub = seal_key_of(&alice) };
             puddle_net_reply r;
-            puddle_net_request(&at, "GET", "/stream/v1/hello", NULL, 0, puddle_server_identity(bob.srv), alice.uid, &o, &r);
-            CHECK(r.result == PUDDLE_NET_OK && r.status == 204 && r.proof == PUDDLE_RECEIPT_OK);
+            const char *nothing = "/stream/v1/media?hash=0000000000000000000000000000000000000000000000000000000000000000";
+            puddle_net_request(&at, "GET", nothing, NULL, 0, puddle_server_identity(bob.srv), alice.uid, &o, &r);
+            CHECK(r.result == PUDDLE_NET_OK && r.status == 404 && r.proof == PUDDLE_RECEIPT_OK);   /* "no such picture", in her name */
             puddle_net_reply_free(&r);
-            puddle_net_request(&at, "GET", "/stream/v1/hello", NULL, 0, frank, alice.uid, &o, &r);
+            puddle_net_request(&at, "GET", nothing, NULL, 0, frank, alice.uid, &o, &r);
             CHECK(r.result == PUDDLE_NET_NOT_PROVEN && r.status == 404 && r.proof == PUDDLE_RECEIPT_MISSING);
             puddle_net_reply_free(&r);
         }
@@ -1111,6 +1126,7 @@ int main(void)
             puddle_net_opts o;
             memset(&o, 0, sizeof o);
             o.max_body = 2 << 20;
+            o.seal_pub = seal_key_of(&hal);
             struct { node *who; const char *chat; int want; size_t len; } asks[] = {
                 { &ivy, dm, 200, 3 * 32 },   /* in the chat: the chunk hashes */
                 { &jo, dm, 404, 0 },         /* a friend of Hal's, but not in that chat */

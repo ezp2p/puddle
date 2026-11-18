@@ -448,7 +448,8 @@ int main(void)
     }
     ts_set(&srv, TS_NORMAL, 200, "{}", 0);
 
-    /* ---- proving who answers (docs/streams.md): for a peer whose key we hold, only their signature counts ---- */
+    /* ---- proving who answers (spec/02): for a peer whose key we hold, only their signature counts. (Sealing, which keeps what
+     * goes private whoever answers, is the e2e tests' to check: these test servers answer plainly, so nothing here is sealed.) */
     {
         char bdir[700], pz[PUDDLE_PHRASE_LEN + 1];
         snprintf(bdir, sizeof bdir, "%s/bob", root);
@@ -469,13 +470,13 @@ int main(void)
         ts_set(&srv, TS_NORMAL, 200, "{}", 0);
         srv.signer = NULL;
 
-        /* the squatter answers, but can't sign as Bob: the message is never handed over, and waits, saying why */
+        /* the squatter answers, but can't sign as Bob: nothing counts as delivered, and it waits, saying why */
         ndone = 0;
-        int req0 = srv.requests, hel0 = srv.hellos;
+        int req0 = srv.requests;
         CHECK(puddle_outbox_enqueue(ob, bob_id, "msg1", "/stream/v1/events", "{\"n\":1}", 7, err, sizeof err) == 0);
         CHECK(puddle_outbox_enqueue(ob, bob_id, "msg2", "/stream/v1/events", "{\"n\":2}", 7, err, sizeof err) == 0);
         puddle_outbox_poll(ob);
-        CHECK(srv.hellos == hel0 + 1 && srv.requests == req0 + 1);                                 /* the handshake, and nothing after it */
+        CHECK(srv.hellos == 0 && srv.requests == req0 + 1);                                        /* no handshake: the first, and nothing after it */
         CHECK(ndone == 0 && count(ob, PUDDLE_OB_QUEUED) == 2 && count(ob, PUDDLE_OB_FAILED) == 0);
         {
             puddle_ob_item i0, i1;
@@ -494,46 +495,28 @@ int main(void)
             CHECK(get_item(ob, 0, &i0) && strstr(i0.reason, "didn't recognise us") && i0.state == PUDDLE_OB_QUEUED);
             free(i0.body);
         }
-        /* someone in the middle passing on Bob's signed answers: Bob signs for his own certificate, we see theirs */
-        ts_set(&srv, TS_NORMAL, 200, "{}", 0);
-        srv.signer = bob;
-        snprintf(srv.sign_fp, sizeof srv.sign_fp, "%s", real.fingerprint);
-        clock_now += 6 * MIN;
-        req0 = srv.requests;
-        puddle_outbox_poll(ob);
-        CHECK(srv.requests == req0 + 1 && ndone == 0);                                            /* still only ever the handshake */
-        {
-            puddle_ob_item i0;
-            CHECK(get_item(ob, 0, &i0) && strstr(i0.reason, "intercepted"));
-            free(i0.body);
-        }
-        srv.signer = NULL;
-        srv.sign_fp[0] = '\0';
-
         /* he tells us where he is now: the old address and the new are both tried, and the real one answers */
         snprintf(peers[pb].addr[0], 64, "127.0.0.1:%u", real.port);
         snprintf(peers[pb].addr[1], 64, "127.0.0.1:%u", srv.port);
         peers[pb].naddr = 2;
         CHECK(puddle_outbox_retry_now(ob, bob_id) == 2);
         puddle_outbox_poll(ob);
-        CHECK(real.hellos == 1 && real.requests == 3);                                            /* one handshake, then both messages */
+        CHECK(real.hellos == 0 && real.requests == 2);                                            /* both messages, and nothing else */
         CHECK(ndone == 2 && done_log[0].outcome == PUDDLE_OB_DELIVERED && done_log[1].outcome == PUDDLE_OB_DELIVERED);
         CHECK(count(ob, PUDDLE_OB_QUEUED) == 0);
-        /* a proven certificate is good for a while: the next message needs no handshake */
+        /* one request for each message, whenever it is */
         CHECK(puddle_outbox_enqueue(ob, bob_id, "msg3", "/stream/v1/events", "{\"n\":3}", 7, err, sizeof err) == 0);
         puddle_outbox_poll(ob);
-        CHECK(real.hellos == 1 && real.requests == 4 && ndone == 3);
-        /* ...but not for ever */
+        CHECK(real.requests == 3 && ndone == 3);
         clock_now += 11 * MIN;
         CHECK(puddle_outbox_enqueue(ob, bob_id, "msg4", "/stream/v1/events", "{\"n\":4}", 7, err, sizeof err) == 0);
         puddle_outbox_poll(ob);
-        CHECK(real.hellos == 2 && real.requests == 6 && ndone == 4);
-        /* a route that sets a stream up (they may not know our key yet) has no handshake: its receipt is the proof */
+        CHECK(real.requests == 4 && ndone == 4);
         CHECK(puddle_outbox_enqueue(ob, bob_id, "result", "/stream/v1/access/result", "{}", 2, err, sizeof err) == 0);
         clock_now += 11 * MIN;
         puddle_outbox_poll(ob);
-        CHECK(real.hellos == 2 && real.requests == 7 && ndone == 5 && done_log[4].outcome == PUDDLE_OB_DELIVERED);
-        /* Bob's certificate changes (he made a new one): nothing goes to it until it is proven, then all is well, nobody asked */
+        CHECK(real.hellos == 0 && real.requests == 5 && ndone == 5 && done_log[4].outcome == PUDDLE_OB_DELIVERED);
+        /* Bob's certificate changes (he made a new one): nothing notices, since nothing depends on it */
         {
             int port = (int)real.port;
             ts_stop(&real);
@@ -544,7 +527,7 @@ int main(void)
             CHECK(puddle_outbox_enqueue(ob, bob_id, "msg5", "/stream/v1/events", "{\"n\":5}", 7, err, sizeof err) == 0);
             CHECK(puddle_outbox_enqueue(ob, bob_id, "msg6", "/stream/v1/events", "{\"n\":6}", 7, err, sizeof err) == 0);
             puddle_outbox_poll(ob);
-            CHECK(real.hellos == 1 && real.requests == 3 && ndone == 7 && count(ob, PUDDLE_OB_QUEUED) == 0);
+            CHECK(real.hellos == 0 && real.requests == 2 && ndone == 7 && count(ob, PUDDLE_OB_QUEUED) == 0);
         }
         /* Bob refuses, in his own name: that is an answer, and it is final */
         ts_set(&real, TS_NORMAL, 403, "{\"error\":\"no_stream\"}", 0);

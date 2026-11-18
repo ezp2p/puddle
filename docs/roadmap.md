@@ -604,15 +604,18 @@ activation or push to talk, no cap on people or voices, cameras too, and the Pon
 Receipts name the TLS certificate (phase 6), because TLS is the only thing keeping bodies private. That breaks behind a
 reverse proxy, and on every Let's Encrypt renewal. The owner decided nothing may depend on a certificate: bodies are
 sealed to keys instead, and receipts stop naming one. The design is in the protocol repository, `spec/09-sealing.md`;
-its "Open decisions" (a bare address without a key, v1 in place, hiding routes, old peers) **need you** before 10.2.
+its open decisions were taken as recommended (a bare address may still send its one `access` request unsealed; v1
+changed in place; routes stay visible; no unsealed fallback).
 
-- [ ] **10.1 Sealing.** HPKE (RFC 9180, X25519 / HKDF-SHA256 / ChaCha20-Poly1305) over OpenSSL 3.0's primitives, and
-  sealed answer records, checked against RFC 9180's vectors and the protocol's `sealing.json`.
-- [ ] **10.2 Streams.** Every request and answer sealed both ways, receipts v2 without `fp`, links carrying `k`, and
-  `hello`, the proven-certificate cache and the "intercepted" outcome gone.
-- [ ] **10.3 Phones.** Pairing links carry `k`; device requests sealed; `status` no longer a handshake.
-- [ ] **10.4 Ponds.** The Pond's sealing key and sealed routes (in the pond repository), and Puddle's Pond client:
-  no pinning and no certificate proving. A Pond then runs behind any proxy, on any certificate.
+- [x] **10.1 Sealing.** HPKE (RFC 9180, X25519 / HKDF-SHA256 / ChaCha20-Poly1305) over OpenSSL 3.0's primitives, and
+  sealed answer records (`base/seal.h`), checked against RFC 9180's vectors (`seal_test`).
+- [x] **10.2 Streams.** Every request and answer sealed both ways, receipts v2 without `fp`, links carrying `k`, and
+  `hello`, the proven-certificate cache and the "intercepted" outcome gone. Tests drive the router sealed
+  (`tests/sealing.h`); the e2e tests run it between real Puddles.
+- [x] **10.3 Phones.** Pairing links carry `k`; device requests sealed; `status` no longer a handshake.
+- [x] **10.4 Ponds.** The Pond's sealing key and sealed routes (in the pond repository), and Puddle's Pond client:
+  no pinning and no certificate proving. A Pond then runs behind any proxy, on any certificate. The pond repository's
+  e2e test checks it with real Puddles, an impostor at the Pond's address and a new certificate included.
 
 ## Later, not planned in detail
 

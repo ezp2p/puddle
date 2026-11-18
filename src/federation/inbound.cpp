@@ -2,6 +2,7 @@
 
 #include "federation/access.h"
 #include "federation/flow.h"
+#include "base/hash.h"
 #include "base/log.h"
 #include "federation/profiles_api.h"
 #include "core/people.h"
@@ -91,6 +92,25 @@ static int result_post(const puddle_call *c, puddle_jw *w)
     int scoped = puddle_json_member(b, c->body_len, "scoped", &sv) == 0 && sv.len == 4 && !memcmp(sv.p, "true", 4);
     if (!scoped && valid_bool && !strcmp(p.id, c->sender) && puddle_json_member(b, c->body_len, "ticket", &tv) == 0 &&
         puddle_json_string(tv, ticket, sizeof ticket) == 0 && ticket[0]) {
+        /* a link that gave a sealing key named whose Puddle it is: an answer with another key is someone else's */
+        puddle_stream asked;
+        if (puddle_streams_find_ticket(c->ctx->streams, ticket, &asked) == 0) {
+            int other = 0;
+            if (asked.link_key[0]) {
+                puddle_chain_head head;
+                char herr[160], have[65];
+                other = puddle_chain_verify(p.chain, p.chain_len, p.id, &head, herr, sizeof herr) != 0;
+                if (!other) {
+                    puddle_hex_encode(head.enc_pub, 32, have);
+                    other = strcmp(have, asked.link_key) != 0;
+                }
+            }
+            puddle_stream_free(&asked);
+            if (other) {
+                puddle_log(PUDDLE_LOG_WARN, "an answer to our request to an address came from a key other than its link's; ignored");
+                return 202;
+            }
+        }
         int ar = puddle_flow_adopt(c->ctx, ticket, p.id);
         if (ar == 0) {
             puddle_log(PUDDLE_LOG_INFO, "%.12s… answered our request", p.id);
@@ -186,19 +206,7 @@ static int close_post(const puddle_call *c, puddle_jw *w)
     return puddle_fail(w, 500, "internal");
 }
 
-/* ---- a peer about to send asks us to prove who we are ---- */
-
-/* Nothing to do: the router signs the answer (a receipt naming our certificate), and that is the whole point. Only a peer
- * whose key we hold gets here; anyone else has had the usual 404. */
-static int hello_get(const puddle_call *c, puddle_jw *w)
-{
-    (void)c;
-    (void)w;
-    return 204;
-}
-
 const puddle_route puddle_inbound_routes[] = {
-    { "GET",  "/stream/v1/hello",         PUDDLE_AUTH_PEER,  0, hello_get, NULL },
     { "POST", "/stream/v1/access/result", PUDDLE_AUTH_CHAIN, PUDDLE_ACCESS_BODY_MAX, result_post, result_chain_key },
     { "POST", "/stream/v1/access/status", PUDDLE_AUTH_CHAIN_ANON, PUDDLE_ACCESS_BODY_MAX, status_post, puddle_access_chain_key },
     { "POST", "/stream/v1/close",         PUDDLE_AUTH_PEER,  4096, close_post, NULL },

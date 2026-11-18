@@ -70,7 +70,11 @@ static int start_pairing(const puddle_call *c, puddle_jw *w)
     if (puddle_devices_new_secret(c->ctx->devices, puddle_call_now_ms(c), secret, &until) != 0)
         return puddle_fail(w, 500, "internal");
     puddle_identity_id(c->ctx->identity, me);
-    snprintf(link, sizeof link, "puddle-pair://%s?id=%s&secret=%s", where, me, secret);
+    unsigned char enc[32];
+    char k[PUDDLE_LINK_KEY_LEN + 1];
+    puddle_identity_public(c->ctx->identity, NULL, enc, NULL);
+    puddle_base32_encode(enc, 32, k, sizeof k); /* what the pairing request is sealed to (spec/09, "First contact") */
+    snprintf(link, sizeof link, "puddle-pair://%s?id=%s&k=%s&secret=%s", where, me, k, secret);
     puddle_jw_object(w);
     puddle_jw_str(w, "link", link);
     puddle_jw_num(w, "expires_at", until);

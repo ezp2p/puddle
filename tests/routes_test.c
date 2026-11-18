@@ -106,7 +106,8 @@ int main(void)
     CHECK(member(&r, "id", v, sizeof v) == 0 && strcmp(v, uid) == 0);
     char want[200];
     snprintf(want, sizeof want, "127.0.0.1:8443");
-    CHECK(member(&r, "link", v, sizeof v) == 0 && strcmp(v, want) == 0);
+    CHECK(member(&r, "link", v, sizeof v) == 0 && !strncmp(v, want, strlen(want)) && !strncmp(v + strlen(want), "?k=", 3) &&
+              strlen(v) == strlen(want) + 3 + 52); /* and our sealing key (spec/09) */
     CHECK(member(&r, "seq", v, sizeof v) == 0 && strcmp(v, "0") == 0);
     char kid0[300];
     CHECK(member(&r, "key_id", kid0, sizeof kid0) == 0 && strlen(kid0) == 64);
@@ -120,12 +121,14 @@ int main(void)
         snprintf(c2.advertise, sizeof c2.advertise, "home.example.org:9000");
         r = call(&R2, "GET", "/api/v1/identity", NULL, 1);
         snprintf(want, sizeof want, "home.example.org:9000");
-        CHECK(member(&r, "link", v, sizeof v) == 0 && strcmp(v, want) == 0);
+        CHECK(member(&r, "link", v, sizeof v) == 0 && !strncmp(v, want, strlen(want)) && !strncmp(v + strlen(want), "?k=", 3) &&
+              strlen(v) == strlen(want) + 3 + 52); /* and our sealing key (spec/09) */
         c2.advertise[0] = 0;
         snprintf(c2.address, sizeof c2.address, "::1");
         r = call(&R2, "GET", "/api/v1/identity", NULL, 1);
         snprintf(want, sizeof want, "[::1]:8443");
-        CHECK(member(&r, "link", v, sizeof v) == 0 && strcmp(v, want) == 0);
+        CHECK(member(&r, "link", v, sizeof v) == 0 && !strncmp(v, want, strlen(want)) && !strncmp(v + strlen(want), "?k=", 3) &&
+              strlen(v) == strlen(want) + 3 + 52); /* and our sealing key (spec/09) */
         snprintf(c2.address, sizeof c2.address, "::");
         r = call(&R2, "GET", "/api/v1/identity", NULL, 1);
         CHECK(member(&r, "link", v, sizeof v) == 0 && strcmp(v, "null") == 0); /* every interface says nothing about our address */
@@ -134,7 +137,7 @@ int main(void)
         CHECK(member(&r, "link", v, sizeof v) == 0 && strcmp(v, "null") == 0);
         snprintf(c2.advertise, sizeof c2.advertise, "[2001:db8::1]:8443");
         r = call(&R2, "GET", "/api/v1/identity", NULL, 1);
-        CHECK(strstr(body_of(&r), "\"link\":\"[2001:db8::1]:8443\""));
+        CHECK(strstr(body_of(&r), "\"link\":\"[2001:db8::1]:8443?k="));
     }
 
     /* ---- GET /api/v1/users/me ---- */

@@ -8,6 +8,8 @@
 #include "federation/courier.h"
 
 #include <ftw.h>
+#include "sealing.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -70,7 +72,7 @@ static reply send_raw(const char *path, const char *body, const char *sig)
     memcpy(copy, body, bl + 1);
     reply rp;
     memset(&rp, 0, sizeof rp);
-    rp.n = puddle_router_handle(&R, &req, 0, copy, bl, rp.out, sizeof rp.out, &rp.status);
+    rp.n = st_handle(&R, &req, 0, copy, bl, rp.out, sizeof rp.out, &rp.status);
     free(copy);
     return rp;
 }
@@ -104,7 +106,7 @@ static char *peer_body(person *who, const char *as_id, const char *key, const ch
 static reply signed_for(person *who, const char *path, const char *body, const char *recipient)
 {
     char sig[800];
-    if (puddle_reqsig_sign(who->id, "POST", path, body, strlen(body), recipient, clock_now, sig, sizeof sig) != 0) exit(2);
+    if (st_sign(who->id, "POST", path, body, strlen(body), recipient, clock_now, sig, sizeof sig) != 0) exit(2);
     return send_raw(path, body, sig);
 }
 static reply signed_post(person *who, const char *path, const char *body) { return signed_for(who, path, body, bob.uid); }
@@ -192,6 +194,7 @@ int main(void)
     if (!(profiles = puddle_profiles_open(&cfg, old_default, err, sizeof err))) { fprintf(stderr, "profiles: %s\n", err); return 2; }
     ctx = (puddle_ctx){ .courier = &puddle_federation_courier, .config = &cfg, .profiles = profiles, .identity = bob.id, .streams = ss, .people = ps, .replay = puddle_replay_new(4096), .now_ms = now_cb,
                         .peer_key = puddle_streams_peer_key, .peer_key_user = ss };
+    st_use(bob.id);
     R = (puddle_router){ .ctx = &ctx };
     R.routes = puddle_all_routes(&R.count);
     reply r;

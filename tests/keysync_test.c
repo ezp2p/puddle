@@ -11,6 +11,8 @@
 #include "platform/fsutil.h"
 
 #include <ftw.h>
+#include "sealing.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -83,13 +85,13 @@ static reply post_as(person *from, const char *path, const char *body, int sign)
     strcpy(req.method, "POST");
     snprintf(req.path, sizeof req.path, "%s", path);
     snprintf(req.target, sizeof req.target, "%s", path);
-    if (sign && puddle_reqsig_sign(from->id, "POST", path, body, strlen(body), me.uid, clock_now, req.signature, sizeof req.signature) != 0) exit(2);
+    if (sign && st_sign(from->id, "POST", path, body, strlen(body), me.uid, clock_now, req.signature, sizeof req.signature) != 0) exit(2);
     size_t bl = strlen(body);
     req.content_length = bl;
     unsigned char *copy = malloc(bl + 1);
     memcpy(copy, body, bl + 1);
     memset(&rp, 0, sizeof rp);
-    rp.n = puddle_router_handle(&R, &req, 0, copy, bl, rp.out, sizeof rp.out - 1, &rp.status);
+    rp.n = st_handle(&R, &req, 0, copy, bl, rp.out, sizeof rp.out - 1, &rp.status);
     free(copy);
     clock_now += 10;
     return rp;
@@ -249,7 +251,7 @@ int main(void)
     ob = puddle_outbox_open(data, &hooks, err, sizeof err);
     ctx = (puddle_ctx){ .courier = &puddle_federation_courier, .config = &cfg, .identity = me.id, .streams = ss, .outbox = ob, .replay = puddle_replay_new(4096), .now_ms = now_cb,
                         .peer_key = puddle_streams_peer_key, .peer_key_user = ss };
-    snprintf(ctx.own_tls_fp, sizeof ctx.own_tls_fp, "%s", "1111111111111111111111111111111111111111111111111111111111111111");
+    st_use(me.id);
     R = (puddle_router){ .ctx = &ctx };
     R.routes = puddle_all_routes(&R.count);
     reply r;
@@ -264,7 +266,7 @@ int main(void)
     CHECK(!key_ok(&alice));                                                                     /* her new key is not one we hold */
     b = chain_body(v1);
     r = post_as(&alice, "/stream/v1/identity", b, 1);
-    CHECK(r.status == 202 && strstr(r.out, "Content-Length: 0\r\n") && chain_is(&alice, v1) && key_ok(&alice));
+    CHECK(r.status == 202 && st_raw_len == 16 && chain_is(&alice, v1) && key_ok(&alice)); /* nothing, sealed */
     r = post_as(&alice, "/stream/v1/identity", b, 1);
     CHECK(r.status == 202 && chain_is(&alice, v1));                                              /* again: nothing changes */
     free(b);
@@ -272,14 +274,14 @@ int main(void)
     {
         char sig[800];
         /* ...which she can no longer sign with: signed with the new key, naming the old chain's key, it fails to authenticate */
-        puddle_reqsig_sign(alice.id, "POST", "/stream/v1/identity", b, strlen(b), me.uid, clock_now, sig, sizeof sig);
+        st_sign(alice.id, "POST", "/stream/v1/identity", b, strlen(b), me.uid, clock_now, sig, sizeof sig);
         puddle_request req;
         memset(&req, 0, sizeof req);
         strcpy(req.method, "POST"); strcpy(req.path, "/stream/v1/identity"); strcpy(req.target, "/stream/v1/identity");
         snprintf(req.signature, sizeof req.signature, "%s", sig);
         req.content_length = strlen(b);
         char out[4000]; int st;
-        puddle_router_handle(&R, &req, 0, (unsigned char *)b, strlen(b), out, sizeof out, &st);
+        st_handle(&R, &req, 0, (unsigned char *)b, strlen(b), out, sizeof out, &st);
         CHECK(st == 404 && chain_is(&alice, v1));
     }
     free(b);
@@ -722,8 +724,7 @@ int main(void)
             }
             free(ab);
             CHECK(puddle_sync_resume(&ctx) == 0);                                                /* told, or waiting to be: not twice */
-            /* a new certificate is no news: it proves itself on every answer */
-            snprintf(ctx.own_tls_fp, sizeof ctx.own_tls_fp, "%s", "4444444444444444444444444444444444444444444444444444444444444444");
+            /* a new certificate is no news: nothing depends on one */
             CHECK(puddle_sync_resume(&ctx) == 0 && queued(alice.uid, "address") == 1);
             /* a new address is: the waiting record is not doubled... */
             snprintf(cfg.advertise, sizeof cfg.advertise, "198.51.100.78:9443");

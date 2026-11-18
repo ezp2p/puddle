@@ -27,6 +27,9 @@ int main()
 extern "C" {
 #include "base/encoding.h"
 #include "base/hash.h"
+#include "base/seal.h"
+#include "core/identity.h"
+#include "http/reqsig.h"
 #include "base/json.h"
 #include "core/streams.h"
 #include "http/http.h"
@@ -34,6 +37,7 @@ extern "C" {
 #include "http/tls.h"
 }
 
+#include <openssl/evp.h>
 #include <openssl/pem.h>
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
@@ -58,9 +62,61 @@ static std::string id_of(const char *seed)
     puddle_base32_encode(h, 32, out, sizeof out);
     return out;
 }
-static const std::string BEN_ID = id_of("ben"), POND_ID_S = id_of("pond");
+/* The stand-in Pond's keys, as a Pond's are made (its docs/design.md, "Who a Pond is"; the protocol's spec/09): an Ed25519 key
+ * whose SHA-256 is its id, and a sealing key derived from the same seed. */
+struct PondKeys {
+    unsigned char seed[32], pub[32], seal_sk[32], seal_pub[32];
+    std::string id;
+    EVP_PKEY *sk = nullptr;
+    PondKeys()
+    {
+        for (int i = 0; i < 32; i++)
+            seed[i] = (unsigned char)(0x50 + i);
+        sk = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, nullptr, seed, 32);
+        size_t n = 32;
+        EVP_PKEY_get_raw_public_key(sk, pub, &n);
+        unsigned char h[32];
+        char out[PUDDLE_USER_ID_LEN + 8];
+        puddle_sha256(pub, 32, h);
+        puddle_base32_encode(h, 32, out, sizeof out);
+        id = out;
+        puddle_hkdf_sha256(seed, 32, "", "pond-seal-v1", seal_sk, 32);
+        puddle_x25519_public(seal_sk, seal_pub);
+    }
+    std::string hex_of(const unsigned char *k) const
+    {
+        char h[65];
+        puddle_hex_encode(k, 32, h);
+        return h;
+    }
+    std::string link_key() const
+    {
+        char k[60];
+        puddle_base32_encode(seal_pub, 32, k, sizeof k);
+        return k;
+    }
+    /* X-Puddle-Receipt: v2, as a Pond signs it */
+    std::string receipt(const std::string &nonce, int status, const unsigned char *body, size_t len) const
+    {
+        char hash[65];
+        puddle_sha256_hex(body, len, hash);
+        std::string canon = "puddle-receipt-v2\n" + id + "\n" + nonce + "\n" + std::to_string(status) + "\n" + hash;
+        unsigned char sig[64];
+        size_t sl = 64;
+        EVP_MD_CTX *c = EVP_MD_CTX_new();
+        EVP_DigestSignInit(c, nullptr, nullptr, nullptr, sk);
+        EVP_DigestSign(c, sig, &sl, (const unsigned char *)canon.data(), canon.size());
+        EVP_MD_CTX_free(c);
+        char kid[65], s64[100];
+        puddle_key_id(pub, kid);
+        puddle_base64_encode(sig, 64, s64, sizeof s64);
+        return "v2 id=" + id + "; kid=" + kid + "; sig=" + s64;
+    }
+};
+static const PondKeys POND_KEYS;
+static const std::string BEN_ID = id_of("ben");
 static const char *BEN = BEN_ID.c_str();          /* a member already in the voice channel, slot 1 */
-static const char *POND_ID = POND_ID_S.c_str();
+static const char *POND_ID = POND_KEYS.id.c_str();
 
 static std::string field(const std::string &json, const char *key)
 {
@@ -120,7 +176,8 @@ struct FakePond {
 
     std::string info()
     {
-        return "{\"protocol\":4,\"features\":[\"files\",\"roles\",\"voice\"],\"pond\":{\"id\":\"" + std::string(POND_ID) +
+        return "{\"protocol\":5,\"features\":[\"files\",\"roles\",\"receipts\",\"sealed\",\"voice\"],\"pond\":{\"id\":\"" + std::string(POND_ID) +
+               "\",\"key\":\"" + POND_KEYS.hex_of(POND_KEYS.pub) + "\",\"seal_key\":\"" + POND_KEYS.hex_of(POND_KEYS.seal_pub) +
                "\",\"name\":\"Voice Pond\",\"description\":\"\",\"files\":{\"max_size\":0,\"chunk_size\":1048576,\"per_message\":10}},"
                "\"me\":{\"id\":\"" + me + "\",\"profile\":null,\"joined\":1,\"role\":\"operator\"},\"offer\":null,"
                "\"channels\":[{\"id\":1,\"name\":\"general\",\"topic\":\"\",\"position\":0,\"kind\":\"text\"},"
@@ -341,11 +398,41 @@ struct FakePond {
 
     static int owner_check(void *, const char *) { return 0; }
     static size_t limit(void *, const puddle_request *, int) { return 200000; }
+    /* As a Pond answers (spec/09): a request sealed to its key is opened, and the answer sealed back and signed for. Anything
+     * else is the plain 404 a stranger gets. */
     static size_t route(void *user, const puddle_request *r, int, const unsigned char *body, size_t n, char *out, size_t cap, int *status)
     {
         auto *self = static_cast<FakePond *>(user);
-        std::string reply = self->answer(r->method, r->target, std::string((const char *)body, n), r->signature, status);
-        return puddle_http_response(*status, NULL, reply.data(), reply.size(), out, cap);
+        char kid[65];
+        unsigned char enc[32];
+        puddle_reqsig claimed;
+        puddle_hpke hc;
+        const bool join = !strcmp(r->target, "/pond/v1/join");
+        char info[200], aad[1200];
+        size_t il = 0, al = puddle_seal_aad(r->method, r->target, aad, sizeof aad);
+        std::string plain(n >= 16 ? n - 16 : 0, '\0');
+        unsigned char akey[32];
+        if (puddle_seal_header_parse(r->seal, kid, enc) != 0 || puddle_reqsig_parse(r->signature, &claimed) != 0 ||
+            !(il = puddle_seal_info(claimed.id, join ? "*" : POND_ID, claimed.nonce, info, sizeof info)) ||
+            puddle_hpke_receiver(enc, POND_KEYS.seal_sk, info, il, &hc) != 0 ||
+            (n && puddle_hpke_open(&hc, aad, al, body, n, (unsigned char *)plain.data()) != 0) || puddle_seal_answer_key(&hc, akey) != 0) {
+            *status = 404;
+            return puddle_http_error(404, out, cap);
+        }
+        std::string reply = self->answer(r->method, r->target, plain, r->signature, status);
+        std::string hdr;
+        if (*status == 204) {
+            hdr = "X-Puddle-Receipt: " + POND_KEYS.receipt(claimed.nonce, 204, nullptr, 0) + "\r\n";
+            return puddle_http_response(204, hdr.c_str(), "", 0, out, cap);
+        }
+        std::string sealed(puddle_seal_answer_len(reply.size()), '\0');
+        puddle_seal_answer(akey, *status, reply.data(), reply.size(), (unsigned char *)sealed.data());
+        hdr = "X-Puddle-Receipt: " + POND_KEYS.receipt(claimed.nonce, *status, (const unsigned char *)sealed.data(), sealed.size()) + "\r\n";
+        size_t hl = puddle_http_head(*status, PUDDLE_SEALED_TYPE, hdr.c_str(), sealed.size(), out, cap);
+        if (!hl || hl + sealed.size() > cap)
+            return puddle_http_error(500, out, cap);
+        memcpy(out + hl, sealed.data(), sealed.size());
+        return hl + sealed.size();
     }
     static int io_read(void *io, void *buf, size_t cap)
     {
@@ -518,7 +605,7 @@ int main(int argc, char **argv)
     ponds->start();
 
     /* ---- joining the Pond, as the window does; its voice channel and who is in it ---- */
-    ponds->join(QString("pond://127.0.0.1:%1?invite=aaaaaaaaaaaaaaaaaaaaaaaaaa").arg(pond.port), "main");
+    ponds->join(QString("pond://127.0.0.1:%1?invite=aaaaaaaaaaaaaaaaaaaaaaaaaa&k=%2").arg(pond.port).arg(QString::fromStdString(POND_KEYS.link_key())), "main");
     CHECK(until([&] { return static_cast<JsonListModel *>(ponds->list())->rowCount() == 1; }));
     ponds->open(POND_ID);
     auto *channels = static_cast<JsonListModel *>(ponds->channels());

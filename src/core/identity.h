@@ -14,6 +14,7 @@
  *   chain.jsonl  the signed records, one per line */
 
 #include "core/phrase.h"
+#include "base/seal.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -99,6 +100,11 @@ void puddle_identity_id(puddle_identity *id, char out[PUDDLE_USER_ID_LEN + 1]);
 /* Current public keys and how many times they have rolled (0 = never). Any pointer may be NULL. */
 void puddle_identity_public(puddle_identity *id, unsigned char sign_pub[32], unsigned char enc_pub[32],
                             uint64_t *seq);
+
+/* A request sealed to us (spec/09-sealing.md): the HPKE receiver context for `enc`, opened with the current encryption key.
+ * 0 or -1. puddle_identity_seal_kid says which key that is: hex SHA-256 of its public half. */
+int puddle_identity_open_seal(puddle_identity *id, const unsigned char enc[32], const void *info, size_t info_len, puddle_hpke *ctx);
+void puddle_identity_seal_kid(puddle_identity *id, char out[65]);
 
 /* Ed25519 signature (64 bytes) by the current signing key. 0 or -1. */
 int puddle_identity_sign(puddle_identity *id, const void *data, size_t len, unsigned char sig[64]);

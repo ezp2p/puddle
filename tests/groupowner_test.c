@@ -13,6 +13,8 @@
 #include "events/group_events.h"
 
 #include <ftw.h>
+#include "sealing.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -82,7 +84,7 @@ static reply *call_m(const char *method, const char *path, const char *body, con
     unsigned char *copy = malloc(bl + 1);
     memcpy(copy, body, bl + 1);
     memset(&rp, 0, sizeof rp);
-    rp.n = puddle_router_handle(&R, &req, owner, copy, bl, rp.out, sizeof rp.out - 1, &rp.status);
+    rp.n = st_handle(&R, &req, owner, copy, bl, rp.out, sizeof rp.out - 1, &rp.status);
     free(copy);
     return &rp;
 }
@@ -91,7 +93,7 @@ static const char *body_of(const reply *r) { const char *b = strstr(r->out, "\r\
 static reply *post_as(person *from, const char *path, const char *body)
 {
     char sig[800];
-    if (puddle_reqsig_sign(from->id, "POST", path, body, strlen(body), me.uid, clock_now, sig, sizeof sig) != 0) exit(2);
+    if (st_sign(from->id, "POST", path, body, strlen(body), me.uid, clock_now, sig, sizeof sig) != 0) exit(2);
     return call(path, body, sig);
 }
 
@@ -187,6 +189,7 @@ int main(void)
     ob = puddle_outbox_open(data, &hooks, err, sizeof err);
     ctx = (puddle_ctx){ .courier = &puddle_federation_courier, .config = &cfg, .identity = me.id, .store = store, .streams = ss, .groups = gs, .outbox = ob, .replay = puddle_replay_new(4096), .now_ms = now_cb,
                         .peer_key = puddle_streams_peer_key, .peer_key_user = ss };
+    st_use(me.id);
     R = (puddle_router){ .ctx = &ctx };
     R.routes = puddle_all_routes(&R.count);
     set_peer(&alice, PUDDLE_STREAM_ACTIVE);

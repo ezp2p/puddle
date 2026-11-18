@@ -45,10 +45,8 @@ typedef struct {
     char reply[256];
     int delay_ms;
     int first_n, first_status; /* the first `first_n` requests are answered with `first_status` instead */
-    /* receipts (docs/streams.md, "Proving who answers"): with `signer` set, every answer is signed for as that identity, over
-     * `sign_fp` if it is set (a Puddle somewhere else, its answer passed on by someone in the middle) or our own certificate */
+    /* receipts (docs/streams.md, "Proving who answers"): with `signer` set, every answer is signed for as that identity */
     puddle_identity *signer;
-    char sign_fp[65];
     int sign_status_off;       /* sign for a status other than the one sent (a receipt that doesn't cover this answer) */
     /* what it saw */
     int connections, requests, hellos;
@@ -84,8 +82,7 @@ static size_t ts_route(void *u, const puddle_request *r, int o, const unsigned c
     puddle_reqsig rs;
     if (s->signer && puddle_reqsig_parse(r->signature, &rs) == 0) {
         char rv[PUDDLE_RECEIPT_MAX];
-        if (puddle_receipt_sign(s->signer, rs.nonce, st + s->sign_status_off, reply, strlen(reply), s->sign_fp[0] ? s->sign_fp : s->fingerprint,
-                                rv, sizeof rv) == 0)
+        if (puddle_receipt_sign(s->signer, rs.nonce, st + s->sign_status_off, reply, strlen(reply), rv, sizeof rv) == 0)
             snprintf(receipt, sizeof receipt, "X-Puddle-Receipt: %s\r\n", rv);
     }
     pthread_mutex_unlock(&s->mu);

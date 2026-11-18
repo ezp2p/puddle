@@ -154,10 +154,10 @@ someone else's hands, roll the keys straight afterwards.
 
 ## Transport
 
-TLS stays self-signed and only provides confidentiality on the wire. Puddles authenticate each other
-by signatures, not by certificate, in both directions: requests are signed by the sender, and answers carry a
-receipt signed by the responder over the certificate it used for that connection, so nothing is pinned and a
-certificate may change at any time (`streams.md`, "Proving who answers").
+TLS only carries bytes (the protocol's spec/09): any certificate will do, a reverse proxy's included, changed whenever.
+Puddles authenticate each other by signatures in both directions (requests are signed by the sender, answers carry the
+responder's receipt), and what they say is sealed to the other end's encryption key, so nobody in between reads it
+(`streams.md`, "Proving who answers").
 
 ## Signing
 
@@ -191,9 +191,9 @@ or relay role can come later with self-hosted servers.
 
 ## Encryption (decided for now: one key per Puddle)
 
-> **Superseded for the wire** by the protocol's `spec/09-sealing.md` (roadmap phase 10): every request and answer is
-> sealed to the other end's key, which covers message bodies between Puddles and takes the TLS certificate out of the
-> protocol. What follows is the older plan for encrypting only `body`.
+> **Superseded for the wire** by sealing (the protocol's `spec/09-sealing.md`, roadmap phase 10, built): every request and
+> answer is sealed to the other end's key, which covers message bodies between Puddles and takes the TLS certificate out
+> of the protocol. What follows is the older plan for encrypting only `body`, kept for encryption at rest.
 
 Each Puddle has a single encryption key pair (the X25519 key above). DMs and groups all use it:
 a message body is encrypted to each recipient Puddle's public key, and each Puddle decrypts with its

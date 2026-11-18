@@ -128,9 +128,24 @@ void puddle_net_request(const puddle_address *addr, const char *method, const ch
     int total_s = o.total_timeout_s > 0 ? o.total_timeout_s : 30;
     int64_t deadline = mono_ms() + total_s * 1000LL;
 
+    puddle_sealed_request sealed;
+    memset(&sealed, 0, sizeof sealed);
     char sig[800];
     puddle_reqsig mine;
-    if (puddle_reqsig_sign(me, method, target, body, body_len, peer_id, 0, sig, sizeof sig) != 0 || puddle_reqsig_parse(sig, &mine) != 0) {
+    if (o.seal_pub) {
+        if (puddle_seal_request(me, method, target, body, body_len, peer_id, o.seal_pub, 0, &sealed) != 0) {
+            why(out, PUDDLE_NET_FAILED, "cannot seal the request");
+            return;
+        }
+        snprintf(sig, sizeof sig, "%s", sealed.signature);
+        body = sealed.body;
+        body_len = sealed.body_len;
+    } else if (puddle_reqsig_sign(me, method, target, body, body_len, peer_id, 0, sig, sizeof sig) != 0) {
+        why(out, PUDDLE_NET_FAILED, "cannot sign the request");
+        return;
+    }
+    if (puddle_reqsig_parse(sig, &mine) != 0) {
+        puddle_sealed_request_free(&sealed);
         why(out, PUDDLE_NET_FAILED, "cannot sign the request");
         return;
     }
@@ -138,8 +153,10 @@ void puddle_net_request(const puddle_address *addr, const char *method, const ch
     receipt[0] = '\0';
 
     puddle_sock sock = dial(addr, connect_s, io_s, deadline, out);
-    if (sock == PUDDLE_SOCK_NONE)
+    if (sock == PUDDLE_SOCK_NONE) {
+        puddle_sealed_request_free(&sealed);
         return;
+    }
     if (o.on_socket)
         o.on_socket(o.user, sock);
 
@@ -166,35 +183,17 @@ void puddle_net_request(const puddle_address *addr, const char *method, const ch
         goto done;
     }
 
-    X509 *cert; cert = SSL_get1_peer_certificate(ssl);
-    if (!cert) {
-        why(out, PUDDLE_NET_FAILED, "%s presented no certificate", addr->address);
-        goto done;
-    }
-    unsigned char md[32];
-    unsigned mdlen; mdlen = 0;
-    int dok; dok = X509_digest(cert, EVP_sha256(), md, &mdlen) == 1 && mdlen == 32;
-    X509_free(cert);
-    if (!dok) {
-        why(out, PUDDLE_NET_FAILED, "cannot read the certificate");
-        goto done;
-    }
-    puddle_hex_encode(md, 32, out->fingerprint);
-    if (o.fingerprint_ok && !o.fingerprint_ok(o.user, out->fingerprint)) {
-        why(out, PUDDLE_NET_CERT_CHANGED, "%s has a different certificate from before", addr->address);
-        goto done;
-    }
-    if (o.expect_fp && o.expect_fp[0] && strcmp(o.expect_fp, out->fingerprint) != 0) {
-        why(out, PUDDLE_NET_OTHER_CERT, "%s showed a certificate it has not proven is theirs", addr->address);
-        goto done;
-    }
+    /* whatever certificate it showed: TLS only carries this, and nothing here depends on which one (spec/09) */
 
     {
-        char head[1400];
+        char head[1600], seal_line[200] = "";
+        if (o.seal_pub)
+            snprintf(seal_line, sizeof seal_line, "X-Puddle-Seal: %s\r\n", sealed.seal);
         int hn = snprintf(head, sizeof head,
-                          "%s %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: puddle\r\nX-Puddle-Signature: %s\r\n"
-                          "Content-Type: application/json\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n",
-                          method, target, addr->address, sig, body ? body_len : 0);
+                          "%s %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: puddle\r\nX-Puddle-Signature: %s\r\n%s"
+                          "Content-Type: %s\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n",
+                          method, target, addr->address, sig, seal_line, o.seal_pub ? PUDDLE_SEALED_TYPE : "application/json",
+                          body ? body_len : 0);
         if (hn <= 0 || (size_t)hn >= sizeof head || ssl_send_all(ssl, head, (size_t)hn) != 0 ||
             (body && body_len && ssl_send_all(ssl, (const char *)body, body_len) != 0)) {
             why(out, PUDDLE_NET_FAILED, "could not send the request to %s", addr->address);
@@ -204,6 +203,8 @@ void puddle_net_request(const puddle_address *addr, const char *method, const ch
 
     /* the answer: headers, then a body of the length it promises, or until the other side closes */
     size_t max_body; max_body = o.max_body ? o.max_body : PUDDLE_NET_BODY_MAX;
+    if (o.seal_pub)
+        max_body = puddle_seal_answer_len(max_body); /* sealed, it is a little longer */
     size_t cap, len; cap = max_body + 8192; len = 0;
     raw = (char *)malloc(cap + 1);
     if (!raw) {
@@ -298,7 +299,7 @@ void puddle_net_request(const puddle_address *addr, const char *method, const ch
     }
     if (o.peer_pub) { /* only their signature makes this an answer from them */
         out->checked = 1;
-        out->proof = puddle_receipt_verify(receipt, peer_id, o.peer_pub, mine.nonce, status, raw + hend, bl, out->fingerprint);
+        out->proof = puddle_receipt_verify(receipt, peer_id, o.peer_pub, mine.nonce, status, raw + hend, bl);
         if (out->proof != PUDDLE_RECEIPT_OK) {
             out->result = PUDDLE_NET_NOT_PROVEN;
             switch (out->proof) {
@@ -314,16 +315,40 @@ void puddle_net_request(const puddle_address *addr, const char *method, const ch
                 why(out, PUDDLE_NET_NOT_PROVEN, "the Puddle at %s couldn't prove it's them: it signed with a key we don't hold for them",
                     addr->address);
                 break;
-            case PUDDLE_RECEIPT_OTHER_CERT:
-                why(out, PUDDLE_NET_NOT_PROVEN, "the connection to %s was intercepted: what answered isn't the Puddle that signed", addr->address);
-                break;
             default:
                 why(out, PUDDLE_NET_NOT_PROVEN, "the Puddle at %s couldn't prove it's them: its signature doesn't check out", addr->address);
                 break;
             }
         }
     }
+    if (o.seal_pub && (out->result == PUDDLE_NET_OK || out->result == PUDDLE_NET_NOT_PROVEN) && out->body && status != 204) {
+        /* Opened whether or not it was signed for (an answer to everyone alike, such as access/status, never is; `result` still
+         * says so). Something sealed to us that won't open is not an answer at all. A 204 has no body, so nothing to seal. */
+        if (!strcmp(out->content_type, PUDDLE_SEALED_TYPE)) {
+            size_t plain = puddle_seal_plain_len(out->body_len), got = 0;
+            unsigned char *pt = (unsigned char *)malloc(plain + 1);
+            if (!pt || puddle_open_answer(sealed.answer_key, status, (const unsigned char *)out->body, out->body_len, pt, &got) != 0) {
+                free(pt);
+                free(out->body);
+                out->body = NULL;
+                out->body_len = 0;
+                why(out, PUDDLE_NET_FAILED, "the answer from %s was sealed, but not for us", addr->address);
+                goto done;
+            }
+            pt[got] = '\0';
+            free(out->body);
+            out->body = (char *)pt;
+            out->body_len = got;
+            out->opened = 1;
+            out->content_type[0] = '\0'; /* what is inside is what the route always answers */
+        } else if (status < 400 && out->result == PUDDLE_NET_OK) {
+            /* refusals that can't be sealed (404 to a stranger, a seal that wouldn't open) come plain; nothing else may */
+            why(out, PUDDLE_NET_FAILED, "%s answered without sealing it (HTTP %d, %s)", addr->address, status, out->content_type);
+            goto done;
+        }
+    }
 done:
+    puddle_sealed_request_free(&sealed);
     if (ssl) {
         SSL_shutdown(ssl);
         SSL_free(ssl);

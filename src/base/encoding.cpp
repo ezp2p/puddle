@@ -25,6 +25,27 @@ size_t puddle_base32_encode(const unsigned char *in, size_t len, char *out, size
     return o;
 }
 
+int puddle_base32_decode(const char *in, unsigned char *out, size_t len)
+{
+    if (!in || strlen(in) != (len * 8 + 4) / 5)
+        return -1;
+    unsigned buf = 0;
+    int bits = 0;
+    size_t o = 0;
+    for (const char *c = in; *c; c++) {
+        int v = *c >= 'a' && *c <= 'z' ? *c - 'a' : *c >= '2' && *c <= '7' ? *c - '2' + 26 : -1;
+        if (v < 0)
+            return -1;
+        buf = (buf << 5) | (unsigned)v;
+        bits += 5;
+        if (bits >= 8) {
+            out[o++] = (unsigned char)(buf >> (bits - 8));
+            bits -= 8;
+        }
+    }
+    return o == len && (buf & ((1u << bits) - 1)) == 0 ? 0 : -1;
+}
+
 size_t puddle_base64_encode(const unsigned char *in, size_t len, char *out, size_t cap)
 {
     static const char alpha[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

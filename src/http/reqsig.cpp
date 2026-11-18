@@ -11,6 +11,7 @@
 #include <string.h>
 #include <time.h>
 
+#include <openssl/crypto.h>
 #include <openssl/rand.h>
 
 #define NONCE_REMEMBER_MS (2 * PUDDLE_SIG_WINDOW_MS)
@@ -79,19 +80,34 @@ int puddle_reqsig_sign(puddle_identity *me, const char *method, const char *targ
     return puddle_reqsig_sign_as(id, pub, identity_sign, me, method, target, body, body_len, recipient_id, at_ms, out, cap);
 }
 
+static int new_nonce(char nonce[32])
+{
+    unsigned char raw[16];
+    return RAND_bytes(raw, sizeof raw) == 1 && puddle_base64_encode(raw, sizeof raw, nonce, 32) ? 0 : -1;
+}
+
+static int sign_with_nonce(const char *signer_id, const unsigned char sign_pub[32], puddle_sign_fn sign, void *user, const char *method,
+                           const char *target, const void *body, size_t body_len, const char *recipient_id, int64_t at_ms,
+                           const char *nonce, char *out, size_t cap);
+
 int puddle_reqsig_sign_as(const char *signer_id, const unsigned char sign_pub[32], puddle_sign_fn sign, void *user, const char *method,
                           const char *target, const void *body, size_t body_len, const char *recipient_id, int64_t at_ms, char *out,
                           size_t cap)
+{
+    char nonce[32];
+    if (new_nonce(nonce) != 0)
+        return -1;
+    return sign_with_nonce(signer_id, sign_pub, sign, user, method, target, body, body_len, recipient_id, at_ms, nonce, out, cap);
+}
+
+static int sign_with_nonce(const char *signer_id, const unsigned char sign_pub[32], puddle_sign_fn sign, void *user, const char *method,
+                           const char *target, const void *body, size_t body_len, const char *recipient_id, int64_t at_ms,
+                           const char *nonce, char *out, size_t cap)
 {
     if (!signer_id || !valid_user_id(signer_id) || !sign || !valid_method(method) || !valid_target(target) ||
         !(valid_user_id(recipient_id) || !strcmp(recipient_id, PUDDLE_RECIPIENT_ANY)))
         return -1;
     int64_t ts = at_ms ? at_ms : now_ms();
-
-    unsigned char raw[16];
-    char nonce[32];
-    if (RAND_bytes(raw, sizeof raw) != 1 || !puddle_base64_encode(raw, sizeof raw, nonce, sizeof nonce))
-        return -1;
 
     char canon[2400];
     int cl = canonical(canon, sizeof canon, method, target, body, body_len, ts, nonce, recipient_id);
@@ -317,82 +333,167 @@ static int is_hex64(const char *s)
     return s && strlen(s) == 64 && puddle_hex_decode(s, raw, 32) == 0;
 }
 
-static int receipt_canonical_hash(char *out, size_t cap, const char *id, const char *nonce, int status, const char *body_hash,
-                                  const char *fp)
+static int receipt_canonical_hash(char *out, size_t cap, const char *id, const char *nonce, int status, const char *body_hash)
 {
-    int n = snprintf(out, cap, "puddle-receipt-v1\n%s\n%s\n%d\n%s\n%s", id, nonce, status, body_hash, fp);
+    int n = snprintf(out, cap, "puddle-receipt-v2\n%s\n%s\n%d\n%s", id, nonce, status, body_hash);
     return (n > 0 && (size_t)n < cap) ? n : -1;
 }
 
-int puddle_receipt_sign(puddle_identity *me, const char *nonce, int status, const void *body, size_t body_len, const char *tls_fp_hex,
-                        char *out, size_t cap)
+int puddle_receipt_sign(puddle_identity *me, const char *nonce, int status, const void *body, size_t body_len, char *out, size_t cap)
 {
     char hash[65];
     puddle_sha256_hex(body ? body : "", body ? body_len : 0, hash);
-    return puddle_receipt_sign_hash(me, nonce, status, hash, tls_fp_hex, out, cap);
+    return puddle_receipt_sign_hash(me, nonce, status, hash, out, cap);
 }
 
-int puddle_receipt_sign_hash(puddle_identity *me, const char *nonce, int status, const char *body_hash_hex, const char *tls_fp_hex,
-                             char *out, size_t cap)
+int puddle_receipt_sign_hash(puddle_identity *me, const char *nonce, int status, const char *body_hash_hex, char *out, size_t cap)
 {
-    if (!me || !nonce || !*nonce || strlen(nonce) > 60 || !is_hex64(tls_fp_hex) || !is_hex64(body_hash_hex) || status < 100 || status > 599)
+    if (!me || !nonce || !*nonce || strlen(nonce) > 60 || !is_hex64(body_hash_hex) || status < 100 || status > 599)
         return -1;
     char id[PUDDLE_USER_ID_LEN + 1], kid[65], canon[400], sig64[100];
     unsigned char pub[32], sig[64];
     puddle_identity_id(me, id);
     puddle_identity_public(me, pub, NULL, NULL);
     puddle_key_id(pub, kid);
-    int cl = receipt_canonical_hash(canon, sizeof canon, id, nonce, status, body_hash_hex, tls_fp_hex);
+    int cl = receipt_canonical_hash(canon, sizeof canon, id, nonce, status, body_hash_hex);
     if (cl < 0 || puddle_identity_sign(me, canon, (size_t)cl, sig) != 0 || !puddle_base64_encode(sig, 64, sig64, sizeof sig64))
         return -1;
-    int n = snprintf(out, cap, "v1 id=%s; kid=%s; fp=%s; sig=%s", id, kid, tls_fp_hex, sig64);
+    int n = snprintf(out, cap, "v2 id=%s; kid=%s; sig=%s", id, kid, sig64);
     return (n > 0 && (size_t)n < cap) ? 0 : -1;
 }
 
 puddle_receipt_check puddle_receipt_verify(const char *header, const char *peer_id, const unsigned char peer_pub[32], const char *nonce,
-                                           int status, const void *body, size_t body_len, const char *seen_fp_hex)
+                                           int status, const void *body, size_t body_len)
 {
     char hash[65];
     puddle_sha256_hex(body ? body : "", body ? body_len : 0, hash);
-    return puddle_receipt_verify_hash(header, peer_id, peer_pub, nonce, status, hash, seen_fp_hex);
+    return puddle_receipt_verify_hash(header, peer_id, peer_pub, nonce, status, hash);
 }
 
 puddle_receipt_check puddle_receipt_verify_hash(const char *header, const char *peer_id, const unsigned char peer_pub[32], const char *nonce,
-                                                int status, const char *body_hash_hex, const char *seen_fp_hex)
+                                                int status, const char *body_hash_hex)
 {
     if (!is_hex64(body_hash_hex))
         return PUDDLE_RECEIPT_BAD;
     if (!header || !*header)
         return PUDDLE_RECEIPT_MISSING;
-    static const char *const seps[] = { "v1 id=", "; kid=", "; fp=", "; sig=" };
+    static const char *const seps[] = { "v2 id=", "; kid=", "; sig=" };
     if (strlen(header) >= PUDDLE_RECEIPT_MAX || !peer_id || !peer_pub || !nonce)
         return PUDDLE_RECEIPT_BAD;
     const char *p = header;
-    char vals[4][120];
-    for (int i = 0; i < 4; i++) {
+    char vals[3][120];
+    for (int i = 0; i < 3; i++) {
         size_t sl = strlen(seps[i]);
         if (strncmp(p, seps[i], sl) != 0)
             return PUDDLE_RECEIPT_BAD;
         p += sl;
-        const char *end = i < 3 ? strstr(p, seps[i + 1]) : header + strlen(header);
+        const char *end = i < 2 ? strstr(p, seps[i + 1]) : header + strlen(header);
         if (!end || field(p, (size_t)(end - p), vals[i], sizeof vals[i]) != 0)
             return PUDDLE_RECEIPT_BAD;
         p = end;
     }
     unsigned char sig[72];
     size_t sl = 0;
-    if (!valid_user_id(vals[0]) || !is_hex64(vals[1]) || !is_hex64(vals[2]) || puddle_base64_decode(vals[3], sig, sizeof sig, &sl) != 0 ||
-        sl != 64)
+    if (!valid_user_id(vals[0]) || !is_hex64(vals[1]) || puddle_base64_decode(vals[2], sig, sizeof sig, &sl) != 0 || sl != 64)
         return PUDDLE_RECEIPT_BAD;
     char want_kid[65];
     puddle_key_id(peer_pub, want_kid);
     if (strcmp(vals[0], peer_id) != 0 || strcmp(vals[1], want_kid) != 0)
         return PUDDLE_RECEIPT_WRONG_KEY;
     char canon[400];
-    int cl = receipt_canonical_hash(canon, sizeof canon, vals[0], nonce, status, body_hash_hex, vals[2]);
+    int cl = receipt_canonical_hash(canon, sizeof canon, vals[0], nonce, status, body_hash_hex);
     if (cl < 0 || !puddle_verify_signature(peer_pub, canon, (size_t)cl, sig))
         return PUDDLE_RECEIPT_BAD;
-    if (!seen_fp_hex || strcmp(vals[2], seen_fp_hex) != 0)
-        return PUDDLE_RECEIPT_OTHER_CERT; /* it is them, signing for their own certificate; we were shown someone else's */
     return PUDDLE_RECEIPT_OK;
+}
+
+/* ------------------------------------------------------------ sealed requests (spec/09) */
+
+size_t puddle_seal_info(const char *sender_id, const char *recipient_id, const char *nonce, char *out, size_t cap)
+{
+    int n = snprintf(out, cap, "puddle-seal-v1\n%s\n%s\n%s", sender_id, recipient_id, nonce);
+    return (n > 0 && (size_t)n < cap) ? (size_t)n : 0;
+}
+
+size_t puddle_seal_aad(const char *method, const char *target, char *out, size_t cap)
+{
+    int n = snprintf(out, cap, "%s\n%s", method, target);
+    return (n > 0 && (size_t)n < cap) ? (size_t)n : 0;
+}
+
+void puddle_sealed_request_free(puddle_sealed_request *r)
+{
+    if (!r)
+        return;
+    free(r->body);
+    OPENSSL_cleanse(r->answer_key, sizeof r->answer_key);
+    memset(r, 0, sizeof *r);
+}
+
+int puddle_seal_request_as(const char *signer_id, const unsigned char sign_pub[32], puddle_sign_fn sign, void *user, const char *method,
+                           const char *target, const void *body, size_t body_len, const char *recipient_id,
+                           const unsigned char seal_pub[32], int64_t at_ms, puddle_sealed_request *out)
+{
+    memset(out, 0, sizeof *out);
+    char info[200], aad[1200], kid[65], enc64[64];
+    unsigned char enc[PUDDLE_SEAL_ENC_LEN];
+    puddle_hpke ctx;
+    size_t il, al;
+    if (new_nonce(out->nonce) != 0 || !signer_id || !recipient_id ||
+        !(il = puddle_seal_info(signer_id, recipient_id, out->nonce, info, sizeof info)) ||
+        !(al = puddle_seal_aad(method, target, aad, sizeof aad)) || puddle_hpke_sender(seal_pub, info, il, enc, &ctx) != 0)
+        return -1;
+    int rc = -1;
+    if (body_len) {
+        out->body = (unsigned char *)malloc(body_len + PUDDLE_SEAL_TAG_LEN);
+        if (!out->body || puddle_hpke_seal(&ctx, aad, al, body, body_len, out->body) != 0)
+            goto done;
+        out->body_len = body_len + PUDDLE_SEAL_TAG_LEN;
+    }
+    puddle_sha256_hex(seal_pub, 32, kid);
+    if (!puddle_base64_encode(enc, sizeof enc, enc64, sizeof enc64) || puddle_seal_answer_key(&ctx, out->answer_key) != 0 ||
+        snprintf(out->seal, sizeof out->seal, "v1 kid=%s; enc=%s", kid, enc64) >= (int)sizeof out->seal ||
+        sign_with_nonce(signer_id, sign_pub, sign, user, method, target, out->body, out->body_len, recipient_id, at_ms, out->nonce,
+                        out->signature, sizeof out->signature) != 0)
+        goto done;
+    rc = 0;
+done:
+    OPENSSL_cleanse(&ctx, sizeof ctx);
+    if (rc != 0)
+        puddle_sealed_request_free(out);
+    return rc;
+}
+
+int puddle_seal_request(puddle_identity *me, const char *method, const char *target, const void *body, size_t body_len,
+                        const char *recipient_id, const unsigned char seal_pub[32], int64_t at_ms, puddle_sealed_request *out)
+{
+    unsigned char pub[32];
+    char id[PUDDLE_USER_ID_LEN + 1];
+    puddle_identity_public(me, pub, NULL, NULL);
+    puddle_identity_id(me, id);
+    return puddle_seal_request_as(id, pub, identity_sign, me, method, target, body, body_len, recipient_id, seal_pub, at_ms, out);
+}
+
+int puddle_seal_header_parse(const char *header, char kid[65], unsigned char enc[PUDDLE_SEAL_ENC_LEN])
+{
+    static const char *const seps[] = { "v1 kid=", "; enc=" };
+    char vals[2][100];
+    const char *p = header;
+    if (!header || strlen(header) >= 160)
+        return -1;
+    for (int i = 0; i < 2; i++) {
+        size_t sl = strlen(seps[i]);
+        if (strncmp(p, seps[i], sl) != 0)
+            return -1;
+        p += sl;
+        const char *end = i < 1 ? strstr(p, seps[i + 1]) : header + strlen(header);
+        if (!end || field(p, (size_t)(end - p), vals[i], sizeof vals[i]) != 0)
+            return -1;
+        p = end;
+    }
+    size_t n = 0;
+    if (!is_hex64(vals[0]) || puddle_base64_decode(vals[1], enc, PUDDLE_SEAL_ENC_LEN, &n) != 0 || n != PUDDLE_SEAL_ENC_LEN)
+        return -1;
+    memcpy(kid, vals[0], 65);
+    return 0;
 }

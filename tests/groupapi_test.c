@@ -14,6 +14,8 @@
 #include "events/group_events.h"
 
 #include <ftw.h>
+#include "sealing.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -94,7 +96,7 @@ static reply *call(const char *path, const char *body, const char *sig)
     unsigned char *copy = malloc(bl + 1);
     memcpy(copy, body, bl + 1);
     memset(&rp, 0, sizeof rp);
-    rp.n = puddle_router_handle(&R, &req, 0, copy, bl, rp.out, sizeof rp.out - 1, &rp.status);
+    rp.n = st_handle(&R, &req, 0, copy, bl, rp.out, sizeof rp.out - 1, &rp.status);
     free(copy);
     return &rp;
 }
@@ -103,7 +105,7 @@ static const char *body_of(const reply *r) { const char *b = strstr(r->out, "\r\
 static reply *post_as(person *from, const char *path, const char *body)
 {
     char sig[800];
-    if (puddle_reqsig_sign(from->id, "POST", path, body, strlen(body), me.uid, clock_now, sig, sizeof sig) != 0) exit(2);
+    if (st_sign(from->id, "POST", path, body, strlen(body), me.uid, clock_now, sig, sizeof sig) != 0) exit(2);
     return call(path, body, sig);
 }
 
@@ -276,7 +278,7 @@ static reply *scoped_post(person *who, const char *gid, const char *join_ev, per
     puddle_jw_end_object(&w);
     if (!puddle_jw_finish(&w)) exit(2);
     char sig[800];
-    if (puddle_reqsig_sign(who->id, "POST", "/stream/v1/access", b, strlen(b), as_whom, clock_now, sig, sizeof sig) != 0) exit(2);
+    if (st_sign(who->id, "POST", "/stream/v1/access", b, strlen(b), as_whom, clock_now, sig, sizeof sig) != 0) exit(2);
     reply *r = call("/stream/v1/access", b, sig);
     free(b);
     free(chain);
@@ -356,6 +358,7 @@ int main(void)
     ob = puddle_outbox_open(data, &hooks, err, sizeof err);
     ctx = (puddle_ctx){ .courier = &puddle_federation_courier, .config = &cfg, .identity = me.id, .store = store, .streams = ss, .people = ps, .groups = gs, .outbox = ob, .replay = puddle_replay_new(4096), .now_ms = now_cb,
                         .peer_key = puddle_streams_peer_key, .peer_key_user = ss };
+    st_use(me.id);
     R = (puddle_router){ .ctx = &ctx };
     R.routes = puddle_all_routes(&R.count);
     set_peer(&alice, PUDDLE_STREAM_ACTIVE);

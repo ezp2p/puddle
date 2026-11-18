@@ -47,6 +47,38 @@ int puddle_reqsig_sign_as(const char *signer_id, const unsigned char sign_pub[32
                           const char *target, const void *body, size_t body_len, const char *recipient_id, int64_t now_ms, char *out,
                           size_t cap);
 
+/* ---- sealed requests (the protocol's spec/09: bodies sealed to keys, so TLS is transport only) ----
+ *
+ *   X-Puddle-Seal: v1 kid=<hex SHA-256 of the recipient's sealing key>; enc=<base64 of HPKE's enc>
+ *
+ * The body is sealed (base/seal.h) to the recipient's key with info "puddle-seal-v1\n<sender>\n<recipient>\n<nonce>" and aad
+ * "<METHOD>\n<target>", and the signature covers the sealed bytes. The answer comes back in records under `answer_key`. */
+
+typedef struct {
+    char signature[800];        /* X-Puddle-Signature */
+    char seal[160];             /* X-Puddle-Seal */
+    char nonce[32];
+    unsigned char *body;        /* the sealed body, malloc'd; NULL when there was none */
+    size_t body_len;
+    unsigned char answer_key[32];
+} puddle_sealed_request;
+
+int puddle_seal_request(puddle_identity *me, const char *method, const char *target, const void *body, size_t body_len,
+                        const char *recipient_id, const unsigned char seal_pub[32], int64_t now_ms, puddle_sealed_request *out);
+int puddle_seal_request_as(const char *signer_id, const unsigned char sign_pub[32], puddle_sign_fn sign, void *user, const char *method,
+                           const char *target, const void *body, size_t body_len, const char *recipient_id,
+                           const unsigned char seal_pub[32], int64_t now_ms, puddle_sealed_request *out);
+void puddle_sealed_request_free(puddle_sealed_request *r);
+
+/* The HPKE info and aad both sides compute. The length, or 0 if it doesn't fit. */
+size_t puddle_seal_info(const char *sender_id, const char *recipient_id, const char *nonce, char *out, size_t cap);
+size_t puddle_seal_aad(const char *method, const char *target, char *out, size_t cap);
+
+/* The recipient's side: parse X-Puddle-Seal. 0 or -1. */
+int puddle_seal_header_parse(const char *header, char kid[65], unsigned char enc[PUDDLE_SEAL_ENC_LEN]);
+
+#define PUDDLE_SEALED_TYPE "application/puddle-sealed"
+
 /* Strictly parse a header value: exact field order, exact formats, nothing extra. 0 or -1. */
 int puddle_reqsig_parse(const char *header, puddle_reqsig *out);
 
@@ -77,32 +109,29 @@ puddle_authn puddle_reqsig_authenticate(const char *header, const char *method, 
                                         puddle_peer_key_fn lookup, void *user, puddle_replay *replay,
                                         int64_t now_ms, puddle_reqsig *out);
 
-/* ---- receipts: Bob's side signing for an answer, Alice's side checking it (docs/streams.md, "Proving who answers") ----
+/* ---- receipts: Bob's side signing for an answer, Alice's side checking it (spec/02 and spec/09 of the protocol) ----
  *
- *   X-Puddle-Receipt: v1 id=<responder id>; kid=<key id>; fp=<hex>; sig=<base64>
+ *   X-Puddle-Receipt: v2 id=<responder id>; kid=<key id>; sig=<base64>
  *
- * `fp` is the hex SHA-256 of the responder's own TLS certificate, and `sig` an Ed25519 signature over
- * "puddle-receipt-v1", the responder's id, the request's nonce, the status, hex SHA-256 of the answer's body and `fp`,
- * one per line. */
+ * `sig` is an Ed25519 signature over "puddle-receipt-v2", the responder's id, the request's nonce, the status and the hex
+ * SHA-256 of the answer's body exactly as sent (sealed, when it is), one per line. No certificate: TLS is transport only. */
 
 #define PUDDLE_RECEIPT_MAX 320 /* room for the header value */
 
-/* Sign for the answer to the request with `nonce`. `tls_fp_hex` is our certificate's fingerprint. 0 or -1. */
-int puddle_receipt_sign(puddle_identity *me, const char *nonce, int status, const void *body, size_t body_len, const char *tls_fp_hex,
-                        char *out, size_t cap);
+/* Sign for the answer to the request with `nonce`. 0 or -1. */
+int puddle_receipt_sign(puddle_identity *me, const char *nonce, int status, const void *body, size_t body_len, char *out, size_t cap);
 /* The same, for a body that is not in memory (a file sent from disk): `body_hash_hex` is the SHA-256 of exactly the bytes sent. */
-int puddle_receipt_sign_hash(puddle_identity *me, const char *nonce, int status, const char *body_hash_hex, const char *tls_fp_hex,
-                             char *out, size_t cap);
+int puddle_receipt_sign_hash(puddle_identity *me, const char *nonce, int status, const char *body_hash_hex, char *out, size_t cap);
 
 /* puddle_receipt_check is in core/delivery.h, beside the reply it describes */
 
 /* Alice's side: is `header` (NULL or "" = none) the receipt `peer_id`, whose current key is `peer_pub`, gives for the
- * request with `nonce`, answered `status` with `body`, on a connection showing the certificate `seen_fp_hex`? */
+ * request with `nonce`, answered `status` with `body`? */
 puddle_receipt_check puddle_receipt_verify(const char *header, const char *peer_id, const unsigned char peer_pub[32], const char *nonce,
-                                           int status, const void *body, size_t body_len, const char *seen_fp_hex);
+                                           int status, const void *body, size_t body_len);
 /* The same, for a body that was not kept in memory (a download written to a file): `body_hash_hex` is its SHA-256. */
 puddle_receipt_check puddle_receipt_verify_hash(const char *header, const char *peer_id, const unsigned char peer_pub[32], const char *nonce,
-                                                int status, const char *body_hash_hex, const char *seen_fp_hex);
+                                                int status, const char *body_hash_hex);
 
 
 #ifdef __cplusplus

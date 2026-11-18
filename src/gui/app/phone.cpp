@@ -46,7 +46,7 @@ void Phone::load()
     puddleId_ = o.value("puddle").toString();
     key_ = QByteArray::fromHex(o.value("puddle_key").toString().toLatin1());
     seed_ = QByteArray::fromHex(o.value("seed").toString().toLatin1());
-    if (!base_.isValid() || puddleId_.isEmpty() || key_.size() != 32 || seed_.size() != 32) {
+    if (!base_.isValid() || puddleId_.isEmpty() || key_.size() != 64 || seed_.size() != 32) {
         error_ = tr("What this phone knew about its Puddle was damaged. Pair it again.");
         return;
     }

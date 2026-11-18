@@ -183,7 +183,7 @@ void User::writeSelf(puddle_jw *w) const
         p->write(w);
     }
     puddle_jw_key(w, "link");
-    if (ctx_->config && puddle_make_link(ctx_->config, NULL, link, sizeof link))
+    if (ctx_->config && puddle_make_link(ctx_->config, ctx_->identity, NULL, link, sizeof link))
         puddle_jw_string(w, link);
     else
         puddle_jw_null(w);

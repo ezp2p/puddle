@@ -12,12 +12,10 @@
 //
 // - the desktop app, on the Puddle's own machine (configure): the Puddle's certificate file is the only one trusted
 //   (pinned), and the owner token goes with every request.
-// - a phone (configureDevice; docs/identity.md, "Devices"): no token and no certificate to pin. Every request is signed
-//   with the phone's own key, and an answer counts only if it carries the Puddle's receipt, signed by the key the phone
-//   holds for it, over the certificate this connection showed. Before anything is sent, a handshake (GET
-//   /device/v1/status, which carries nothing) proves which certificate is the Puddle's; requests then go only over a
-//   connection showing it, so nobody in between sees them. A proof lasts ten minutes and each good answer renews it.
-//   After a key roll the handshake's answer brings the Puddle's chain, which proves the new key against the Puddle's id.
+// - a phone (configureDevice; docs/identity.md, "Devices"): no token and no certificate. Every request is sealed to the
+//   Puddle's sealing key and signed with the phone's own key, and an answer counts only if it carries the Puddle's receipt,
+//   signed by the key the phone holds for it, and opens with the request's key (the protocol's spec/09). TLS only carries
+//   it. After a key roll an answer brings the Puddle's chain, which proves the new keys against the Puddle's id.
 class ApiClient : public QObject {
     Q_OBJECT
 public:
@@ -35,7 +33,8 @@ public:
 
     // The desktop app. `certPem`: the Puddle's own certificate file. `token`: the owner token.
     bool configure(const QUrl &base, const QByteArray &token, const QString &certPemPath);
-    // A phone. `puddleKey`: the Puddle's current signing key (32 bytes); `deviceSeed`: the phone's own key (32 bytes).
+    // A phone. `puddleKey`: the Puddle's current signing key then its sealing key (32 + 32 bytes); `deviceSeed`: the phone's
+    // own key (32 bytes).
     bool configureDevice(const QUrl &base, const QString &puddleId, const QByteArray &puddleKey, const QByteArray &deviceSeed);
     bool ready() const { return ready_; }
     bool isDevice() const { return device_; }
@@ -59,14 +58,15 @@ public:
         QUrl base;        // https://<address>
         QString puddleId;
         QString secret;
+        QByteArray sealKey; // the Puddle's sealing key, from `k`: the pairing request is sealed to it
     };
-    // `puddle-pair://<address>?id=<52>&secret=<32 hex>`; false if it is not one.
+    // `puddle-pair://<address>?id=<52>&k=<52>&secret=<32 hex>`; false if it is not one.
     static bool parsePairingLink(const QString &link, PairingLink *out);
     struct Paired {
         bool ok = false;
         QString error;       // in words, when not ok
         QString deviceId, check;
-        QByteArray puddleKey; // proven by the chain against the id in the link, and by the receipt
+        QByteArray puddleKey; // signing then sealing key, proven by the chain against the id and key in the link, and by the receipt
     };
     // Ask the Puddle in `link` to pair this phone (`deviceSeed`, a fresh 32-byte key) under `name`.
     void pair(const PairingLink &link, const QString &name, const QByteArray &deviceSeed, std::function<void(const Paired &)> done);
@@ -102,11 +102,11 @@ private:
     // phone
     void deviceSend(Pending p);
     void deviceDownload(Pending p);
-    void handshake();
-    void handshakeDone(bool ok);
-    void forgetProof();
-    QNetworkReply *signedRequest(const QByteArray &method, const QString &path, const QByteArray &body, const QByteArray &contentType, int timeoutMs,
-                                 bool pinned, QByteArray *nonce);
+    QNetworkReply *signedRequest(const QByteArray &method, const QString &path, const QByteArray &body, int timeoutMs, const QByteArray &sealKey,
+                                 QByteArray *nonce, QByteArray *answerKey);
+    // the answer's body, opened: false if it was sealed but not for us, or plain when it had no reason to be
+    static bool openAnswer(QNetworkReply *r, int status, const QByteArray &raw, const QByteArray &answerKey, QByteArray *plain);
+    bool learnRoll(QNetworkReply *r, int status, const QByteArray &raw, const QByteArray &plain, const QByteArray &nonce);
     // 0 believed; otherwise a puddle_receipt_check, with the reason in problem_. `bodyHash`: hex SHA-256, when the body
     // was not kept (a download); else the hash of `body` is used.
     int checkReceipt(QNetworkReply *r, int status, const QByteArray &body, const QByteArray &nonce, const QByteArray &key,
@@ -124,9 +124,5 @@ private:
     bool device_ = false;
     QString puddleId_;
     QByteArray puddleKey_, seed_;
-    QSslCertificate proven_;        // the Puddle's certificate, as it signed for it
-    qint64 provenUntil_ = 0;
-    bool shaking_ = false;
-    QList<Pending> waiting_;        // for the handshake
     QString problem_;
 };

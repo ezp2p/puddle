@@ -46,21 +46,18 @@ int puddle_ponds_ids(puddle_ponds *p, char (**ids)[PUDDLE_USER_ID_LEN + 1], size
 typedef struct {
     char id[PUDDLE_USER_ID_LEN + 1];
     puddle_address address;
-    char tls_fp[65]; /* the certificate it showed at join, or the last one it proved with a receipt */
     int64_t cursor;  /* the last event applied */
-    int signs;       /* it signs receipts (the Puddle Protocol, spec/05): every answer must carry one, by `key` */
-    unsigned char key[32];
+    unsigned char key[32];      /* its signing key: every answer must carry its receipt, by this key */
+    unsigned char seal_key[32]; /* its sealing key: every request is sealed to it (the protocol's spec/09) */
 } puddle_pond_conn;
 
 /* 0, or -1 if we have not joined `id`. `out` may be NULL, to ask only that. */
 int puddle_ponds_conn(puddle_ponds *p, const char *id, puddle_pond_conn *out);
 
-/* A Pond that signs proved, by a receipt, that `tls_fp` is now its certificate. 0, or -1 if we have not joined `id`. */
-int puddle_ponds_set_tls_fp(puddle_ponds *p, const char *id, const char *tls_fp);
-
-/* A Pond just joined: `info` is its answer (pond.yaml, Info), `tls_fp` the certificate it showed. Kept under the id it gives,
- * which is copied to `id_out`. Joining one we are in already updates it. 0, or -1 if the answer is malformed. */
-int puddle_ponds_add(puddle_ponds *p, const puddle_address *addr, const char *tls_fp, const char *info, size_t len,
+/* A Pond just joined: `info` is its answer (pond.yaml, Info), which must give the sealing key the invite did (`link_key`). Kept
+ * under the id it gives, which is copied to `id_out`. Joining one we are in already updates it. 0, or -1 if the answer is
+ * malformed or names another key. */
+int puddle_ponds_add(puddle_ponds *p, const puddle_address *addr, const unsigned char link_key[32], const char *info, size_t len,
                      char id_out[PUDDLE_USER_ID_LEN + 1]);
 
 /* A fresh /info answer (at start, or after a reset): the Pond and its channels are replaced. The messages of a channel that is
@@ -84,8 +81,8 @@ int puddle_ponds_events(puddle_ponds *p, const char *id, const char *json, size_
 /* Channels whose newest messages are not held yet (just joined, a new channel, after a reset): malloc'd ids; free() them. */
 int puddle_ponds_unfilled(puddle_ponds *p, const char *id, int64_t **channels, size_t *n);
 
-/* How we are getting on with it: "connecting", "connected", "unreachable", "removed" (it no longer knows us),
- * "certificate_changed". Shown to the owner. */
+/* How we are getting on with it: "connecting", "connected", "unreachable", "removed" (it no longer knows us), "not_proven"
+ * (what answered couldn't prove it is the Pond). Shown to the owner. */
 void puddle_ponds_set_status(puddle_ponds *p, const char *id, const char *status);
 
 /* Forget a Pond, and everything kept of it. 0, or -1 if there was none. */

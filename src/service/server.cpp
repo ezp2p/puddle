@@ -151,6 +151,11 @@ static int ob_peer_key(void *user, const char *peer, unsigned char pub[32])
     return puddle_streams_current_key(((puddle_server *)user)->streams, peer, pub);
 }
 
+static int ob_seal_key(void *user, const char *peer, unsigned char pub[32])
+{
+    return puddle_streams_seal_key(((puddle_server *)user)->streams, peer, pub);
+}
+
 static void ob_done(void *user, const puddle_ob_item *it, puddle_ob_outcome outcome, const puddle_net_reply *reply)
 {
     puddle_flow_done(&((puddle_server *)user)->ctx, it, outcome, reply);
@@ -243,7 +248,7 @@ puddle_server *puddle_server_create(const puddle_config *cfg, char *err, size_t 
     }
     {
         puddle_outbox_hooks hooks = { .send = puddle_federation_send, .identity = s->identity, .addresses = ob_addresses, .peer_key = ob_peer_key,
-                                      .done = ob_done, .user = s };
+                                      .seal_key = ob_seal_key, .done = ob_done, .user = s };
         s->outbox = puddle_outbox_open(cfg->data_dir, &hooks, err, errlen);
         if (!s->outbox)
             goto fail;
@@ -290,7 +295,6 @@ puddle_server *puddle_server_create(const puddle_config *cfg, char *err, size_t 
     s->tls = puddle_tls_context(cfg->dir, err, errlen);
     if (!s->tls)
         goto fail;
-    puddle_tls_fingerprint_hex(s->tls, s->ctx.own_tls_fp);
     if (open_listener(s, err, errlen) != 0)
         goto fail;
     if (puddle_waker_open(&s->stop) != 0) {

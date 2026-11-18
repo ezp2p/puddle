@@ -11,6 +11,8 @@
 #include "http/reqsig.h"
 
 #include <ftw.h>
+#include "sealing.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -55,7 +57,7 @@ static reply call(const char *method, const char *target, const char *body, int 
     size_t bl = body ? strlen(body) : 0;
     req.content_length = bl;
     if (k) {
-        CHECK(puddle_reqsig_sign_as(k->id, k->pub, puddle_devkey_sign, (void *)k, method, target, body, bl, my_id, clock_now, req.signature,
+        CHECK(st_sign_as(k->id, k->pub, puddle_devkey_sign, (void *)k, method, target, body, bl, my_id, clock_now, req.signature,
                                     sizeof req.signature) == 0);
         puddle_reqsig s;
         if (puddle_reqsig_parse(req.signature, &s) == 0)
@@ -64,7 +66,7 @@ static reply call(const char *method, const char *target, const char *body, int 
     unsigned char *copy = malloc(bl + 1);
     if (bl) memcpy(copy, body, bl);
     copy[bl] = 0;
-    rp.n = puddle_router_handle(&R, &req, owner, copy, bl, rp.out, sizeof rp.out - 1, &rp.status);
+    rp.n = st_handle(&R, &req, owner, copy, bl, rp.out, sizeof rp.out - 1, &rp.status);
     rp.out[rp.n] = 0;
     free(copy);
     clock_now += 10;
@@ -82,10 +84,10 @@ static reply replay_of(const char *method, const char *target, const puddle_devk
     snprintf(req.target, sizeof req.target, "%s", target);
     snprintf(req.path, sizeof req.path, "%s", target);
     if (!sig_out[0])
-        CHECK(puddle_reqsig_sign_as(k->id, k->pub, puddle_devkey_sign, (void *)k, method, target, NULL, 0, my_id, clock_now, sig_out, 1024) == 0);
+        CHECK(st_sign_as(k->id, k->pub, puddle_devkey_sign, (void *)k, method, target, NULL, 0, my_id, clock_now, sig_out, 1024) == 0);
     snprintf(req.signature, sizeof req.signature, "%s", sig_out);
     unsigned char none = 0;
-    rp.n = puddle_router_handle(&R, &req, 0, &none, 0, rp.out, sizeof rp.out - 1, &rp.status);
+    rp.n = st_handle(&R, &req, 0, &none, 0, rp.out, sizeof rp.out - 1, &rp.status);
     rp.out[rp.n] = 0;
     return rp;
 }
@@ -117,8 +119,9 @@ static int receipted(const reply *r)
         return 0;
     memcpy(rc, h, n);
     rc[n] = 0;
-    const char *b = end + 4;
-    return puddle_receipt_verify(rc, my_id, my_pub, r->nonce, r->status, b, strlen(b), FP) == PUDDLE_RECEIPT_OK;
+    (void)end;
+    /* over the answer as it was sent: sealed (tests/sealing.h keeps it) */
+    return puddle_receipt_verify(rc, my_id, my_pub, r->nonce, r->status, st_raw, st_raw_len) == PUDDLE_RECEIPT_OK;
 }
 
 static int has_receipt(const reply *r) { return strstr(r->out, "X-Puddle-Receipt") != NULL; }
@@ -175,7 +178,7 @@ int main(void)
     puddle_devices *devs = puddle_devices_open(data, err, sizeof err);
     CHECK(devs != NULL);
     ctx = (puddle_ctx){ .config = &cfg, .identity = me, .devices = devs, .replay = puddle_replay_new(4096), .now_ms = now_cb };
-    snprintf(ctx.own_tls_fp, sizeof ctx.own_tls_fp, "%s", FP);
+    st_use(me);
     R = (puddle_router){ .ctx = &ctx };
     R.routes = puddle_all_routes(&R.count);
     reply r;
@@ -208,7 +211,11 @@ int main(void)
     {
         char link[400] = "", want[200];
         CHECK(r.status == 201 && member(&r, "link", link, sizeof link) == 0);
-        snprintf(want, sizeof want, "puddle-pair://203.0.113.7:8443?id=%s&secret=", my_id);
+        unsigned char enc[32];
+        char k[60];
+        puddle_identity_public(me, NULL, enc, NULL);
+        puddle_base32_encode(enc, 32, k, sizeof k); /* our sealing key: what the pairing request is sealed to (spec/09) */
+        snprintf(want, sizeof want, "puddle-pair://203.0.113.7:8443?id=%s&k=%s&secret=", my_id, k);
         CHECK(!strncmp(link, want, strlen(want)) && strlen(link) == strlen(want) + PUDDLE_PAIR_SECRET_LEN);
         CHECK(strstr(body_of(&r), "\"expires_at\":"));
     }
@@ -320,15 +327,15 @@ int main(void)
         snprintf(q.target, sizeof q.target, "%s", q.path);
         CHECK(puddle_router_body_limit(&R, &q, 0) == 0);
         CHECK(puddle_router_body_limit(&R, &q, 1) > 0);
-        CHECK(puddle_reqsig_sign_as(phone.id, phone.pub, puddle_devkey_sign, &phone, "POST", q.target, "{}", 2, my_id, clock_now, q.signature,
+        CHECK(st_sign_as(phone.id, phone.pub, puddle_devkey_sign, &phone, "POST", q.target, "{}", 2, my_id, clock_now, q.signature,
                                     sizeof q.signature) == 0);
         CHECK(puddle_router_body_limit(&R, &q, 0) > 0);
-        CHECK(puddle_reqsig_sign_as(other.id, other.pub, puddle_devkey_sign, &other, "POST", q.target, "{}", 2, my_id, clock_now, q.signature,
+        CHECK(st_sign_as(other.id, other.pub, puddle_devkey_sign, &other, "POST", q.target, "{}", 2, my_id, clock_now, q.signature,
                                     sizeof q.signature) == 0);
         CHECK(puddle_router_body_limit(&R, &q, 0) == 0);                                   /* still waiting */
         snprintf(q.path, sizeof q.path, "/api/v1/devices/%s/accept", other.id);
         snprintf(q.target, sizeof q.target, "%s", q.path);
-        CHECK(puddle_reqsig_sign_as(phone.id, phone.pub, puddle_devkey_sign, &phone, "POST", q.target, "{}", 2, my_id, clock_now, q.signature,
+        CHECK(st_sign_as(phone.id, phone.pub, puddle_devkey_sign, &phone, "POST", q.target, "{}", 2, my_id, clock_now, q.signature,
                                     sizeof q.signature) == 0);
         CHECK(puddle_router_body_limit(&R, &q, 0) == 0);                                   /* devices are not a phone's to manage */
     }

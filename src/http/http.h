@@ -14,6 +14,7 @@ typedef struct {
     char target[1100];  /* path and query exactly as sent (what request signatures cover) */
     char authorization[512];   /* "" if absent */
     char signature[1024];      /* X-Puddle-Signature, "" if absent */
+    char seal[160];            /* X-Puddle-Seal, "" if absent: the body is sealed to us (spec/09) */
     size_t content_length;     /* 0 if absent */
     int expect_continue;       /* the client asked "100-continue" before sending its body */
     char range[64];            /* Range, "" if absent */
@@ -34,6 +35,12 @@ typedef struct {
     int has_file;
     int fd;
     int64_t file_len;
+    /* a file answer to a sealed request (spec/09): `file_len` bytes of plaintext, sealed as they are read into records
+     * `first_record`... under `seal_key`, the one numbered `final_record` being the file's last */
+    int sealed;
+    unsigned char seal_key[32];
+    int seal_status;
+    uint64_t first_record, final_record;
 } puddle_big;
 
 /* A `Range` header for a body of `total` bytes. Only one range of bytes is honoured ("bytes=a-b", "bytes=a-", "bytes=-n");

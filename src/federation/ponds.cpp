@@ -44,21 +44,14 @@ namespace {
 
 /* Who may cut a call short, and who must answer it. */
 struct Call {
-    const char *expect_fp = nullptr;         /* NULL or "": take whatever is shown (joining, or a new certificate to be proven) */
-    const unsigned char *pond_key = nullptr; /* a Pond that signs: its answer must carry its receipt, and expect_fp is the
-                                                certificate it last proved rather than one pinned */
+    const unsigned char *pond_key = nullptr; /* its signing key: the answer must carry its receipt (NULL when joining: not known yet) */
+    const unsigned char *seal_key = nullptr; /* its sealing key: what the request is sealed to (spec/09) */
     std::mutex *mu = nullptr;
     puddle_sock *sock = nullptr;
     const bool *stopping = nullptr;
 };
 
 } // namespace
-
-static int fp_ok(void *u, const char *fp)
-{
-    Call *c = (Call *)u;
-    return !c->expect_fp || !*c->expect_fp || !strcmp(c->expect_fp, fp);
-}
 
 static void on_socket(void *u, puddle_sock s)
 {
@@ -81,12 +74,8 @@ static void pond_call(puddle_ctx *ctx, const puddle_address *addr, const char *r
     o.io_timeout_s = total_s > 30 ? total_s : 15;
     o.total_timeout_s = total_s;
     o.max_body = max_body;
-    if (call->pond_key) { /* proven by receipts (http/client.h): nothing goes over a certificate it has not signed for */
-        o.peer_pub = call->pond_key;
-        o.expect_fp = call->expect_fp;
-    } else {
-        o.fingerprint_ok = fp_ok; /* pinned to the certificate it showed at join */
-    }
+    o.peer_pub = call->pond_key; /* believed only with its receipt */
+    o.seal_pub = call->seal_key; /* and private whatever carries it, a reverse proxy included */
     o.on_socket = on_socket;
     o.user = call;
     puddle_net_request(addr, method, target.c_str(), body.empty() ? NULL : body.data(), body.size(), ctx->identity, recipient, &o, out);
@@ -140,56 +129,25 @@ static const char *pond_error(const puddle_net_reply *r, const char *fallback)
     return fallback;
 }
 
-/* A 404 that is not about a channel is the Pond's answer to someone it does not know: it no longer has us as a member. From a
- * Pond that signs, that answer is the one it leaves unsigned (a receipt never goes to a stranger); it still came over the
- * certificate the Pond proved, so it is the Pond's. */
+/* A 404 that is not about a channel is the Pond's answer to someone it does not know: it no longer has us as a member. That
+ * answer is the one it leaves unsigned (a receipt never goes to a stranger), but it comes sealed under our request's key, which
+ * only the holder of the Pond's sealing key could do (spec/09): so it is the Pond's. A plain 404 could be anyone's. */
 static bool refused(const puddle_net_reply *r)
 {
     const char *e = pond_error(r, "");
-    bool answered = r->result == PUDDLE_NET_OK || (r->result == PUDDLE_NET_NOT_PROVEN && r->proof == PUDDLE_RECEIPT_MISSING);
+    bool answered = r->result == PUDDLE_NET_OK || (r->result == PUDDLE_NET_NOT_PROVEN && r->proof == PUDDLE_RECEIPT_MISSING && r->opened);
     return answered && r->status == 404 && strcmp(e, "no_channel") != 0 && strcmp(e, "no_file") != 0 && strcmp(e, "no_chunk") != 0 &&
            strcmp(e, "no_session") != 0; /* a voice session it no longer has (the Pond's docs/voice.md) */
 }
 
-/* A call to a Pond we are in (docs/ponds.md, "Proving who answers"). A Pond that signs is held to its receipts: an answer
- * counts only with one, and nothing is sent over a certificate it has not proven. Shown a new one (renewed, say), it is
- * asked to prove it with a request that carries nothing (GET /pond/v1/info) and, if its receipt names that certificate, the
- * call is made again; if not, the reply says PUDDLE_NET_OTHER_CERT and nothing was sent. A Pond that does not sign is pinned
- * to the certificate it showed at join, and a new one is PUDDLE_NET_CERT_CHANGED. */
+/* A call to a Pond we are in (the protocol's spec/05 and spec/09): sealed to its sealing key, and believed only with its receipt.
+ * No certificate is looked at, so a Pond behind a reverse proxy, or with a certificate renewed every day, is reached the same. */
 static void member_call(puddle_ctx *ctx, puddle_pond_conn &conn, const char *method, const std::string &target, const std::string &body,
                         size_t max_body, int total_s, Call &call, puddle_net_reply *r)
 {
-    call.expect_fp = conn.tls_fp;
-    call.pond_key = conn.signs ? conn.key : nullptr;
+    call.pond_key = conn.key;
+    call.seal_key = conn.seal_key;
     pond_call(ctx, &conn.address, conn.id, method, target, body, max_body, total_s, &call, r);
-    if (!conn.signs || r->result != PUDDLE_NET_OTHER_CERT)
-        return;
-    puddle_net_reply_free(r);
-    Call prove = call;
-    prove.expect_fp = nullptr;
-    puddle_net_reply pr;
-    pond_call(ctx, &conn.address, conn.id, "GET", "/pond/v1/info", "", 4u << 20, 20, &prove, &pr);
-    bool proven = pr.result == PUDDLE_NET_OK && pr.status == 200 && puddle_ponds_set_tls_fp(ctx->ponds, conn.id, pr.fingerprint) == 0;
-    if (!proven)
-        puddle_log(PUDDLE_LOG_WARN, "pond %.12s… showed a certificate it could not prove is its own: %s", conn.id,
-                   pr.result == PUDDLE_NET_OK ? "it did not answer as a member's Pond" : pr.reason);
-    else
-        snprintf(conn.tls_fp, sizeof conn.tls_fp, "%s", pr.fingerprint);
-    puddle_net_reply_free(&pr);
-    if (proven) {
-        pond_call(ctx, &conn.address, conn.id, method, target, body, max_body, total_s, &call, r);
-        return;
-    }
-    memset(r, 0, sizeof *r);
-    r->result = PUDDLE_NET_OTHER_CERT;
-    snprintf(r->reason, sizeof r->reason, "%s showed a certificate the Pond has not proven is its own", conn.address.address);
-}
-
-/* What the owner sees when a Pond can't be trusted to be itself: a pinned one showed another certificate, or one that signs
- * could not prove what answered. */
-static const char *unproven_status(const puddle_pond_conn &conn)
-{
-    return conn.signs ? "not_proven" : "certificate_changed";
 }
 
 /* ---------------------------------------------------------------- the followers */
@@ -260,7 +218,7 @@ static Outcome follow_call(puddle_ctx *ctx, Follower *f, const char *method, con
     member_call(ctx, conn, method, target, body, max_body, total_s, call, r);
     if (refused(r))
         return GONE;
-    if (r->result == PUDDLE_NET_CERT_CHANGED || r->result == PUDDLE_NET_OTHER_CERT || r->result == PUDDLE_NET_NOT_PROVEN)
+    if (r->result == PUDDLE_NET_NOT_PROVEN)
         return CERT;
     if (r->result != PUDDLE_NET_OK)
         return AWAY;
@@ -612,9 +570,7 @@ static void follow(puddle_ctx *ctx, Follower *f)
             puddle_log(PUDDLE_LOG_INFO, "pond %.12s… no longer knows us; not following it", id);
             break;
         }
-        puddle_pond_conn now;
-        bool signs = puddle_ponds_conn(ctx->ponds, id, &now) == 0 && now.signs;
-        puddle_ponds_set_status(ctx->ponds, id, o != CERT ? "unreachable" : signs ? "not_proven" : "certificate_changed");
+        puddle_ponds_set_status(ctx->ponds, id, o != CERT ? "unreachable" : "not_proven");
         backoff = backoff ? std::min(backoff * 2, BACKOFF_MAX_S) : 2;
         if (!rest(f, o == CERT ? BACKOFF_MAX_S * 1000 : backoff * 1000LL))
             break;
@@ -747,7 +703,12 @@ int puddle_pond_join(puddle_ctx *ctx, const puddle_link *link, const char *profi
         *code = "failed";
         return -1;
     }
-    Call call; /* first contact: whatever certificate it shows is the one we keep */
+    if (!link->has_key) {
+        *code = "bad_link"; /* an invite names the Pond by its sealing key; without it the join could be read on the way */
+        return -1;
+    }
+    Call call; /* first contact: sealed to the key the invite gave; its signing key comes in the answer */
+    call.seal_key = link->key;
     puddle_net_reply r;
     pond_call(ctx, &link->address, PUDDLE_RECIPIENT_ANY, "POST", "/pond/v1/join", body.substr(0, n), 1u << 20, 30, &call, &r);
     int rc = -1;
@@ -757,7 +718,7 @@ int puddle_pond_join(puddle_ctx *ctx, const puddle_link *link, const char *profi
         *code = "not_a_pond";
     else if (r.status == 404)
         *code = "invite_refused";
-    else if (puddle_ponds_add(ctx->ponds, &link->address, r.fingerprint, r.body, r.body_len, out_id) != 0)
+    else if (puddle_ponds_add(ctx->ponds, &link->address, link->key, r.body, r.body_len, out_id) != 0)
         *code = "not_a_pond";
     else
         rc = 0;
@@ -788,7 +749,7 @@ static bool owner_call(puddle_ctx *ctx, const char *pond, const char *method, co
     if (r->result == PUDDLE_NET_OK || refused(r))
         return true;
     *code = r->result == PUDDLE_NET_OFFLINE                                                            ? "unreachable"
-            : r->result == PUDDLE_NET_CERT_CHANGED || r->result == PUDDLE_NET_OTHER_CERT || r->result == PUDDLE_NET_NOT_PROVEN ? unproven_status(conn)
+            : r->result == PUDDLE_NET_NOT_PROVEN                                                       ? "not_proven"
                                                                                                        : "failed";
     return false;
 }

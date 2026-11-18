@@ -85,6 +85,8 @@ struct puddle_outbox_hooks {
     int (*addresses)(void *user, const char *peer, puddle_address *out, int max);
     /* the current signing key we hold for `peer`: 1 and `sign_pub` filled, or 0 if we hold none (then nothing is checked) */
     int (*peer_key)(void *user, const char *peer, unsigned char sign_pub[32]);
+    /* the sealing key to seal to `peer` with (spec/09): 1 and `enc_pub`, or 0 if we have none (a bare address's first request) */
+    int (*seal_key)(void *user, const char *peer, unsigned char enc_pub[32]);
     /* An item reached an end. Called without the outbox's lock, so it may queue more. `reply` may be NULL. */
     void (*done)(void *user, const puddle_ob_item *item, puddle_ob_outcome outcome, const puddle_net_reply *reply);
     void *user;

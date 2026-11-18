@@ -122,7 +122,7 @@ static void invite_json(puddle_jw *w, const puddle_ctx *ctx, const puddle_invite
     char link[300];
     puddle_jw_object(w);
     puddle_jw_key(w, "link");
-    if (puddle_make_link(ctx->config, inv->token, link, sizeof link))
+    if (puddle_make_link(ctx->config, ctx->identity, inv->token, link, sizeof link))
         puddle_jw_string(w, link);
     else
         puddle_jw_null(w);
@@ -150,7 +150,7 @@ static int create_invite(const puddle_call *c, puddle_jw *w)
     if (uses < 1 || uses > 1000 || expiresIn < 60 || expiresIn > 30 * 24 * 3600)
         throw Error::badRequest();
     char link[300], err[300];
-    if (!puddle_make_link(c->ctx->config, "abcdefghijklmnopqrstuvwxy2", link, sizeof link))
+    if (!puddle_make_link(c->ctx->config, c->ctx->identity, "abcdefghijklmnopqrstuvwxy2", link, sizeof link))
         throw Error::conflict("no_address", "this Puddle doesn't know its public address; set `advertise: host:port` in puddle.yaml");
     puddle_invite inv;
     if (puddle_streams_invite_create(c->ctx->streams, puddle_call_now_ms(c), expiresIn * 1000, (int)uses, &inv, err, sizeof err) != 0)
