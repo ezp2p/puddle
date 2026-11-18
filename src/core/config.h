@@ -31,7 +31,12 @@ typedef struct {
      * calls_off: `calls: off`, no calls at all. */
     uint16_t calls_port;
     int calls_off;
+    /* log: the lowest puddle_log_level written (base/log.h); PUDDLE_LOG, if set, wins (puddle_config_log_level) */
+    int log_level;
 } puddle_config;
+
+/* The log level to use: PUDDLE_LOG from the environment if it names one, else `log:`. */
+int puddle_config_log_level(const puddle_config *c);
 
 /* The UDP port calls use. */
 static inline uint16_t puddle_calls_port(const puddle_config *c)

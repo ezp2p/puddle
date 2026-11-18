@@ -186,6 +186,7 @@ private:
     void startRemote(); // the app uses a Puddle elsewhere
     static QString savedMode();
     static void saveMode(const QString &mode);
+    void applyLogLevel();
     void setError(const QString &message);
     void loadTheme();
     void followCall(); // the sound starts when a call connects, or a voice channel does, and stops when it ends

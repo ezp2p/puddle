@@ -525,7 +525,7 @@ void move_to(puddle_calls *cs, const GroupPtr &g, const std::string &other, cons
     leave_locked(cs, g, "hung_up", false);
     cs->heard.erase(g->group);
     join_locked(cs, h, device.empty() ? nullptr : device.c_str());
-    puddle_log(PUDDLE_LOG_INFO, "calls: %s went to %s, begun at the same moment", g->id.c_str(), other.c_str());
+    puddle_log(PUDDLE_LOG_DEBUG, "calls: %s went to %s, begun at the same moment", g->id.c_str(), other.c_str());
 }
 
 GroupPtr heard_by_id(puddle_calls *cs, const std::string &id)

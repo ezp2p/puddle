@@ -577,7 +577,7 @@ void callsx::add_their_addresses(puddle_calls *cs, const std::shared_ptr<rtc::Pe
         try {
             pc->addRemoteCandidate(rtc::Candidate(cand, MID));
         } catch (const std::exception &e) {
-            puddle_log(PUDDLE_LOG_INFO, "calls: not using %s for %.12s…: %s", addrs[i].host, peer.c_str(), e.what());
+            puddle_log(PUDDLE_LOG_DEBUG, "calls: not using %s for %.12s…: %s", addrs[i].host, peer.c_str(), e.what());
         }
     }
 }

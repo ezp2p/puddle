@@ -1,6 +1,7 @@
 #include "core/config.h"
 
 #include "core/yamltree.h"
+#include "base/log.h"
 #include "storage/files.h"
 #include "platform/fsutil.h"
 #include "platform/paths.h"
@@ -42,7 +43,11 @@ static const char DEFAULT_CONFIG[] =
     "\n"
     "# Calls (docs/calls.md) arrive on this UDP port, beside the HTTPS one: forward it too. \"calls: off\" turns them off.\n"
     "# calls:\n"
-    "#   port: 8443\n";
+    "#   port: 8443\n"
+    "\n"
+    "# How much goes in the log: debug (everything, every request), info (the default), warn, error or critical.\n"
+    "# PUDDLE_LOG in the environment, if set, is used instead.\n"
+    "# log: info\n";
 
 static void seterr(char *err, size_t n, const char *fmt, ...)
 {
@@ -133,6 +138,7 @@ int puddle_config_load(puddle_config *cfg, const char *path, char *err, size_t e
     }
 
     memset(cfg, 0, sizeof *cfg);
+    cfg->log_level = PUDDLE_LOG_INFO;
     snprintf(cfg->address, sizeof cfg->address, "%s", DEFAULT_ADDRESS);
     cfg->port = DEFAULT_PORT;
     if (puddle_config_default_data_dir(cfg->data_dir, sizeof cfg->data_dir) != 0) {
@@ -255,6 +261,15 @@ int puddle_config_load(puddle_config *cfg, const char *path, char *err, size_t e
                     goto fail;
                 }
             }
+        } else if (strcmp(key, "log") == 0) {
+            if (ynode_is_null(v))
+                continue;
+            puddle_log_level lv;
+            if (!s || puddle_log_level_parse(s, &lv) != 0) {
+                bad(err, errlen, path, v, "log must be debug, info, warn, error or critical");
+                goto fail;
+            }
+            cfg->log_level = (int)lv;
         } else if (strcmp(key, "calls") == 0) {
             if (ynode_is_null(v))
                 continue;
@@ -321,4 +336,13 @@ int puddle_parse_size(const char *s, int64_t *out)
             return 0;
         }
     return -1;
+}
+
+int puddle_config_log_level(const puddle_config *c)
+{
+    puddle_log_level lv;
+    const char *env = getenv("PUDDLE_LOG");
+    if (env && *env && puddle_log_level_parse(env, &lv) == 0)
+        return (int)lv;
+    return c->log_level;
 }

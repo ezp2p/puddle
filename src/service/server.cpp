@@ -6,6 +6,7 @@
 #include "federation/flow.h"
 #include "federation/keysync.h"
 #include "base/log.h"
+#include "platform/clock.h"
 #include "core/outbox.h"
 #include "core/profile.h"
 #include "http/reqsig.h"
@@ -43,6 +44,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <atomic>
 #include <time.h>
 
 #define MAX_CONNECTIONS 64
@@ -464,8 +466,37 @@ static void handle_request(puddle_server *srv, SSL *ssl, const char *peer)
     puddle_io io = { .read = ssl_read_cb, .write = ssl_write_cb, .io = ssl };
     puddle_serve_info info;
     puddle_http_serve(&h, &io, &info);
-    if (info.status) /* the owner reads this log, so say why a 404 happened; the client is told nothing */
-        puddle_log(PUDDLE_LOG_INFO, "%s %s %s [%s] -> %d", peer, info.method, info.path, info.auth, info.status);
+    /* every request, for working out a problem (the client is told nothing, so this says why a 404 happened); one the Puddle
+     * itself failed is worth more than that */
+    if (info.status)
+        puddle_log(info.status >= 500 ? PUDDLE_LOG_WARN : PUDDLE_LOG_DEBUG, "%s %s %s [%s] -> %d", peer, info.method, info.path,
+                   info.auth, info.status);
+}
+
+/* A connection that never became TLS: what it was, at the level it deserves. Something speaking plain HTTP to a Puddle is a
+ * mistake worth telling the owner (a proxy or probe set to http://), at most once a minute; the rest (a port check that
+ * connects and closes, a scanner, a client that gave up) is detail. */
+static void handshake_failed(const char *peer, const char *first, int n)
+{
+    static std::atomic<int64_t> last_plain{ 0 };
+    static const char *const verbs[] = { "GET ", "POST ", "HEAD ", "PUT ", "OPTIONS ", "DELETE ", "PATCH ", "CONNECT " };
+    bool plain = false;
+    for (const char *v : verbs)
+        plain = plain || (n >= (int)strlen(v) && !memcmp(first, v, strlen(v)));
+    if (plain) {
+        int64_t now = puddle_mono_ms(), was = last_plain.load();
+        if (now - was >= 60 * 1000 && last_plain.compare_exchange_strong(was, now)) {
+            puddle_log(PUDDLE_LOG_INFO,
+                       "%s spoke plain HTTP to this Puddle, which only speaks HTTPS: a reverse proxy, load balancer or health "
+                       "check pointed at it must use https:// (any certificate is fine)", peer);
+            return;
+        }
+        puddle_log(PUDDLE_LOG_DEBUG, "%s spoke plain HTTP", peer);
+    } else if (n == 0) {
+        puddle_log(PUDDLE_LOG_DEBUG, "%s connected and closed without a word (a port check?)", peer);
+    } else {
+        puddle_log(PUDDLE_LOG_DEBUG, "%s TLS handshake failed", peer);
+    }
 }
 
 static void *conn_main(void *arg)
@@ -474,14 +505,17 @@ static void *conn_main(void *arg)
     puddle_server *s = c->srv;
 
     SSL *ssl = SSL_new(s->tls);
-    if (ssl && SSL_set_fd(ssl, puddle_sock_fd(c->sock)) == 1) {
+    char first[8];
+    int peeked = puddle_sock_peek(c->sock, first, (int)sizeof first);
+    if (peeked == 0 || (peeked > 0 && first[0] != 0x16)) { /* not a TLS handshake, which starts with 0x16 */
+        handshake_failed(c->peer, first, peeked);
+    } else if (ssl && SSL_set_fd(ssl, puddle_sock_fd(c->sock)) == 1) {
         if (SSL_accept(ssl) == 1) {
             handle_request(s, ssl, c->peer);
             SSL_shutdown(ssl);
             puddle_sock_finish(c->sock); /* so closing does not reset the connection under the answer */
         } else {
-            /* expected whenever a client rejects the self-signed cert */
-            puddle_log(PUDDLE_LOG_INFO, "%s TLS handshake failed", c->peer);
+            handshake_failed(c->peer, first, peeked < 0 ? -1 : peeked);
         }
     }
     SSL_free(ssl);
@@ -500,13 +534,13 @@ int puddle_server_run(puddle_server *s)
     int rc = 0;
     int synced = puddle_sync_resume(&s->ctx);
     if (synced)
-        puddle_log(PUDDLE_LOG_INFO, "queued %d update%s for the people we are connected to", synced, synced == 1 ? "" : "s");
+        puddle_log(PUDDLE_LOG_DEBUG, "queued %d update%s for the people we are connected to", synced, synced == 1 ? "" : "s");
     int resumed = puddle_flow_resume(&s->ctx);
     if (resumed)
-        puddle_log(PUDDLE_LOG_INFO, "queued %d answer%s that were still owed", resumed, resumed == 1 ? "" : "s");
+        puddle_log(PUDDLE_LOG_DEBUG, "queued %d answer%s that were still owed", resumed, resumed == 1 ? "" : "s");
     puddle_group_reconcile(&s->ctx); /* connect to group members we are not yet connected to */
     if (puddle_outbox_start(s->outbox) != 0)
-        puddle_log(PUDDLE_LOG_WARN, "cannot start the outbox; nothing will be sent to other Puddles");
+        puddle_log(PUDDLE_LOG_ERROR, "cannot start the outbox; nothing will be sent to other Puddles");
     s->ctx.pond_followers = puddle_pond_followers_start(&s->ctx);
     {
         char cerr[200];
@@ -524,14 +558,14 @@ int puddle_server_run(puddle_server *s)
             continue;
         }
         if (ready < 0) {
-            puddle_log(PUDDLE_LOG_ERROR, "poll: %s", strerror(errno));
+            puddle_log(PUDDLE_LOG_CRITICAL, "stopping: waiting for connections failed: %s", strerror(errno));
             rc = -1;
             break;
         }
         if (which[1])
             break;
         if (which[0] == 2) {
-            puddle_log(PUDDLE_LOG_ERROR, "listening socket failed");
+            puddle_log(PUDDLE_LOG_CRITICAL, "stopping: the listening socket failed");
             rc = -1;
             break;
         }

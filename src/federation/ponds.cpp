@@ -490,7 +490,7 @@ static void fetch_round(puddle_ctx *ctx, Follower *f)
         if (o == AWAY || o == CERT)
             return; /* the Pond is away: the next look tries again */
         if (o == GONE)
-            puddle_log(PUDDLE_LOG_INFO, "pond %.12s… would not give file %.12s…", pond.c_str(), w.h.file.c_str());
+            puddle_log(PUDDLE_LOG_DEBUG, "pond %.12s… would not give file %.12s…", pond.c_str(), w.h.file.c_str());
     }
 }
 

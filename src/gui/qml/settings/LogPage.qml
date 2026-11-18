@@ -83,7 +83,7 @@ Pane {
                             wrapMode: Text.Wrap
                             opacity: 0.65
                             font.pixelSize: 12
-                            text: qsTr("Show user IDs and codes, and let you copy them.")
+                            text: qsTr("Show user IDs and codes, and let you copy them. Activity shows everything, every request included.")
                         }
                     }
                     Switch {

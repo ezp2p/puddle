@@ -246,6 +246,12 @@ void puddle_sock_close(puddle_sock s)
         close((int)s);
 }
 
+int puddle_sock_peek(puddle_sock s, char *buf, int n)
+{
+    ssize_t got = recv((int)s, buf, (size_t)n, MSG_PEEK);
+    return got < 0 ? -1 : (int)got;
+}
+
 int puddle_sock_fd(puddle_sock s)
 {
     return (int)s;
