@@ -46,14 +46,14 @@ static char *slurp(const char *path)
     return buf;
 }
 
-/* a config whose data folder is new each time (so a first start, which imports), naming `file` as the old setting did */
+/* a config whose folders are new each time (so a first start, which imports), naming `file` as the old setting did */
 static puddle_config fresh(const char *file)
 {
     static int n;
     puddle_config c;
     memset(&c, 0, sizeof c);
-    snprintf(c.dir, sizeof c.dir, "%s", root);
-    snprintf(c.data_dir, sizeof c.data_dir, "%s/data%d", root, ++n);
+    snprintf(c.dir, sizeof c.dir, "%s/config%d", root, ++n);
+    snprintf(c.data_dir, sizeof c.data_dir, "%s/data%d", root, n);
     if (file)
         snprintf(c.profile_files[c.nprofile_files++], PUDDLE_PATH_MAX, "%s", at(file));
     return c;
@@ -175,7 +175,7 @@ static void test_import(void)
     CHECK(puddle_profiles_get(p, "nope", &none) == 1 && !puddle_profiles_has(p, "nope") && puddle_profiles_has(p, "plain"));
 
     /* each is a file of its own now, and the same once read back: the old files are not read again */
-    snprintf(path, sizeof path, "%s/profiles/work.yaml", c.data_dir);
+    snprintf(path, sizeof path, "%s/profiles/work.yaml", c.dir);
     const char *y = slurp(path);
     CHECK(y && strstr(y, "display_name: \"Alice Chen\"") && strstr(y, hash) && !strstr(y, "id:"));
     puddle_profiles_close(p);
@@ -202,7 +202,7 @@ static void test_import(void)
     c = fresh("one.yaml");
     snprintf(c.profile_files[c.nprofile_files++], PUDDLE_PATH_MAX, "%s", at("dup.yaml"));
     CHECK(puddle_profiles_open(&c, old, err, sizeof err) == NULL && strstr(err, "already a profile with id 'second'"));
-    snprintf(path, sizeof path, "%s/profiles", c.data_dir);
+    snprintf(path, sizeof path, "%s/profiles", c.dir);
     CHECK(access(path, F_OK) != 0);
     snprintf(c.profile_files[1], PUDDLE_PATH_MAX, "%s", at("absent.yaml"));
     CHECK(puddle_profiles_open(&c, old, err, sizeof err) == NULL && strstr(err, "absent.yaml"));
@@ -340,7 +340,7 @@ static void test_folder(void)
     g.nlinks = 2;
     CHECK(puddle_profiles_save(p, &g, 1, &code, err, sizeof err) == 0);
     CHECK(puddle_profiles_save(p, &g, 1, &code, err, sizeof err) == -1 && !strcmp(code, "profile_exists"));
-    snprintf(path, sizeof path, "%s/profiles/gaming.yaml", c.data_dir);
+    snprintf(path, sizeof path, "%s/profiles/gaming.yaml", c.dir);
     CHECK(access(path, F_OK) == 0);
 
     /* the file reads back to the same profile */
@@ -405,15 +405,15 @@ static void test_folder(void)
     puddle_profiles_close(p);
 
     /* a file edited by hand with a mistake in it is left out; the others still load */
-    snprintf(path, sizeof path, "%s/profiles/broken.yaml", c.data_dir);
+    snprintf(path, sizeof path, "%s/profiles/broken.yaml", c.dir);
     FILE *f = fopen(path, "w");
     fputs("display_name: Fine\nblurb: [not, text]\n", f);
     fclose(f);
-    snprintf(path, sizeof path, "%s/profiles/Bad Name.yaml", c.data_dir);
+    snprintf(path, sizeof path, "%s/profiles/Bad Name.yaml", c.dir);
     f = fopen(path, "w");
     fputs("display_name: X\n", f);
     fclose(f);
-    snprintf(path, sizeof path, "%s/profiles/byhand.yaml", c.data_dir);
+    snprintf(path, sizeof path, "%s/profiles/byhand.yaml", c.dir);
     f = fopen(path, "w");
     fprintf(f, "display_name: By hand\navatar: %s\nbanner: 2222222222222222222222222222222222222222222222222222222222222222\n", pic.hash);
     fclose(f);
@@ -515,7 +515,7 @@ static void test_edited_by_hand(void)
     CHECK(p && puddle_profiles_take_edited(p, ids, PUDDLE_MAX_PROFILES) == 0);
     puddle_profiles_close(p);
 
-    snprintf(path, sizeof path, "%s/profiles/work.yaml", c.data_dir); /* edited by hand while stopped */
+    snprintf(path, sizeof path, "%s/profiles/work.yaml", c.dir); /* edited by hand while stopped */
     FILE *f = fopen(path, "w");
     fputs("# mine\ndisplay_name: \"Ali, working\"\n", f);
     fclose(f);
@@ -536,6 +536,46 @@ static void test_edited_by_hand(void)
     puddle_profiles_close(p);
 }
 
+/* Profiles were once kept in the data folder: the first start that keeps them beside puddle.yaml moves them there. */
+static void test_moved_from_data_folder(void)
+{
+    char old[PUDDLE_PROFILE_ID_MAX + 1], err[256], path[PUDDLE_PATH_MAX], ids[4][PUDDLE_PROFILE_ID_MAX + 1];
+    puddle_config c = fresh("p.yaml"); /* the old setting too, which is not read: there are profiles already */
+    puts_file("p.yaml", "profiles:\n  - id: imported\n    display_name: Imported\n");
+    snprintf(path, sizeof path, "%s/profiles", c.data_dir);
+    CHECK(mkdir(c.data_dir, 0700) == 0 && mkdir(path, 0700) == 0);
+    snprintf(path, sizeof path, "%s/profiles/kept.yaml", c.data_dir);
+    FILE *f = fopen(path, "w");
+    CHECK(f != NULL);
+    if (f) {
+        fputs("display_name: \"Kept\"\n", f);
+        fclose(f);
+    }
+    puddle_profiles *p = puddle_profiles_open(&c, old, err, sizeof err);
+    CHECK(p && old[0] == '\0' && puddle_profiles_ids(p, ids, 4) == 1 && !strcmp(ids[0], "kept"));
+    puddle_profiles_close(p);
+    CHECK(access(path, F_OK) != 0);
+    snprintf(path, sizeof path, "%s/profiles", c.data_dir);
+    CHECK(access(path, F_OK) != 0);
+    snprintf(path, sizeof path, "%s/profiles/kept.yaml", c.dir);
+    const char *y = slurp(path);
+    CHECK(y && strstr(y, "Kept"));
+
+    /* both there (an old copy brought back by hand): the one beside puddle.yaml is read, the other left alone */
+    snprintf(path, sizeof path, "%s/profiles", c.data_dir);
+    CHECK(mkdir(path, 0700) == 0);
+    snprintf(path, sizeof path, "%s/profiles/stale.yaml", c.data_dir);
+    f = fopen(path, "w");
+    if (f) {
+        fputs("display_name: \"Stale\"\n", f);
+        fclose(f);
+    }
+    p = puddle_profiles_open(&c, old, err, sizeof err);
+    CHECK(p && puddle_profiles_ids(p, ids, 4) == 1 && !strcmp(ids[0], "kept"));
+    puddle_profiles_close(p);
+    CHECK(access(path, F_OK) == 0);
+}
+
 int main(void)
 {
     const char *base = getenv("TMPDIR");
@@ -548,6 +588,7 @@ int main(void)
     test_folder();
     test_places();
     test_edited_by_hand();
+    test_moved_from_data_folder();
     nftw(root, rm_cb, 16, FTW_DEPTH | FTW_PHYS);
     return failures ? 1 : 0;
 }

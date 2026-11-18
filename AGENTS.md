@@ -49,13 +49,12 @@ Outputs: `build/puddled` and `build/Puddle` (`build/Puddle.app` on macOS).
     ./build/puddled                  # or ./build/Puddle
 
 On first run `~/.config/puddle/puddle.yaml` is created (Windows: `%APPDATA%\puddle\`)
-with `address: 127.0.0.1` and `port: 8443`, a starter `profiles.yaml` next to it, and a
-self-signed `cert.pem` / `key.pem` in the same folder. Edit the config and restart to change the
+with `address: 127.0.0.1` and `port: 8443`, and a self-signed `cert.pem` / `key.pem` in the same folder. Edit the config and restart to change the
 listener (`address: "::"` listens on all IPv4 and IPv6 interfaces; put IPv6 addresses in quotes). Set `advertise: host:port`
 to the address friends should use if it isn't the one you listen on; it is the address you give to friends.
 
-Your profiles (display name, picture, blurb, colors, ...) live in `profiles.yaml`, and the
-`profiles:` setting names the file or files. See [docs/profiles.md](docs/profiles.md).
+Your profiles (display name, picture, blurb, colors, ...) are one file each in the `profiles` folder beside it,
+`~/.config/puddle/profiles/<id>.yaml`. See [docs/profiles.md](docs/profiles.md).
 Your identity is made from a **recovery phrase**: eight groups of four characters, such as
 `7QK4-M2XB-9TDW-HC5R-ZP3E-A8VN-4YJF-X2K7`. It is shown once, when the identity is made, and is not stored
 anywhere. **Write it down** (on paper, or in a password manager): it is the only way back to your

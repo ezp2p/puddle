@@ -14,7 +14,8 @@ what arrives), `src/core/people.cpp` (what others show us), `src/federation/prof
 
 ## Where they live
 
-One YAML file per profile in the data folder: `<data_dir>/profiles/<id>.yaml`. The file's name is the profile's id,
+One YAML file per profile, beside `puddle.yaml` with the rest of the configuration: `profiles/<id>.yaml`, so
+`~/.config/puddle/profiles/<id>.yaml` by default (Windows: `%APPDATA%\puddle\profiles\`). The file's name is the profile's id,
 which only the owner sees (`a-z`, `0-9`, `-`, `_`, up to 32). Puddle writes these files when a profile is created or
 changed through the owner API (`/api/v1/profiles/...`). They can also be edited by hand while Puddle is not running:
 at the next start, everyone shown a profile that changed is told, as after an edit in the app. What counts as a change is
@@ -63,14 +64,18 @@ read) is left out of its profile the same way.
 
 ### The first start
 
-Before profiles lived in the data folder they were YAML files named by the `profiles:` setting in `puddle.yaml`. The
-first time Puddle starts without a `profiles` folder, it brings those in: each becomes a file of its own (the
-`profiles:` setting is not read again). Then the first of them was shown to everyone the owner had chosen nothing for,
+Before profiles were a file each, they were YAML files named by the `profiles:` setting in `puddle.yaml`. The first
+time Puddle starts without a `profiles` folder, it brings those in: each becomes a file of its own. The `profiles:`
+setting is not read again, and a warning at every start says so while it is still there. Then the first of them was shown to everyone the owner had chosen nothing for,
 so it stays chosen for every stream that is not closed and every group the owner is in: nobody's view of the owner
 changes. Anywhere new sees a profile only once one is chosen. Choices made for streams before
 (`state/stream-profiles.tsv`) carry over as the direct places.
 
 A new Puddle with nothing to bring in starts with one profile, `default`, named after the OS account, and shown to no one.
+
+For a while the folder was kept in the data folder, `<data_dir>/profiles`. A Puddle that finds it there and none beside
+`puddle.yaml` moves it across; if both are there, the one beside `puddle.yaml` is read and the other is left alone, with
+a warning.
 
 ## Where each is shown
 

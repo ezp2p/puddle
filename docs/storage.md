@@ -13,10 +13,13 @@ Identity, signing and encryption are in [identity.md](identity.md).
 
 ## Layout
 
+What the owner configures is kept beside `puddle.yaml` (`~/.config/puddle/` by default): the settings, the TLS
+certificate, and the owner's profiles, `profiles/<id>.yaml` ([profiles.md](profiles.md)). Everything Puddle keeps for
+itself is in the data folder:
+
     <data_dir>/
       chats/<chat-id>/<YYYY-MM-DD>.jsonl   one file per chat per UTC day (= one federation chunk)
       identity/                            keys, contacts (see identity.md)
-      profiles/<id>.yaml                   the owner's profiles, one file each (docs/profiles.md)
       media/<sha256>                       profile pictures, banners and backgrounds, named by content hash
       files/<id>, files/<id>.chunks        files sent in chats, and their chunk hashes (docs/files.md, storage/files.h)
       files/partial/<id>...                a file being fetched: where each chunk goes, and which have arrived

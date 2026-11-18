@@ -1,7 +1,7 @@
 $schema: https://json-schema.org/draft/2020-12/schema
 title: OwnProfile
 description: |
-  One of the owner's profiles (docs/profiles.md), a file in the data folder, with the private id used to refer to it.
+  One of the owner's profiles (docs/profiles.md), a file beside puddle.yaml, with the private id used to refer to it.
   The id is never sent to anyone. `places` is where it is shown: the owner's consent for it to go there.
 allOf:
   - $ref: "../wire/profile.yaml"

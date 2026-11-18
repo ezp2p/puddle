@@ -58,7 +58,7 @@ it starts straight away, restarts and updates included.
 
 **3. Set your name.** Nothing is shown about you until you choose a profile ([profiles.md](profiles.md)). Start the
 container with `-e PUDDLE_NAME="Your name"` to have a first one, `main`, made for you, or add one with the owner API
-(`POST /api/v1/profiles`) or from the phone app later. A profile is one file each in `data/profiles/` in the volume.
+(`POST /api/v1/profiles`) or from the phone app later. A profile is one file each in `profiles/` in the volume, beside `puddle.yaml`.
 
 **4. Connect your phone.** A Puddle in Docker has no window, so you use it from the phone app. Ask the Puddle for a
 pairing link with its owner token (it works once, for ten minutes):
@@ -112,7 +112,7 @@ Everything the Puddle keeps lives in the `/data` volume:
 | Path              | What                                                            |
 |-------------------|-----------------------------------------------------------------|
 | `puddle.yaml`     | the configuration                                               |
-| `data/profiles/`  | your profiles, one file each ([profiles.md](profiles.md))       |
+| `profiles/`       | your profiles, one file each ([profiles.md](profiles.md))       |
 | `cert.pem`, `key.pem` | the TLS certificate (it only encrypts; your keys prove who you are) |
 | `data/identity/`  | your keys                                                       |
 | `data/chats/`, `data/state/` | conversations, friends, phones, the owner token      |

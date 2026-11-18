@@ -30,7 +30,7 @@ if [ ! -e "$config" ]; then
             echo "# advertise: home.example.org:8443"
         fi
         echo
-        echo "# Everything else (keys, chats, your profiles: one file each in data/profiles) is kept here."
+        echo "# Your profiles are files beside this one, in profiles/. Keys, chats and pictures are kept here."
         echo "data_dir: data"
     } > "$config"
 elif [ -n "${PUDDLE_ADVERTISE:-}" ] && grep -q '^# advertise: home.example.org:8443$' "$config"; then
@@ -41,10 +41,10 @@ if ! grep -q '^advertise:' "$config" && ! grep -q '^address: *127\.' "$config"; 
     echo "docker-entrypoint: $config has no advertise address, so your link won't work; set PUDDLE_ADVERTISE or edit it" >&2
 fi
 
-if [ -n "${PUDDLE_NAME:-}" ] && [ ! -d "$dir/data/profiles" ]; then
+if [ -n "${PUDDLE_NAME:-}" ] && [ ! -d "$dir/profiles" ] && [ ! -d "$dir/data/profiles" ]; then
     name=$(printf '%s' "$PUDDLE_NAME" | sed 's/\\/\\\\/g; s/"/\\"/g')
-    mkdir -p "$dir/data/profiles"
-    cat > "$dir/data/profiles/main.yaml" <<EOF
+    mkdir -p "$dir/profiles"
+    cat > "$dir/profiles/main.yaml" <<EOF
 # A Puddle profile (docs/profiles.md). Choose who sees it in the app, or with the owner API.
 display_name: "$name"
 EOF

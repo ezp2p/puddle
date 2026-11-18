@@ -13,7 +13,7 @@ Use these terms the way the owner does, in code, docs and conversation.
   never hosts anything. No product name yet; "phone client" is a placeholder.
 - **Profile**: how the owner appears to others (display name, picture, bios, name colour, links, ...). An
   owner has several (work, friends, family) and chooses which one each place sees: a DM, a group, later a
-  Pond. Nothing is shown where none was chosen. One YAML file each in the data folder (`docs/profiles.md`).
+  Pond. Nothing is shown where none was chosen. One YAML file each in `profiles/` beside `puddle.yaml` (`docs/profiles.md`).
 - **Pond**: a Discord-style community server (channels, many members). Runs as its own daemon on
   a different code base (`../pond`, MariaDB); it is not a Puddle. A Puddle joins one with a `pond://` invite and follows it
   (`docs/ponds.md`); the app talks only to its own Puddle. Text channels, with files, so far.
