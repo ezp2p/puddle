@@ -21,6 +21,7 @@ Pane {
 
     ConfirmDialog { id: confirm }
     HandOverDialog { id: handOver; backend: page.backend }
+    ProfileDialog { id: profileDialog; chats: page.chats }
     property string backupNote: ""
     FileDialog {
         id: backupSaver
@@ -114,10 +115,63 @@ Pane {
                 }
                 Rectangle { Layout.fillWidth: true; height: 1; color: Theme.hairline }
 
-                // how the microphone goes in a Pond's voice channel (docs/ponds.md, "Voice channels"); a call always sends it
+                // the owner's profiles (docs/profiles.md): kept by the Puddle wherever it runs, so the same on every device
+                ColumnLayout {
+                    objectName: "profilesSettings"
+                    Layout.fillWidth: true
+                    Layout.margins: 16
+                    spacing: 8
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Label { text: qsTr("Profiles"); font.bold: true; Layout.fillWidth: true }
+                        Button { objectName: "newProfile"; text: qsTr("New profile"); onClicked: profileDialog.edit("") }
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.Wrap
+                        opacity: 0.65
+                        font.pixelSize: 12
+                        text: qsTr("How you appear: each chat, group and Pond sees the one you choose for it, and nothing of the others. "
+                                   + "Your Puddle keeps them, so they are the same on every device you use it from.")
+                    }
+                    Repeater {
+                        model: page.chats.profiles
+                        delegate: RowLayout {
+                            id: prow
+                            required property var model
+                            objectName: "profileRow"
+                            Layout.fillWidth: true
+                            spacing: 10
+                            Avatar { chats: page.chats; name: prow.model.display_name; hash: prow.model.avatar || ""; size: 36 }
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 0
+                                Label {
+                                    Layout.fillWidth: true
+                                    elide: Text.ElideRight
+                                    font.bold: true
+                                    text: prow.model.display_name + (prow.model.pronouns ? "  ·  " + prow.model.pronouns : "")
+                                }
+                                Label {
+                                    Layout.fillWidth: true
+                                    elide: Text.ElideRight
+                                    opacity: 0.65
+                                    font.pixelSize: 12
+                                    text: (prow.model.blurb ? prow.model.blurb + "  ·  " : "")
+                                          + (prow.model.place_count === 1 ? qsTr("seen in 1 place") : prow.model.place_count > 1
+                                             ? qsTr("seen in %1 places").arg(prow.model.place_count) : qsTr("not shown anywhere yet"))
+                                }
+                            }
+                            Button { objectName: "editProfile"; text: qsTr("Edit"); onClicked: profileDialog.edit(prow.model.id) }
+                        }
+                    }
+                }
+                Rectangle { Layout.fillWidth: true; height: 1; color: Theme.hairline }
+
+                // how the microphone goes in a Pond's voice channel (docs/ponds.md, "Voice channels"); a call always sends it. Kept on
+                // each device, since it is about this device's microphone and keys, whether the Puddle runs here or elsewhere.
                 ColumnLayout {
                     objectName: "voiceSettings"
-                    visible: !page.backend.phone
                     Layout.fillWidth: true
                     Layout.margins: 16
                     spacing: 6

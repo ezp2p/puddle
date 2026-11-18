@@ -29,6 +29,7 @@ extern "C" {
 #include <QSettings>
 
 #include <QPainter>
+#include <algorithm>
 #include <atomic>
 
 static int failures;
@@ -99,10 +100,29 @@ static QJsonObject row(JsonListModel *m, const QString &key, const QString &valu
 }
 
 static QPoint centre(QQuickItem *i) { return i->mapToScene(QPointF(i->width() / 2, i->height() / 2)).toPoint(); }
+// Settings scrolls: bring `i` into the window first if it is on that page, as the owner would scroll to it
+static void reveal(QQuickItem *i)
+{
+    for (QQuickItem *p = i ? i->parentItem() : nullptr; p; p = p->parentItem())
+        if (p->objectName() == "settingsScroll") {
+            QQuickItem *content = p->property("contentItem").value<QQuickItem *>();
+            if (!content)
+                return;
+            const double y = i->mapToItem(content, QPointF(0, 0)).y(), view = p->height();
+            const double cy = p->property("contentY").toDouble();
+            if (y < cy || y + i->height() > cy + view) {
+                const double most = std::max(0.0, p->property("contentHeight").toDouble() - view);
+                p->setProperty("contentY", std::clamp(y - view / 3, 0.0, most));
+                settle(100);
+            }
+            return;
+        }
+}
 static bool click(QQuickItem *i)
 {
     if (!i || !i->isVisible() || !i->isEnabled())
         return false;
+    reveal(i);
     settle(150); // lists and layouts may still be moving into place
     QTest::mouseClick(win, Qt::LeftButton, {}, centre(i));
     return true;
@@ -1230,6 +1250,50 @@ int main(int argc, char **argv)
         CHECK(until([&] { return phone.state() == "ready"; }, 8000));
         CHECK(until([&] { return P.friendCount() == A.friendCount() && P.connected() && P.problem().isEmpty(); }, 8000));
         CHECK(until([&] { return find("acceptPhone") == nullptr && button(QObject::tr("Remove")) != nullptr; }, 5000));
+
+        /* profiles from the phone: the Puddle keeps them, so a picture chosen there goes to the Puddle, and the window sees it */
+        {
+            const QString png = home.path() + "/pic.png";
+            QImage pic(48, 48, QImage::Format_RGB32);
+            pic.fill(QColor("#3366cc"));
+            CHECK(pic.save(png));
+            QSignalSpy up(&P, &Chats::pictureUploaded), saved(&P, &Chats::profileSaved);
+            P.uploadPicture(QUrl::fromLocalFile(png), "avatar");
+            CHECK(until([&] { return up.count() == 1; }, 10000));
+            const QString hash = up.value(0).value(1).toString();
+            CHECK(up.value(0).value(0).toString() == "avatar" && hash.size() == 64 && up.value(0).value(2).toString().isEmpty());
+            CHECK(until([&] { return !P.profile("phone-made").isEmpty() || P.profileIdFor("Phone Made") == "phone-made"; }, 3000));
+            P.saveProfile("phone-made", { { "display_name", "Phone Made" }, { "pronouns", "they/them" }, { "avatar", hash } }, true);
+            CHECK(until([&] { return saved.count() == 1; }, 10000) && saved.value(0).value(1).toString().isEmpty());
+            CHECK(until([&] { return A.profile("phone-made").value("avatar").toString() == hash; }, 8000)); /* the window has it */
+            CHECK(A.profile("phone-made").value("pronouns").toString() == "they/them");
+            P.saveProfile("phone-made", { { "display_name", "Phone Made" }, { "pronouns", QVariant() } }, false); /* null clears */
+            CHECK(until([&] { return saved.count() == 2; }, 10000) && saved.value(1).value(1).toString().isEmpty());
+            CHECK(until([&] { return !A.profile("phone-made").contains("pronouns") || A.profile("phone-made").value("pronouns").isNull(); }, 8000));
+            QSignalSpy gone(&P, &Chats::profileDeleted);
+            P.deleteProfile("phone-made");
+            CHECK(until([&] { return gone.count() == 1 && A.profile("phone-made").isEmpty(); }, 8000));
+        }
+    }
+
+    {   /* Settings: a new profile, made in the window */
+        CHECK(until([&] { return find("newProfile") != nullptr; }, 3000));
+        const int before = all("profileRow").size();
+        CHECK(before >= 1);
+        CHECK(click(find("newProfile")));
+        CHECK(until([&] { return find("profileName") != nullptr && find("profileName")->isVisible(); }, 3000));
+        if (QQuickItem *f = find("profileName"))
+            f->setProperty("text", "Work Me");
+        settle();
+        if (const QString shot = qEnvironmentVariable("PUDDLE_SHOT"); !shot.isEmpty())
+            win->grabWindow().save(shot + "-profile-edit.png");
+        CHECK(click(find("profileSave")));
+        CHECK(until([&] { return all("profileRow").size() == before + 1; }, 8000));
+        if (QObject *d = win->findChild<QObject *>("profileDialog"); d && !d->property("problem").toString().isEmpty())
+            fprintf(stderr, "profile dialog says: %s\n", qPrintable(d->property("problem").toString()));
+        CHECK(A.profile("work-me").value("display_name").toString() == "Work Me");
+        if (const QString shot = qEnvironmentVariable("PUDDLE_SHOT"); !shot.isEmpty())
+            win->grabWindow().save(shot + "-profiles.png");
     }
 
     {   /* Settings: a backup, written while the Puddle runs; then the Puddle moved to a server, with this app as its device */
@@ -1239,7 +1303,8 @@ int main(int argc, char **argv)
         CHECK(scroll && scroll->property("contentHeight").toDouble() > scroll->height());
         if (scroll) {
             scroll->setProperty("contentY", 0);
-            wheel(scroll, -3);
+            settle(100);
+            wheel(find("profilesSettings") ? find("profilesSettings") : scroll, -3);
             CHECK(until([&] { return scroll->property("contentY").toDouble() > 0; }, 2000));
         }
         if (const QString shot = qEnvironmentVariable("PUDDLE_SHOT"); !shot.isEmpty()) {

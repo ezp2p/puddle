@@ -712,6 +712,9 @@ int puddle_pond_join(puddle_ctx *ctx, const puddle_link *link, const char *profi
     puddle_net_reply r;
     pond_call(ctx, &link->address, PUDDLE_RECIPIENT_ANY, "POST", "/pond/v1/join", body.substr(0, n), 1u << 20, 30, &call, &r);
     int rc = -1;
+    if (r.result != PUDDLE_NET_OK || (r.status != 200 && r.status != 404))
+        puddle_log(PUDDLE_LOG_WARN, "joining the pond at %s: %s%s(HTTP %d)", link->address.address, r.reason, r.reason[0] ? " " : "",
+                   r.status);
     if (r.result == PUDDLE_NET_OFFLINE)
         *code = "unreachable";
     else if (r.result != PUDDLE_NET_OK || (r.status != 200 && r.status != 404))

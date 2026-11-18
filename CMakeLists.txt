@@ -328,6 +328,7 @@ if(PUDDLE_BUILD_GUI)
         src/gui/qml/dialogs/NewConversationDialog.qml
         src/gui/qml/dialogs/JoinPondDialog.qml
         src/gui/qml/dialogs/HandOverDialog.qml
+        src/gui/qml/dialogs/ProfileDialog.qml
         src/gui/qml/chat/ChatPage.qml
         src/gui/qml/chat/PondPage.qml
         src/gui/qml/chat/MessageFiles.qml
