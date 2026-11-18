@@ -376,3 +376,95 @@ done:
         o.on_socket(o.user, PUDDLE_SOCK_NONE);
     puddle_sock_close(sock);
 }
+
+/* ---- the owner, at a terminal on this computer ---- */
+
+void puddle_owner_request(const puddle_config *cfg, const char *method, const char *target, const char *body, puddle_net_reply *out)
+{
+    memset(out, 0, sizeof *out);
+    char token[256] = "", path[PUDDLE_PATH_MAX + 32];
+    snprintf(path, sizeof path, "%s/state/owner-token", cfg->data_dir);
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        why(out, PUDDLE_NET_FAILED, "cannot read %s: is this Puddle set up and running, and are you its user?", path);
+        return;
+    }
+    size_t tn = fread(token, 1, sizeof token - 1, f);
+    fclose(f);
+    while (tn && (token[tn - 1] == '\n' || token[tn - 1] == '\r' || token[tn - 1] == ' '))
+        tn--;
+    token[tn] = '\0';
+
+    /* "every interface" is reached on loopback */
+    const char *host = !strcmp(cfg->address, "0.0.0.0") || !cfg->address[0] ? "127.0.0.1" : !strcmp(cfg->address, "::") ? "::1" : cfg->address;
+    puddle_address addr;
+    memset(&addr, 0, sizeof addr);
+    snprintf(addr.host, sizeof addr.host, "%s", host);
+    addr.port = cfg->port;
+    snprintf(addr.address, sizeof addr.address, strchr(host, ':') ? "[%s]:%u" : "%s:%u", host, (unsigned)cfg->port);
+    int64_t deadline = mono_ms() + 15000;
+    puddle_sock sock = dial(&addr, 5, 10, deadline, out);
+    if (sock == PUDDLE_SOCK_NONE) {
+        char detail[sizeof out->reason];
+        snprintf(detail, sizeof detail, "%s", out->reason);
+        why(out, PUDDLE_NET_OFFLINE, "this Puddle isn't running at %s (%s)", addr.address, detail);
+        return;
+    }
+    SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
+    SSL *ssl = ctx ? SSL_new(ctx) : NULL;
+    char *raw = NULL;
+    size_t len = 0, cap = PUDDLE_NET_BODY_MAX + 8192;
+    if (!ssl || SSL_set_fd(ssl, puddle_sock_fd(sock)) != 1 || SSL_connect(ssl) != 1) {
+        why(out, PUDDLE_NET_FAILED, "cannot start TLS with %s", addr.address);
+        goto done;
+    }
+    {
+        char head[1024];
+        size_t bl = body ? strlen(body) : 0;
+        int hn = snprintf(head, sizeof head,
+                          "%s %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: puddled\r\nAuthorization: Bearer %s\r\n"
+                          "Content-Type: application/json\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n",
+                          method, target, addr.address, token, bl);
+        if (hn <= 0 || (size_t)hn >= sizeof head || ssl_send_all(ssl, head, (size_t)hn) != 0 || (bl && ssl_send_all(ssl, body, bl) != 0)) {
+            why(out, PUDDLE_NET_FAILED, "could not send the request to %s", addr.address);
+            goto done;
+        }
+    }
+    raw = (char *)malloc(cap + 1);
+    while (raw && len < cap && mono_ms() < deadline) {
+        int n = SSL_read(ssl, raw + len, (int)(cap - len));
+        if (n <= 0)
+            break; /* Connection: close: the end of the answer */
+        len += (size_t)n;
+    }
+    if (!raw) {
+        why(out, PUDDLE_NET_FAILED, "out of memory");
+        goto done;
+    }
+    raw[len] = '\0';
+    {
+        int status = 0;
+        char *e = strstr(raw, "\r\n\r\n");
+        if (!e || sscanf(raw, "HTTP/1.%*d %d", &status) != 1) {
+            why(out, PUDDLE_NET_FAILED, "%s did not answer as a Puddle does", addr.address);
+            goto done;
+        }
+        out->result = PUDDLE_NET_OK;
+        out->status = status;
+        out->body_len = len - (size_t)(e + 4 - raw);
+        out->body = (char *)malloc(out->body_len + 1);
+        if (out->body) {
+            memcpy(out->body, e + 4, out->body_len);
+            out->body[out->body_len] = '\0';
+        }
+    }
+done:
+    free(raw);
+    if (ssl) {
+        SSL_shutdown(ssl);
+        SSL_free(ssl);
+    }
+    if (ctx)
+        SSL_CTX_free(ctx);
+    puddle_sock_close(sock);
+}

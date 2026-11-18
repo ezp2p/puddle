@@ -12,6 +12,7 @@
  * refused before connecting: unspecified, multicast, broadcast and link-local (which includes the cloud
  * metadata address). Loopback and private ranges stay allowed, since friends on one network are normal. */
 
+#include "core/config.h"
 #include "core/identity.h"
 #include "core/delivery.h"
 #include "core/link.h"
@@ -47,6 +48,11 @@ typedef struct {
 void puddle_net_request(const puddle_address *addr, const char *method, const char *target, const void *body,
                         size_t body_len, puddle_identity *me, const char *peer_id, const puddle_net_opts *opts,
                         puddle_net_reply *out);
+
+/* Call this Puddle's own owner API (api/openapi.yaml), as `puddled` does for the owner at a terminal: on loopback, at the
+ * address and port `cfg` listens on, with the owner token from its data folder. `body` is JSON or NULL. Fills `out` as
+ * puddle_net_request does (result, status, body, reason), without any signature or sealing: it never leaves the computer. */
+void puddle_owner_request(const puddle_config *cfg, const char *method, const char *target, const char *body, puddle_net_reply *out);
 
 /* Would we dial this address? (resolved addresses are checked the same way.) For tests and for callers who
  * want to say no early. */

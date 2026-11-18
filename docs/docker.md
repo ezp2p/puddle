@@ -61,21 +61,19 @@ container with `-e PUDDLE_NAME="Your name"` to have a first one, `main`, made fo
 (`POST /api/v1/profiles`) or from the phone app later. A profile is one file each in `profiles/` in the volume, beside `puddle.yaml`.
 
 **4. Connect your phone, or the desktop app.** A Puddle in Docker has no window, so you use it from the phone app, or from the
-desktop app: on its first run, choose **Connect to my Puddle**. Ask the Puddle for a pairing link with its owner token (it works
-once, for ten minutes):
+desktop app: on its first run, choose **Connect to my Puddle**. Then, on the server:
 
 ```sh
-TOKEN=$(docker exec puddle cat /data/data/state/owner-token)
-curl -sk -X POST -H "Authorization: Bearer $TOKEN" -d '{}' https://127.0.0.1:8443/api/v1/devices/pair
+docker exec -it puddle puddled --pair
 ```
 
-Paste the `link` from the answer into the app, name the device, and note the six digits it shows. Then let it in,
-checking the same six digits are in the list:
+It shows a pairing link (it works once, for ten minutes): paste it into the app, name the device, and note the six digits the
+app shows. `puddled --pair` waits for it, shows the same six digits, and asks you to accept it; say yes only if they match.
+(Without a terminal, `--pair` only prints the link; accept with `docker exec puddle puddled --accept <digits>`.) With Kubernetes,
+the same with `kubectl exec -it deploy/<name> -- puddled --pair`.
 
-```sh
-curl -sk -H "Authorization: Bearer $TOKEN" https://127.0.0.1:8443/api/v1/devices
-curl -sk -X POST -H "Authorization: Bearer $TOKEN" -d '{}' https://127.0.0.1:8443/api/v1/devices/<id from the list>/accept
-```
+The link carries the address in `advertise`: set `PUDDLE_ADVERTISE` (or `advertise:` in `puddle.yaml`) to where the app
+reaches the Puddle, not the container's own address.
 
 **5. Make friends.** Give people your link (`home.example.org:8443`) and send them requests from the phone.
 
