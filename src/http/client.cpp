@@ -54,6 +54,17 @@ static int ip_dialable(const puddle_ip *ip)
     return 1;
 }
 
+/* An address written out as numbers (SNI may only name a host): IPv6 has a ':', IPv4 is digits and dots. */
+static int is_ip(const char *host)
+{
+    if (strchr(host, ':'))
+        return 1;
+    for (const char *p = host; *p; p++)
+        if (!(*p == '.' || (*p >= '0' && *p <= '9')))
+            return 0;
+    return 1;
+}
+
 static int all_dialable(const char *host, int numeric_only)
 {
     puddle_ip ips[16];
@@ -171,6 +182,12 @@ void puddle_net_request(const puddle_address *addr, const char *method, const ch
     SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, NULL); /* see the top of client.h: the signature is what authenticates */
     ssl = SSL_new(ctx);
     if (!ssl || SSL_set_fd(ssl, puddle_sock_fd(sock)) != 1) {
+        why(out, PUDDLE_NET_FAILED, "cannot start TLS");
+        goto done;
+    }
+    /* Name the host we want (SNI) when it is a name, not a number: a reverse proxy serving several sites on one address picks the
+     * site by it, and refuses one that doesn't match the Host header (Apache's 421). It only routes; nothing is checked. */
+    if (!is_ip(addr->host) && SSL_set_tlsext_host_name(ssl, addr->host) != 1) {
         why(out, PUDDLE_NET_FAILED, "cannot start TLS");
         goto done;
     }
