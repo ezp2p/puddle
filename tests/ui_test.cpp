@@ -1234,6 +1234,14 @@ int main(int argc, char **argv)
 
     {   /* Settings: a backup, written while the Puddle runs; then the Puddle moved to a server, with this app as its device */
         CHECK(find("backupButton") != nullptr && find("moveButton") != nullptr);
+        /* Settings is taller than the window: it scrolls, with the wheel, to what is below */
+        QQuickItem *scroll = find("settingsScroll");
+        CHECK(scroll && scroll->property("contentHeight").toDouble() > scroll->height());
+        if (scroll) {
+            scroll->setProperty("contentY", 0);
+            wheel(scroll, -3);
+            CHECK(until([&] { return scroll->property("contentY").toDouble() > 0; }, 2000));
+        }
         if (const QString shot = qEnvironmentVariable("PUDDLE_SHOT"); !shot.isEmpty()) {
             win->grabWindow().save(shot + "-settings.png");
             CHECK(click(find("moveButton")));
