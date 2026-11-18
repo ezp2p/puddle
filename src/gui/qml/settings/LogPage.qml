@@ -1,7 +1,9 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Dialogs
 import "../components"
+import "../dialogs"
 import "../theme"
 
 // Settings, and what the Puddle has been doing, newest at the bottom.
@@ -18,6 +20,24 @@ Pane {
     background: null
 
     ConfirmDialog { id: confirm }
+    HandOverDialog { id: handOver; backend: page.backend }
+    property string backupNote: ""
+    FileDialog {
+        id: backupSaver
+        title: qsTr("Save a backup of your Puddle")
+        fileMode: FileDialog.SaveFile
+        defaultSuffix: "puddle"
+        nameFilters: [qsTr("Puddle backup (*.puddle)")]
+        onAccepted: { page.backupNote = ""; page.backend.makeBackup(selectedFile) }
+    }
+    Connections {
+        target: page.backend
+        function onBackupFinished(error, file, handover) {
+            if (!handover)
+                page.backupNote = error !== "" ? qsTr("The backup failed: %1").arg(error)
+                                               : qsTr("Saved to %1. Only your recovery phrase opens it.").arg(file)
+        }
+    }
 
     ColumnLayout {
         anchors.fill: parent
@@ -346,10 +366,35 @@ Pane {
                     wrapMode: Text.Wrap
                     opacity: 0.65
                     font.pixelSize: 12
-                    text: qsTr("Your Puddle runs here. If it should run somewhere else, such as a server, this app can use that one instead.")
+                    text: qsTr("Your Puddle runs here. A backup holds all of it (keys, friends, chats, files, phones and "
+                               + "profiles) in one file that only your recovery phrase opens. To have it run on a server instead, "
+                               + "move it there: this app then uses it.")
+                }
+                Label {
+                    visible: page.backend.backingUp || page.backupNote !== ""
+                    Layout.fillWidth: true
+                    wrapMode: Text.Wrap
+                    font.pixelSize: 12
+                    text: page.backend.backingUp ? qsTr("Writing the backup…") : page.backupNote
+                }
+                RowLayout {
+                    spacing: 8
+                    Button {
+                        objectName: "backupButton"
+                        text: qsTr("Back up…")
+                        enabled: page.backend.running && !page.backend.backingUp
+                        onClicked: backupSaver.open()
+                    }
+                    Button {
+                        objectName: "moveButton"
+                        text: qsTr("Move to a server…")
+                        enabled: page.backend.running && !page.backend.backingUp
+                        onClicked: handOver.show()
+                    }
                 }
             }
             Button {
+                Layout.alignment: Qt.AlignTop
                 text: qsTr("Change…")
                 onClicked: confirm.ask(qsTr("Stop running your Puddle here?"),
                                        qsTr("Puddle restarts and asks where your Puddle is. The one on this computer stops, so friends "

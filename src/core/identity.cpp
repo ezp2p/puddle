@@ -960,6 +960,28 @@ static int announced_earlier(const char *chain, size_t len, const unsigned char 
     return 0;
 }
 
+int puddle_identity_phrase_enc(const char *phrase, unsigned char sk[32], unsigned char pk[32], char *err, size_t errlen)
+{
+    char canon[PUDDLE_PHRASE_LEN + 1];
+    int pr = puddle_phrase_parse(phrase, canon);
+    if (pr != PUDDLE_PHRASE_OK) {
+        phrase_problem(pr, err, errlen);
+        return -1;
+    }
+    generation g;
+    memset(&g, 0, sizeof g);
+    int rc = derive_generation(canon, &g);
+    if (rc == 0) {
+        memcpy(sk, g.enc.priv, 32);
+        memcpy(pk, g.enc.pub, 32);
+    } else {
+        seterr(err, errlen, "cannot derive keys from that phrase");
+    }
+    OPENSSL_cleanse(&g, sizeof g);
+    OPENSSL_cleanse(canon, sizeof canon);
+    return rc ? -1 : 0;
+}
+
 puddle_identity *puddle_identity_restore(const char *data_dir, const char *phrase, const char *chain_text,
                                          size_t chain_len, char *err, size_t errlen)
 {

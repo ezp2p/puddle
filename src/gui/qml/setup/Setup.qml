@@ -76,9 +76,22 @@ Pane {
                 Label {
                     Layout.fillWidth: true
                     wrapMode: Text.Wrap
-                    text: qsTr("You need your latest recovery phrase (the one from your most recent key change) and a copy of "
-                               + "your identity's chain: the file identity/chain.jsonl in your old Puddle's data folder, or in a "
-                               + "backup of it. The chain isn't secret.")
+                    text: qsTr("You need your recovery phrase and one of these:")
+                }
+                Label {
+                    Layout.fillWidth: true
+                    Layout.leftMargin: 12
+                    wrapMode: Text.Wrap
+                    text: qsTr("• A backup (a .puddle file, from Settings, \"Back up…\"). Everything comes back: friends, chats, "
+                               + "files, phones and profiles. Use the phrase you had when it was made.")
+                }
+                Label {
+                    Layout.fillWidth: true
+                    Layout.leftMargin: 12
+                    wrapMode: Text.Wrap
+                    text: qsTr("• Or a copy of your identity's chain, identity/chain.jsonl from your old Puddle's data folder (it "
+                               + "isn't secret). Only your identity comes back, so friends still know you; chats don't. Use your "
+                               + "latest phrase.")
                 }
                 Label {
                     Layout.fillWidth: true
@@ -101,7 +114,7 @@ Pane {
                     Layout.fillWidth: true
                     spacing: 12
                     Button {
-                        text: qsTr("Choose the chain file…")
+                        text: qsTr("Choose the file…")
                         onClicked: chainPicker.open()
                     }
                     Label {
@@ -142,9 +155,9 @@ Pane {
                 }
                 FileDialog {
                     id: chainPicker
-                    title: qsTr("Your identity's chain (chain.jsonl)")
+                    title: qsTr("Your backup, or your identity's chain")
                     fileMode: FileDialog.OpenFile
-                    nameFilters: [qsTr("Chain (*.jsonl)"), qsTr("All files (*)")]
+                    nameFilters: [qsTr("Backup or chain (*.puddle *.jsonl)"), qsTr("All files (*)")]
                     onAccepted: setup.chainFile = selectedFile
                 }
             }

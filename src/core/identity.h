@@ -50,6 +50,9 @@ puddle_identity *puddle_identity_create(const char *data_dir, char phrase_out[PU
 puddle_identity *puddle_identity_restore(const char *data_dir, const char *phrase, const char *chain_text,
                                          size_t chain_len, char *err, size_t errlen);
 
+/* The encryption key pair a recovery phrase makes (what opens a backup, core/backup.h). 0, or -1 with `err` (not a phrase). */
+int puddle_identity_phrase_enc(const char *phrase, unsigned char sk[32], unsigned char pk[32], char *err, size_t errlen);
+
 /* Is there an identity whose phrase was shown but never confirmed (the owner quit part way)? 1 or 0. */
 int puddle_identity_unconfirmed(const char *data_dir);
 

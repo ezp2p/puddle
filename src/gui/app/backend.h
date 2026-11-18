@@ -54,6 +54,8 @@ class Backend : public QObject {
     Q_PROPERTY(bool modeFixed READ modeFixed CONSTANT)
     Q_PROPERTY(bool hasLocalPuddle READ hasLocalPuddle NOTIFY modeChanged) // an identity is kept here, whatever the mode
     Q_PROPERTY(QString dataDir READ dataDir NOTIFY modeChanged)
+    // A backup or a handover being written (they can take a while, with many files): the window waits for `backupFinished`.
+    Q_PROPERTY(bool backingUp READ backingUp NOTIFY backingUpChanged)
     Q_PROPERTY(bool canDrawQr READ canDrawQr CONSTANT) // "image://qr/..." works (libqrencode was found)
     // Voice channels (docs/ponds.md, "Voice channels"): how the microphone goes there, kept between runs. `talkMode` is "voice"
     // (voice activation, the default) or "push" (push to talk, while `pushKey` is held: a Qt::Key, 0 for none chosen yet);
@@ -77,6 +79,7 @@ public:
     QString mode() const { return mode_; }
     bool modeFixed() const { return phoneMode(); }
     bool hasLocalPuddle() const;
+    bool backingUp() const { return backingUp_; }
     QString dataDir() const { return haveConfig_ ? QString::fromUtf8(cfg_.data_dir) : QString(); }
     bool canDrawQr() const;
     QObject *phoneLink() { return phone_; }
@@ -119,9 +122,19 @@ public:
     // The owner has written the phrase down: confirm the identity and start the Puddle.
     Q_INVOKABLE bool finishSetup();
 
-    // Rebuild the identity here from the latest recovery phrase and a copy of its chain (identity/chain.jsonl, not secret), then
-    // start the Puddle. "" when done, else what went wrong.
+    // Bring the Puddle back here, then start it: from a backup (core/backup.h) and the phrase that sealed it, which brings back
+    // everything; or from a copy of its chain (identity/chain.jsonl, not secret) and the latest phrase, which brings back the
+    // identity alone. "" when done, else what went wrong.
     Q_INVOKABLE QString restoreIdentity(const QString &phrase, const QUrl &chainFile);
+
+    // Write the Puddle that runs here to `file` (core/backup.h), on another thread: backupFinished says how it went.
+    Q_INVOKABLE bool makeBackup(const QUrl &file);
+    // Move the Puddle that runs here to a server (docs/backup.md, "Moving to a server"): it stops here for good, this app is
+    // added to it as a device, and it is written to `file` for the server to restore; then this app is set to use it at
+    // `address` (host:port) after a restart. backupFinished says how it went; the Puddle here starts again if it failed.
+    Q_INVOKABLE bool handOver(const QString &address, const QUrl &file);
+    // Start the app again (after a handover).
+    Q_INVOKABLE bool restartApp();
 
     // The first run's answer: "here" or "remote". Remembered, so it is asked once.
     Q_INVOKABLE bool choose(const QString &mode);
@@ -154,6 +167,8 @@ signals:
     void errorChanged();
     void needsSetupChanged();
     void modeChanged();
+    void backingUpChanged();
+    void backupFinished(const QString &error, const QString &file, bool handover);
     void themeChanged();
     void talkChanged();
     void speakingChanged();
@@ -165,6 +180,8 @@ protected:
 private:
     Phone *phone_ = nullptr;
     void startServer();
+    void stopServer();
+    QString retireHere(const QString &address, const QByteArray &seed); // after a handover's backup: this Puddle is put away
     void startHere();   // the owner's Puddle runs in this app: load the config, then set up or start
     void startRemote(); // the app uses a Puddle elsewhere
     static QString savedMode();
@@ -188,7 +205,8 @@ private:
     bool setupRedo_ = false;
     bool haveConfig_ = false;
     QString mode_;
-    QString configError_;  // why puddle.yaml couldn't be read, shown if the Puddle is to run here
+    QString configError_;
+    bool backingUp_ = false;  // why puddle.yaml couldn't be read, shown if the Puddle is to run here
     puddle_config cfg_;
     puddle_server *srv_ = nullptr;
     std::thread worker_;

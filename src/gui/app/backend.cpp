@@ -13,13 +13,22 @@
 #include <QGuiApplication>
 #include <QKeyEvent>
 #include <QKeySequence>
+#include <QDateTime>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QProcess>
+#include <QSaveFile>
+#include <QSysInfo>
+#include <QThreadPool>
 #include <QSettings>
 
 #include "dock.h"
 
 extern "C" {
+#include "core/backup.h"
+#include "core/devices.h"
 #include "core/identity.h"
+#include "core/link.h"
 #include "http/router.h"
 #include "base/log.h"
 }
@@ -198,16 +207,11 @@ bool Backend::askAgain()
 {
     if (phoneMode())
         return false;
-    // An AppImage runs from a mount that goes when it quits: start the image itself, not what is inside it.
-    QString program = qEnvironmentVariable("APPIMAGE");
-    if (program.isEmpty())
-        program = QCoreApplication::applicationFilePath();
     saveMode(QStringLiteral("ask"));
-    if (!QProcess::startDetached(program, QCoreApplication::arguments().mid(1))) {
+    if (!restartApp()) {
         saveMode(mode_);
         return false;
     }
-    QCoreApplication::quit();
     return true;
 }
 
@@ -215,7 +219,22 @@ QString Backend::restoreIdentity(const QString &phrase, const QUrl &chainFile)
 {
     if (mode_ != QLatin1String("here") || !haveConfig_ || !needsSetup_)
         return tr("There is already an identity here.");
-    QFile f(chainFile.isLocalFile() ? chainFile.toLocalFile() : chainFile.toString());
+    const QString path = chainFile.isLocalFile() ? chainFile.toLocalFile() : chainFile.toString();
+    if (puddle_backup_is(path.toUtf8().constData())) { /* a whole backup: everything comes back */
+        char err[512];
+        if (puddle_identity_unconfirmed(cfg_.data_dir) && puddle_identity_discard_unconfirmed(cfg_.data_dir, err, sizeof err) < 0)
+            return QString::fromUtf8(err);
+        QByteArray p = phrase.trimmed().toUtf8();
+        const int rc = puddle_backup_restore(&cfg_, path.toUtf8().constData(), p.constData(), nullptr, err, sizeof err);
+        p.fill('\0');
+        if (rc != 0)
+            return QString::fromUtf8(err);
+        needsSetup_ = setupRedo_ = false;
+        emit needsSetupChanged();
+        startServer();
+        return running() ? QString() : error_;
+    }
+    QFile f(path);
     if (!f.open(QIODevice::ReadOnly))
         return tr("Couldn't read that file.");
     const QByteArray chain = f.read((1 << 20) + 1);
@@ -472,19 +491,180 @@ Backend::~Backend()
         audio_.stop();
         video_.stop();
     }
-    if (srv_) {
-        puddle_calls_on_audio(puddle_server_calls(srv_), nullptr, nullptr); // no more frames for a speaker that is going
-        puddle_calls_on_video(puddle_server_calls(srv_), nullptr, nullptr);
-        audio_.stop();
-        video_.stop();
-        chats_.setTakeFile({}, nullptr);
-        takePool_.waitForDone();
-        puddle_server_stop(srv_);
-        worker_.join(); // run() drains in-flight connections before returning
-        puddle_log_set_sink(nullptr, nullptr);
-        g_self = nullptr;
-        puddle_server_destroy(srv_);
+    QThreadPool::globalInstance()->waitForDone(); // a backup being written
+    stopServer();
+}
+
+void Backend::stopServer()
+{
+    if (!srv_)
+        return;
+    puddle_calls_on_audio(puddle_server_calls(srv_), nullptr, nullptr); // no more frames for a speaker that is going
+    puddle_calls_on_video(puddle_server_calls(srv_), nullptr, nullptr);
+    audio_.stop();
+    video_.stop();
+    chats_.setTakeFile({}, nullptr);
+    takePool_.waitForDone();
+    puddle_server_stop(srv_);
+    worker_.join(); // run() drains in-flight connections before returning
+    puddle_log_set_sink(nullptr, nullptr);
+    g_self = nullptr;
+    puddle_server_destroy(srv_);
+    srv_ = nullptr;
+    emit startedChanged();
+}
+
+bool Backend::makeBackup(const QUrl &file)
+{
+    if (!srv_ || backingUp_)
+        return false;
+    backingUp_ = true;
+    emit backingUpChanged();
+    const QString path = file.isLocalFile() ? file.toLocalFile() : file.toString();
+    QThreadPool::globalInstance()->start([this, path, cfg = cfg_, id = puddle_server_identity(srv_)] {
+        char err[512] = "";
+        const int rc = puddle_backup_write(&cfg, id, path.toUtf8().constData(), nullptr, nullptr, err, sizeof err);
+        const QString why = rc == 0 ? QString() : QString::fromUtf8(err);
+        QMetaObject::invokeMethod(this, [this, why, path] {
+            backingUp_ = false;
+            emit backingUpChanged();
+            if (why.isEmpty())
+                append(QStringLiteral("info: backup written to %1").arg(path));
+            emit backupFinished(why, path, false);
+        }, Qt::QueuedConnection);
+    });
+    return true;
+}
+
+bool Backend::handOver(const QString &address, const QUrl &file)
+{
+    if (!srv_ || backingUp_)
+        return false;
+    puddle_address where;
+    const QByteArray addr = address.trimmed().toUtf8();
+    if (puddle_address_parse(addr.constData(), &where) != 0) {
+        emit backupFinished(tr("That isn't an address: it looks like puddle.example.org:443."), QString(), true);
+        return false;
     }
+    const QByteArray seed = ApiClient::newDeviceSeed();
+    puddle_devkey key;
+    if (seed.size() != 32 || puddle_devkey_from_seed(&key, reinterpret_cast<const unsigned char *>(seed.constData())) != 0) {
+        emit backupFinished(tr("Could not make a key for this device."), QString(), true);
+        return false;
+    }
+    // Stopped first, for good: what is written is exactly this moment, and nothing happens here after it.
+    stopServer();
+    char err[512] = "";
+    puddle_devices *devs = puddle_devices_open(cfg_.data_dir, err, sizeof err);
+    char secret[PUDDLE_PAIR_SECRET_LEN + 1];
+    int64_t expires = 0;
+    puddle_device dev;
+    const int64_t now = QDateTime::currentMSecsSinceEpoch();
+    const QByteArray name = QSysInfo::machineHostName().left(PUDDLE_DEVICE_NAME_MAX).toUtf8();
+    bool added = devs && puddle_devices_new_secret(devs, now, secret, &expires) == 0 &&
+                 puddle_devices_pair(devs, secret, key.pub, name.isEmpty() ? "Puddle" : name.constData(), now, &dev, err, sizeof err) == 0 &&
+                 puddle_devices_accept(devs, dev.id, err, sizeof err) == 0;
+    if (devs)
+        puddle_devices_close(devs);
+    if (!added) {
+        startServer();
+        emit backupFinished(tr("Could not add this device to your Puddle: %1").arg(QString::fromUtf8(err)), QString(), true);
+        return false;
+    }
+    backingUp_ = true;
+    emit backingUpChanged();
+    const QString path = file.isLocalFile() ? file.toLocalFile() : file.toString();
+    const QString target = QString::fromUtf8(where.address);
+    const QString devId = QString::fromLatin1(dev.id);
+    QThreadPool::globalInstance()->start([this, path, target, seed, devId, cfg = cfg_] {
+        char err[512] = "";
+        puddle_identity *id = puddle_identity_open(cfg.data_dir, err, sizeof err);
+        int rc = id ? puddle_backup_write(&cfg, id, path.toUtf8().constData(), nullptr, nullptr, err, sizeof err) : -1;
+        if (id)
+            puddle_identity_close(id);
+        const QString why = rc == 0 ? QString() : QString::fromUtf8(err);
+        QMetaObject::invokeMethod(this, [this, why, path, target, seed, devId] {
+            QString problem = why;
+            if (problem.isEmpty())
+                problem = retireHere(target, seed);
+            if (!problem.isEmpty()) { // nothing moved: this device off the list again, and the Puddle back on
+                char e[256];
+                if (puddle_devices *d = puddle_devices_open(cfg_.data_dir, e, sizeof e)) {
+                    puddle_devices_remove(d, devId.toLatin1().constData(), 0, e, sizeof e);
+                    puddle_devices_close(d);
+                }
+                startServer();
+            }
+            backingUp_ = false;
+            emit backingUpChanged();
+            emit backupFinished(problem, path, true);
+        }, Qt::QueuedConnection);
+    });
+    return true;
+}
+
+QString Backend::retireHere(const QString &address, const QByteArray &seed)
+{
+    // the Puddle that was here, put aside where nothing starts it again by mistake
+    const QString data = QString::fromUtf8(cfg_.data_dir);
+    QString aside = data + QStringLiteral(".handed-over");
+    for (int n = 2; QFileInfo::exists(aside); n++)
+        aside = data + QStringLiteral(".handed-over-%1").arg(n);
+    char id[PUDDLE_USER_ID_LEN + 1];
+    unsigned char signPub[32], encPub[32];
+    {
+        char err[512];
+        puddle_identity *me = puddle_identity_open(cfg_.data_dir, err, sizeof err);
+        if (!me)
+            return QString::fromUtf8(err);
+        puddle_identity_id(me, id);
+        puddle_identity_public(me, signPub, encPub, nullptr);
+        puddle_identity_close(me);
+    }
+    if (!QDir().rename(data, aside))
+        return tr("Could not move %1 aside.").arg(data);
+    // and this app, a device of that Puddle where it now runs (as Phone keeps it)
+    QUrl base;
+    base.setScheme(QStringLiteral("https"));
+    const int colon = address.lastIndexOf(':');
+    QString host = address.left(colon);
+    if (host.startsWith('[') && host.endsWith(']'))
+        host = host.mid(1, host.size() - 2);
+    base.setHost(host);
+    base.setPort(address.mid(colon + 1).toInt());
+    QDir().mkpath(phoneDir());
+    QSaveFile f(phoneDir() + QStringLiteral("/device.json"));
+    if (!f.open(QIODevice::WriteOnly)) {
+        QDir().rename(aside, data);
+        return tr("Could not save where your Puddle is now.");
+    }
+    f.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+    const QJsonObject o{ { "base", base.toString() },
+                         { "puddle", QString::fromLatin1(id) },
+                         { "puddle_key", QString::fromLatin1((QByteArray(reinterpret_cast<const char *>(signPub), 32) +
+                                                               QByteArray(reinterpret_cast<const char *>(encPub), 32)).toHex()) },
+                         { "seed", QString::fromLatin1(seed.toHex()) },
+                         { "state", "active" } };
+    f.write(QJsonDocument(o).toJson());
+    if (!f.commit()) {
+        QDir().rename(aside, data);
+        return tr("Could not save where your Puddle is now.");
+    }
+    saveMode(QStringLiteral("remote"));
+    append(QStringLiteral("info: handed over: this Puddle's data is now in %1, and this app will use it at %2").arg(aside, address));
+    return QString();
+}
+
+bool Backend::restartApp()
+{
+    // An AppImage runs from a mount that goes when it quits: start the image itself, not what is inside it.
+    QString program = qEnvironmentVariable("APPIMAGE");
+    if (program.isEmpty())
+        program = QCoreApplication::applicationFilePath();
+    if (!QProcess::startDetached(program, QCoreApplication::arguments().mid(1)))
+        return false;
+    QCoreApplication::quit();
+    return true;
 }
 
 void Backend::setError(const QString &message)

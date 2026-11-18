@@ -1,5 +1,6 @@
 /* puddled: headless Puddle. Logs to stderr (journald / launchd). */
 #include "core/config.h"
+#include "core/backup.h"
 #include "core/identity.h"
 #include "base/log.h"
 #include "platform/process.h"
@@ -44,7 +45,7 @@ static int wait_for_setup(const puddle_config *cfg)
 static void usage(FILE *out)
 {
     fprintf(out,
-            "usage: puddled [-c|--config FILE] [--wait | --init | --roll | --restore --chain FILE]\n"
+            "usage: puddled [-c|--config FILE] [--wait | --init | --roll | --backup FILE | --restore --from FILE]\n"
             "\n"
             "  -c FILE  the config file (default: $PUDDLE_CONFIG, or ~/.config/puddle/puddle.yaml)\n"
             "  --wait   with no identity yet and no terminal, wait for `puddled --init` to be run (in a\n"
@@ -53,9 +54,15 @@ static void usage(FILE *out)
             "           (a first run from a terminal does this by itself and carries on)\n"
             "  --roll   change your keys: asks for your current recovery phrase, gives you a new one, and\n"
             "           retires the old. The Puddle must not be running.\n"
-            "  --restore --chain FILE\n"
-            "           rebuild your identity on a new computer from your LATEST recovery phrase and a copy\n"
-            "           of your chain (FILE: the identity/chain.jsonl from a backup; it is not secret).\n");
+            "  --backup FILE\n"
+            "           write this whole Puddle (keys, friends, chats, files, phones, profiles) to FILE. Only\n"
+            "           your recovery phrase opens it. It can be made while the Puddle runs; stop it first for\n"
+            "           one that is exactly one moment.\n"
+            "  --restore --from FILE\n"
+            "           bring your Puddle back here, asking for your recovery phrase. FILE is a backup (from\n"
+            "           --backup, or Puddle's Settings), which brings back everything; or a copy of your chain\n"
+            "           (identity/chain.jsonl, not secret), which brings back only your identity, and needs your\n"
+            "           LATEST phrase. (--chain FILE is the same as --from FILE.)\n");
 }
 
 /* The phrase goes to the terminal and nowhere else: never to the log, which a service manager keeps. */
@@ -163,15 +170,73 @@ done:
     return rc;
 }
 
-/* Rebuild the identity here from the latest recovery phrase and a copy of the chain. */
+/* Write the whole Puddle to `path`, sealed to its own key (core/backup.h). */
+static int write_backup(const puddle_config *cfg, const char *path)
+{
+    char err[512];
+    puddle_identity *id = puddle_identity_open(cfg->data_dir, err, sizeof err);
+    if (!id) {
+        fprintf(stderr, "puddled: %s\n", err);
+        return 1;
+    }
+    int rc = puddle_backup_write(cfg, id, path, NULL, NULL, err, sizeof err);
+    puddle_identity_close(id);
+    if (rc != 0) {
+        fprintf(stderr, "puddled: %s\n", err);
+        return 1;
+    }
+    printf("Wrote your Puddle to %s.\n"
+           "Only your recovery phrase opens it, so it can be kept anywhere. After you change your keys, it still opens\n"
+           "with the phrase from before.\n", path);
+    return 0;
+}
+
+/* Bring a whole Puddle back here from a backup, with the phrase that sealed it. */
+static int restore_backup(const puddle_config *cfg, const char *path)
+{
+    char err[512];
+    puddle_backup_info info;
+    if (puddle_backup_info_read(path, &info, err, sizeof err) != 0) {
+        fprintf(stderr, "puddled: %s\n", err);
+        return 1;
+    }
+    if (!puddle_console_interactive()) {
+        fprintf(stderr, "puddled: --restore needs a terminal: it asks for your recovery phrase.\n");
+        return 1;
+    }
+    if (puddle_identity_exists(cfg->data_dir)) {
+        fprintf(stderr, "puddled: there is already an identity in %s, and it is not overwritten.\n", cfg->data_dir);
+        return 1;
+    }
+    char phrase[128];
+    if (read_secret("Your recovery phrase (the one you had when this backup was made): ", phrase, sizeof phrase) != 0) {
+        fprintf(stderr, "puddled: no phrase given.\n");
+        return 1;
+    }
+    int rc = puddle_backup_restore(cfg, path, phrase, &info, err, sizeof err);
+    memset(phrase, 0, sizeof phrase);
+    if (rc != 0) {
+        fprintf(stderr, "puddled: %s\n", err);
+        return 1;
+    }
+    printf("Restored your Puddle %s here: identity, friends, chats, files, phones and profiles.\n"
+           "This computer's puddle.yaml is unchanged; the one from the backup is beside it, as puddle.yaml.from-backup.\n"
+           "Make sure `advertise` says where friends reach you now: when it changes, they are told.\n"
+           "Don't run the old Puddle again: two Puddles with one identity get in each other's way.\n", info.id);
+    return 0;
+}
+
+/* Rebuild the identity here from the latest recovery phrase and a copy of the chain, or everything from a backup. */
 static int restore_identity(const puddle_config *cfg, const char *chain_path)
 {
     char err[512];
     if (!chain_path) {
-        fprintf(stderr, "puddled: --restore needs --chain FILE: a copy of your identity's chain.jsonl (it is not\n"
-                        "secret; keep one somewhere safe). Without a copy, a friend's Puddle can give you one.\n");
+        fprintf(stderr, "puddled: --restore needs --from FILE: a backup, or a copy of your identity's chain.jsonl (it is\n"
+                        "not secret; keep one somewhere safe). Without either, a friend's Puddle can give you your chain.\n");
         return 2;
     }
+    if (puddle_backup_is(chain_path))
+        return restore_backup(cfg, chain_path);
     if (!puddle_console_interactive()) {
         fprintf(stderr, "puddled: --restore needs a terminal: it asks for your recovery phrase.\n");
         return 1;
@@ -220,7 +285,7 @@ int main(int argc, char **argv)
 {
     const char *path = NULL;
     int init = 0, roll = 0, restore = 0, wait = 0;
-    const char *chain_path = NULL;
+    const char *chain_path = NULL, *backup_path = NULL;
     for (int i = 1; i < argc; i++) {
         if ((!strcmp(argv[i], "-c") || !strcmp(argv[i], "--config")) && i + 1 < argc) {
             path = argv[++i];
@@ -232,8 +297,10 @@ int main(int argc, char **argv)
             roll = 1;
         } else if (!strcmp(argv[i], "--restore")) {
             restore = 1;
-        } else if (!strcmp(argv[i], "--chain") && i + 1 < argc) {
+        } else if ((!strcmp(argv[i], "--chain") || !strcmp(argv[i], "--from")) && i + 1 < argc) {
             chain_path = argv[++i];
+        } else if (!strcmp(argv[i], "--backup") && i + 1 < argc) {
+            backup_path = argv[++i];
         } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
             usage(stdout);
             return 0;
@@ -250,7 +317,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    if (init + roll + restore + wait > 1) {
+    if (init + roll + restore + wait + (backup_path != NULL) > 1) {
         usage(stderr);
         return 2;
     }
@@ -258,6 +325,8 @@ int main(int argc, char **argv)
         return roll_keys(&cfg);
     if (restore)
         return restore_identity(&cfg, chain_path);
+    if (backup_path)
+        return write_backup(&cfg, backup_path);
 
     int unfinished = puddle_identity_unconfirmed(cfg.data_dir);
     if (!puddle_identity_exists(cfg.data_dir) || unfinished) {
