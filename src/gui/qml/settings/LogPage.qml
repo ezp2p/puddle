@@ -1,7 +1,9 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Dialogs
 import "../components"
+import "../dialogs"
 import "../theme"
 
 // Settings, and what the Puddle has been doing, newest at the bottom.
@@ -16,6 +18,26 @@ Pane {
 
     padding: 0
     background: null
+
+    ConfirmDialog { id: confirm }
+    HandOverDialog { id: handOver; backend: page.backend }
+    property string backupNote: ""
+    FileDialog {
+        id: backupSaver
+        title: qsTr("Save a backup of your Puddle")
+        fileMode: FileDialog.SaveFile
+        defaultSuffix: "puddle"
+        nameFilters: [qsTr("Puddle backup (*.puddle)")]
+        onAccepted: { page.backupNote = ""; page.backend.makeBackup(selectedFile) }
+    }
+    Connections {
+        target: page.backend
+        function onBackupFinished(error, file, handover) {
+            if (!handover)
+                page.backupNote = error !== "" ? qsTr("The backup failed: %1").arg(error)
+                                               : qsTr("Saved to %1. Only your recovery phrase opens it.").arg(file)
+        }
+    }
 
     ColumnLayout {
         anchors.fill: parent
@@ -309,17 +331,77 @@ Pane {
             ColumnLayout {
                 Layout.fillWidth: true
                 spacing: 2
-                Label { text: qsTr("This phone"); font.bold: true }
+                Label { text: page.backend.modeFixed ? qsTr("This phone") : qsTr("This device"); font.bold: true }
                 Label {
                     Layout.fillWidth: true
                     wrapMode: Text.Wrap
                     opacity: 0.65
                     font.pixelSize: 12
-                    text: qsTr("Uses your Puddle at %1. Disconnecting forgets it here; remove the phone in Puddle on your computer too.")
+                    text: (page.backend.modeFixed
+                           ? qsTr("Uses your Puddle at %1. Disconnecting forgets it here; remove the phone on your Puddle too.")
+                           : qsTr("Uses your Puddle at %1. Disconnecting forgets it here (remove this device on your Puddle too); "
+                                  + "then you can pair again, or run a Puddle on this computer instead."))
                           .arg(page.backend.phone ? page.backend.phoneLink.address : "")
                 }
             }
-            Button { text: qsTr("Disconnect"); onClicked: page.backend.phoneLink.forget() }
+            Button {
+                text: qsTr("Disconnect")
+                onClicked: confirm.ask(qsTr("Disconnect from your Puddle?"),
+                                       qsTr("This device forgets your Puddle and its key. To use it again, pair it again with a new link."),
+                                       qsTr("Disconnect"), () => page.backend.phoneLink.forget())
+            }
+        }
+        // the Puddle runs here: the owner may want this app to use one somewhere else instead
+        RowLayout {
+            objectName: "thisComputer"
+            visible: !page.backend.phone && !page.backend.modeFixed
+            Layout.fillWidth: true
+            Layout.margins: 16
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 2
+                Label { text: qsTr("This computer"); font.bold: true }
+                Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.Wrap
+                    opacity: 0.65
+                    font.pixelSize: 12
+                    text: qsTr("Your Puddle runs here. A backup holds all of it (keys, friends, chats, files, phones and "
+                               + "profiles) in one file that only your recovery phrase opens. To have it run on a server instead, "
+                               + "move it there: this app then uses it.")
+                }
+                Label {
+                    visible: page.backend.backingUp || page.backupNote !== ""
+                    Layout.fillWidth: true
+                    wrapMode: Text.Wrap
+                    font.pixelSize: 12
+                    text: page.backend.backingUp ? qsTr("Writing the backup…") : page.backupNote
+                }
+                RowLayout {
+                    spacing: 8
+                    Button {
+                        objectName: "backupButton"
+                        text: qsTr("Back up…")
+                        enabled: page.backend.running && !page.backend.backingUp
+                        onClicked: backupSaver.open()
+                    }
+                    Button {
+                        objectName: "moveButton"
+                        text: qsTr("Move to a server…")
+                        enabled: page.backend.running && !page.backend.backingUp
+                        onClicked: handOver.show()
+                    }
+                }
+            }
+            Button {
+                Layout.alignment: Qt.AlignTop
+                text: qsTr("Change…")
+                onClicked: confirm.ask(qsTr("Stop running your Puddle here?"),
+                                       qsTr("Puddle restarts and asks where your Puddle is. The one on this computer stops, so friends "
+                                            + "can't reach it here, but nothing is deleted: its identity, friends and chats stay in %1, "
+                                            + "and come back if you choose this computer again.").arg(page.backend.dataDir),
+                                       qsTr("Restart and choose"), () => page.backend.askAgain())
+            }
         }
         Rectangle { Layout.fillWidth: true; height: 1; color: Theme.hairline }
         // people you blocked, and a way to let them back

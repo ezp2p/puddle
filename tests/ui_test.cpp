@@ -22,6 +22,11 @@
 #include "../src/gui/app/phone.h"
 #include "testnode.h"
 #include "federation/calls.h"
+extern "C" {
+#include "core/backup.h"
+#include "core/devices.h"
+}
+#include <QSettings>
 
 #include <QPainter>
 #include <atomic>
@@ -176,12 +181,51 @@ int main(int argc, char **argv)
     auto *msgs_b = static_cast<JsonListModel *>(B.messages());
 
     qputenv("PUDDLE_TEST_NO_AUDIO", "1"); // calls below: not this computer's microphone and speaker
-    Backend backend; // the app's own Puddle
+    {   /* the first run asks where the Puddle is; "remote", then back, leaves nothing behind */
+        Backend first;
+        CHECK(first.mode().isEmpty() && !first.running() && !first.needsSetup() && !first.phone());
+        if (const QString shot = qEnvironmentVariable("PUDDLE_SHOT"); !shot.isEmpty()) { /* how the first run looks */
+            QQmlApplicationEngine e;
+            e.rootContext()->setContextProperty("firstBackend", &first);
+            e.loadData(QString(R"(
+                import QtQuick
+                import QtQuick.Controls
+                import "file://%1/setup" as S
+                ApplicationWindow { width: 900; height: 600; visible: true
+                    S.Welcome { anchors.fill: parent; backend: firstBackend; visible: !rec.visible }
+                    S.Setup { id: rec; objectName: "rec"; anchors.fill: parent; backend: firstBackend; recovering: true; visible: false } })")
+                           .arg(PUDDLE_GUI_DIR).toUtf8(), QUrl("file:///welcome.qml"));
+            if (auto *w = qobject_cast<QQuickWindow *>(e.rootObjects().value(0))) {
+                QTest::qWait(300);
+                w->grabWindow().save(shot + "-welcome.png");
+                if (QObject *rec = w->findChild<QObject *>("rec")) {
+                    rec->setProperty("visible", true);
+                    QTest::qWait(200);
+                    w->grabWindow().save(shot + "-recover.png");
+                }
+            }
+        }
+        CHECK(first.choose("remote") && first.mode() == "remote" && first.phone() && !first.running());
+        CHECK(!first.choose("here")); /* chosen already */
+        CHECK(first.unchoose() && first.mode().isEmpty() && !first.phone());
+        CHECK(first.choose("here") && first.needsSetup() && !first.hasLocalPuddle());
+        CHECK(first.unchoose() && first.mode().isEmpty());
+    }
+    {   /* asked again on the next run, since nothing was made */
+        Backend again;
+        CHECK(again.mode().isEmpty());
+        CHECK(again.choose("here"));
+    }
+    Backend backend; // the app's own Puddle: chosen above, so remembered
+    CHECK(backend.mode() == "here");
+    QString phrase;
     if (backend.needsSetup()) {
-        CHECK(!backend.createIdentity().isEmpty());
+        phrase = backend.createIdentity();
+        CHECK(!phrase.isEmpty());
         CHECK(backend.finishSetup());
     }
-    CHECK(backend.running() && backend.error().isEmpty());
+    CHECK(backend.running() && backend.error().isEmpty() && backend.hasLocalPuddle());
+    CHECK(!backend.unchoose()); /* a Puddle runs here: only Settings, with a restart, asks again */
     CHECK(backend.myLink().startsWith(QString("127.0.0.1:%1?k=").arg(port)) && backend.myLink().size() == QString("127.0.0.1:%1?k=").arg(port).size() + 52);
     Chats &A = *backend.chats();
     A.setInterval(100);
@@ -1186,6 +1230,55 @@ int main(int argc, char **argv)
         CHECK(until([&] { return phone.state() == "ready"; }, 8000));
         CHECK(until([&] { return P.friendCount() == A.friendCount() && P.connected() && P.problem().isEmpty(); }, 8000));
         CHECK(until([&] { return find("acceptPhone") == nullptr && button(QObject::tr("Remove")) != nullptr; }, 5000));
+    }
+
+    {   /* Settings: a backup, written while the Puddle runs; then the Puddle moved to a server, with this app as its device */
+        CHECK(find("backupButton") != nullptr && find("moveButton") != nullptr);
+        if (const QString shot = qEnvironmentVariable("PUDDLE_SHOT"); !shot.isEmpty()) {
+            win->grabWindow().save(shot + "-settings.png");
+            CHECK(click(find("moveButton")));
+            QTest::qWait(400);
+            win->grabWindow().save(shot + "-move.png");
+            key(Qt::Key_Escape);
+            QTest::qWait(200);
+        }
+        QSignalSpy done(&backend, &Backend::backupFinished);
+        const QString bk = home.path() + "/mine.puddle", moved = home.path() + "/moved.puddle", dataDir = backend.dataDir();
+        CHECK(backend.makeBackup(QUrl::fromLocalFile(bk)));
+        CHECK(until([&] { return done.count() == 1; }, 30000));
+        CHECK(done.value(0).value(0).toString().isEmpty() && puddle_backup_is(bk.toUtf8().constData()));
+        CHECK(backend.running());
+
+        CHECK(!backend.handOver("not an address at all", QUrl::fromLocalFile(moved)) && backend.running()); /* nothing stopped */
+        done.clear();
+        CHECK(backend.handOver("puddle.example.org:443", QUrl::fromLocalFile(moved)));
+        CHECK(until([&] { return done.count() == 1; }, 30000));
+        CHECK(done.value(0).value(0).toString().isEmpty() && done.value(0).value(2).toBool());
+        CHECK(!backend.running() && !backend.hasLocalPuddle());
+        CHECK(!QFileInfo::exists(dataDir) && QFileInfo::exists(dataDir + ".handed-over"));  /* put aside, not deleted */
+        CHECK(QSettings().value("mode").toString() == "remote");
+
+        QFile dj(Backend::phoneDir() + "/device.json");
+        CHECK(dj.open(QIODevice::ReadOnly));
+        const QJsonObject d = QJsonDocument::fromJson(dj.readAll()).object();
+        CHECK(QUrl(d.value("base").toString()).host() == "puddle.example.org" && d.value("state").toString() == "active");
+        CHECK(d.value("puddle").toString() == backend.myId() && d.value("puddle_key").toString().size() == 128);
+
+        /* restored on "the server": this app is one of its devices, already let in */
+        puddle_config server;
+        memset(&server, 0, sizeof server);
+        snprintf(server.dir, sizeof server.dir, "%s/server", home.path().toUtf8().constData());
+        snprintf(server.data_dir, sizeof server.data_dir, "%s/server/data", home.path().toUtf8().constData());
+        char err[512] = "";
+        CHECK(puddle_backup_restore(&server, moved.toUtf8().constData(), phrase.toUtf8().constData(), nullptr, err, sizeof err) == 0);
+        puddle_devkey me;
+        const QByteArray seed = QByteArray::fromHex(d.value("seed").toString().toLatin1());
+        CHECK(seed.size() == 32 && puddle_devkey_from_seed(&me, reinterpret_cast<const unsigned char *>(seed.constData())) == 0);
+        puddle_devices *devs = puddle_devices_open(server.data_dir, err, sizeof err);
+        puddle_device got;
+        CHECK(devs && puddle_devices_get(devs, me.id, &got) == 0 && got.state == PUDDLE_DEVICE_ACTIVE);
+        if (devs)
+            puddle_devices_close(devs);
     }
 
     return failures ? 1 : 0;

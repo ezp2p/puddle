@@ -81,7 +81,7 @@ void Phone::pair(const QString &link, const QString &name)
 {
     ApiClient::PairingLink l;
     if (!ApiClient::parsePairingLink(link, &l))
-        return set(QStringLiteral("unpaired"), tr("That isn't a pairing link. On your computer, open Puddle, Settings, \"Add a phone\", and copy the link it shows."));
+        return set(QStringLiteral("unpaired"), tr("That isn't a pairing link. It starts puddle-pair:// and comes from your Puddle (Settings, \"Add a phone\")."));
     if (name.trimmed().isEmpty() || name.trimmed().toUtf8().size() > 64)
         return set(QStringLiteral("unpaired"), tr("Give this phone a name (up to 64 characters)."));
     const QByteArray seed = ApiClient::newDeviceSeed();

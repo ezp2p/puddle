@@ -53,6 +53,7 @@ or looks like it conflicts with this list, ask rather than guess.
 - `src/gui/`: `Puddle`, the desktop app (Qt Quick): `app/` is the C++ behind the window, `qml/` the screens by topic, `qml/theme/Theme.qml` every colour and size; see `src/gui/README.md`
 - `api/openapi.yaml`: API for phone clients and the desktop app. `api/federation.yaml`: streams.
 - `docs/storage.md`, `docs/identity.md`, `docs/profiles.md`, `docs/streams.md`, `docs/calls.md`: design drafts the code follows
+- `docs/backup.md`: backups (`src/core/backup.*`), recovering, and moving a Puddle to a server
 - `docs/ponds.md`: being a member of Ponds (joining, following one's events, what is kept, the owner routes)
 - `docs/levee.md`: the design draft for Levee (not built; open questions at its end)
 - `docs/roadmap.md`: the step-by-step plan for keys and streams; work through it in order, one step at a time

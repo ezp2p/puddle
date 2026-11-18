@@ -1,7 +1,10 @@
 /* puddled: headless Puddle. Logs to stderr (journald / launchd). */
 #include "core/config.h"
+#include "core/backup.h"
 #include "core/identity.h"
+#include "base/json.h"
 #include "base/log.h"
+#include "http/client.h"
 #include "platform/process.h"
 #include "service/server.h"
 #include "storage/store.h"
@@ -11,6 +14,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <thread>
+#include <vector>
 
 static puddle_server *volatile g_server;
 static std::atomic<bool> g_stop{ false };
@@ -44,7 +48,8 @@ static int wait_for_setup(const puddle_config *cfg)
 static void usage(FILE *out)
 {
     fprintf(out,
-            "usage: puddled [-c|--config FILE] [--wait | --init | --roll | --restore --chain FILE]\n"
+            "usage: puddled [-c|--config FILE] [--wait | --init | --roll | --pair | --accept DIGITS | --backup FILE |\n"
+            "                --restore --from FILE]\n"
             "\n"
             "  -c FILE  the config file (default: $PUDDLE_CONFIG, or ~/.config/puddle/puddle.yaml)\n"
             "  --wait   with no identity yet and no terminal, wait for `puddled --init` to be run (in a\n"
@@ -53,9 +58,19 @@ static void usage(FILE *out)
             "           (a first run from a terminal does this by itself and carries on)\n"
             "  --roll   change your keys: asks for your current recovery phrase, gives you a new one, and\n"
             "           retires the old. The Puddle must not be running.\n"
-            "  --restore --chain FILE\n"
-            "           rebuild your identity on a new computer from your LATEST recovery phrase and a copy\n"
-            "           of your chain (FILE: the identity/chain.jsonl from a backup; it is not secret).\n");
+            "  --pair   connect a phone, or the desktop app, to this Puddle while it runs: shows a pairing link\n"
+            "           to paste into the app, waits for it, and asks you to accept it once its six digits match\n"
+            "  --accept DIGITS\n"
+            "           accept the device that shows these six digits (when --pair couldn't ask: no terminal)\n"
+            "  --backup FILE\n"
+            "           write this whole Puddle (keys, friends, chats, files, phones, profiles) to FILE. Only\n"
+            "           your recovery phrase opens it. It can be made while the Puddle runs; stop it first for\n"
+            "           one that is exactly one moment.\n"
+            "  --restore --from FILE\n"
+            "           bring your Puddle back here, asking for your recovery phrase. FILE is a backup (from\n"
+            "           --backup, or Puddle's Settings), which brings back everything; or a copy of your chain\n"
+            "           (identity/chain.jsonl, not secret), which brings back only your identity, and needs your\n"
+            "           LATEST phrase. (--chain FILE is the same as --from FILE.)\n");
 }
 
 /* The phrase goes to the terminal and nowhere else: never to the log, which a service manager keeps. */
@@ -163,15 +178,224 @@ done:
     return rc;
 }
 
-/* Rebuild the identity here from the latest recovery phrase and a copy of the chain. */
+/* ---- devices, through the running Puddle's owner API (api/openapi.yaml, "devices") ---- */
+
+/* the devices the Puddle lists: id, name, state, check */
+struct listed_device {
+    char id[64], name[80], state[16], check[8];
+};
+
+static int list_devices(const puddle_config *cfg, std::vector<listed_device> &out, char *why, size_t whylen)
+{
+    puddle_net_reply r;
+    puddle_owner_request(cfg, "GET", "/api/v1/devices", NULL, &r);
+    int rc = -1;
+    puddle_span arr, item;
+    if (r.result != PUDDLE_NET_OK)
+        snprintf(why, whylen, "%s", r.reason);
+    else if (r.status != 200 || !r.body || puddle_json_member(r.body, r.body_len, "devices", &arr) != 0)
+        snprintf(why, whylen, "the Puddle answered %d", r.status);
+    else {
+        out.clear();
+        size_t cur = 0;
+        while (puddle_json_array_next(arr, &cur, &item) == 1) {
+            listed_device d;
+            memset(&d, 0, sizeof d);
+            puddle_span v;
+            if (puddle_json_member(item.p, item.len, "id", &v) == 0)
+                puddle_json_string(v, d.id, sizeof d.id);
+            if (puddle_json_member(item.p, item.len, "name", &v) == 0)
+                puddle_json_string(v, d.name, sizeof d.name);
+            if (puddle_json_member(item.p, item.len, "state", &v) == 0)
+                puddle_json_string(v, d.state, sizeof d.state);
+            if (puddle_json_member(item.p, item.len, "check", &v) == 0)
+                puddle_json_string(v, d.check, sizeof d.check);
+            out.push_back(d);
+        }
+        rc = 0;
+    }
+    puddle_net_reply_free(&r);
+    return rc;
+}
+
+static int device_verb(const puddle_config *cfg, const char *id, const char *verb)
+{
+    char target[160];
+    snprintf(target, sizeof target, "/api/v1/devices/%s/%s", id, verb);
+    puddle_net_reply r;
+    puddle_owner_request(cfg, "POST", target, "{}", &r);
+    int ok = r.result == PUDDLE_NET_OK && r.status / 100 == 2;
+    if (!ok)
+        fprintf(stderr, "puddled: %s\n", r.result != PUDDLE_NET_OK ? r.reason : r.body ? r.body : "it was refused");
+    puddle_net_reply_free(&r);
+    return ok ? 0 : 1;
+}
+
+static void show_check(const char *check, char out[8])
+{
+    snprintf(out, 8, "%.3s %.3s", check, strlen(check) > 3 ? check + 3 : "");
+}
+
+/* Make a pairing link, wait for the device it lets in, and accept it once the owner says the digits match. */
+static int pair_device(const puddle_config *cfg)
+{
+    char why[256];
+    std::vector<listed_device> before, now;
+    if (list_devices(cfg, before, why, sizeof why) != 0) {
+        fprintf(stderr, "puddled: %s\n", why);
+        return 1;
+    }
+    puddle_net_reply r;
+    puddle_owner_request(cfg, "POST", "/api/v1/devices/pair", "{}", &r);
+    char link[1024] = "";
+    puddle_span v;
+    if (r.result != PUDDLE_NET_OK) {
+        fprintf(stderr, "puddled: %s\n", r.reason);
+    } else if (r.status == 409 && r.body && strstr(r.body, "no_address")) {
+        fprintf(stderr, "puddled: this Puddle doesn't know the address it is reached at, so a device couldn't find it. Set\n"
+                        "`advertise: \"host:port\"` in %s/puddle.yaml (where your phone or app reaches it), and restart it.\n",
+                cfg->dir);
+    } else if (r.status / 100 != 2 || !r.body || puddle_json_member(r.body, r.body_len, "link", &v) != 0 ||
+               puddle_json_string(v, link, sizeof link) != 0) {
+        fprintf(stderr, "puddled: the Puddle answered %d: %s\n", r.status, r.body ? r.body : "");
+    }
+    puddle_net_reply_free(&r);
+    if (!link[0])
+        return 1;
+    printf("\nPaste this into the app (\"Connect to my Puddle\", or a phone). It works once, for ten minutes:\n\n    %s\n\n", link);
+    if (!puddle_console_interactive()) {
+        printf("Then accept the device with `puddled --accept <the six digits it shows>`.\n");
+        return 0;
+    }
+    printf("Waiting for it... (Ctrl-C to stop; `puddled --accept DIGITS` accepts it later)\n");
+    fflush(stdout);
+    for (int waited = 0; waited < 10 * 60; waited += 2) {
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+        if (list_devices(cfg, now, why, sizeof why) != 0)
+            continue;
+        for (const listed_device &d : now) {
+            bool seen = false;
+            for (const listed_device &b : before)
+                seen = seen || !strcmp(b.id, d.id);
+            if (seen || strcmp(d.state, "pending") != 0)
+                continue;
+            char shown[8];
+            show_check(d.check, shown);
+            printf("\n\"%s\" wants to use this Puddle. It should show:  %s\n\n"
+                   "Accept it? Only if the app shows the same number. [y/N] ", d.name, shown);
+            fflush(stdout);
+            char answer[16] = "";
+            if (!fgets(answer, sizeof answer, stdin) || (answer[0] != 'y' && answer[0] != 'Y')) {
+                device_verb(cfg, d.id, "decline");
+                printf("Declined.\n");
+                return 1;
+            }
+            if (device_verb(cfg, d.id, "accept") != 0)
+                return 1;
+            printf("Accepted. \"%s\" uses this Puddle now.\n", d.name);
+            return 0;
+        }
+    }
+    printf("Nothing used the link in ten minutes, so it has expired. Run `puddled --pair` again for a new one.\n");
+    return 1;
+}
+
+/* Accept the pending device that shows `digits`. */
+static int accept_by_check(const puddle_config *cfg, const char *digits)
+{
+    char want[8] = "", why[256];
+    size_t n = 0;
+    for (const char *p = digits; *p && n < 7; p++)
+        if (*p >= '0' && *p <= '9')
+            want[n++] = *p;
+    want[n] = '\0';
+    if (n != 6) {
+        fprintf(stderr, "puddled: --accept takes the six digits the device shows\n");
+        return 2;
+    }
+    std::vector<listed_device> all;
+    if (list_devices(cfg, all, why, sizeof why) != 0) {
+        fprintf(stderr, "puddled: %s\n", why);
+        return 1;
+    }
+    for (const listed_device &d : all)
+        if (!strcmp(d.state, "pending") && !strcmp(d.check, want)) {
+            if (device_verb(cfg, d.id, "accept") != 0)
+                return 1;
+            printf("Accepted. \"%s\" uses this Puddle now.\n", d.name);
+            return 0;
+        }
+    fprintf(stderr, "puddled: no device waiting to be let in shows %s.\n", want);
+    return 1;
+}
+
+/* Write the whole Puddle to `path`, sealed to its own key (core/backup.h). */
+static int write_backup(const puddle_config *cfg, const char *path)
+{
+    char err[512];
+    puddle_identity *id = puddle_identity_open(cfg->data_dir, err, sizeof err);
+    if (!id) {
+        fprintf(stderr, "puddled: %s\n", err);
+        return 1;
+    }
+    int rc = puddle_backup_write(cfg, id, path, NULL, NULL, err, sizeof err);
+    puddle_identity_close(id);
+    if (rc != 0) {
+        fprintf(stderr, "puddled: %s\n", err);
+        return 1;
+    }
+    printf("Wrote your Puddle to %s.\n"
+           "Only your recovery phrase opens it, so it can be kept anywhere. After you change your keys, it still opens\n"
+           "with the phrase from before.\n", path);
+    return 0;
+}
+
+/* Bring a whole Puddle back here from a backup, with the phrase that sealed it. */
+static int restore_backup(const puddle_config *cfg, const char *path)
+{
+    char err[512];
+    puddle_backup_info info;
+    if (puddle_backup_info_read(path, &info, err, sizeof err) != 0) {
+        fprintf(stderr, "puddled: %s\n", err);
+        return 1;
+    }
+    if (!puddle_console_interactive()) {
+        fprintf(stderr, "puddled: --restore needs a terminal: it asks for your recovery phrase.\n");
+        return 1;
+    }
+    if (puddle_identity_exists(cfg->data_dir)) {
+        fprintf(stderr, "puddled: there is already an identity in %s, and it is not overwritten.\n", cfg->data_dir);
+        return 1;
+    }
+    char phrase[128];
+    if (read_secret("Your recovery phrase (the one you had when this backup was made): ", phrase, sizeof phrase) != 0) {
+        fprintf(stderr, "puddled: no phrase given.\n");
+        return 1;
+    }
+    int rc = puddle_backup_restore(cfg, path, phrase, &info, err, sizeof err);
+    memset(phrase, 0, sizeof phrase);
+    if (rc != 0) {
+        fprintf(stderr, "puddled: %s\n", err);
+        return 1;
+    }
+    printf("Restored your Puddle %s here: identity, friends, chats, files, phones and profiles.\n"
+           "This computer's puddle.yaml is unchanged; the one from the backup is beside it, as puddle.yaml.from-backup.\n"
+           "Make sure `advertise` says where friends reach you now: when it changes, they are told.\n"
+           "Don't run the old Puddle again: two Puddles with one identity get in each other's way.\n", info.id);
+    return 0;
+}
+
+/* Rebuild the identity here from the latest recovery phrase and a copy of the chain, or everything from a backup. */
 static int restore_identity(const puddle_config *cfg, const char *chain_path)
 {
     char err[512];
     if (!chain_path) {
-        fprintf(stderr, "puddled: --restore needs --chain FILE: a copy of your identity's chain.jsonl (it is not\n"
-                        "secret; keep one somewhere safe). Without a copy, a friend's Puddle can give you one.\n");
+        fprintf(stderr, "puddled: --restore needs --from FILE: a backup, or a copy of your identity's chain.jsonl (it is\n"
+                        "not secret; keep one somewhere safe). Without either, a friend's Puddle can give you your chain.\n");
         return 2;
     }
+    if (puddle_backup_is(chain_path))
+        return restore_backup(cfg, chain_path);
     if (!puddle_console_interactive()) {
         fprintf(stderr, "puddled: --restore needs a terminal: it asks for your recovery phrase.\n");
         return 1;
@@ -220,7 +444,8 @@ int main(int argc, char **argv)
 {
     const char *path = NULL;
     int init = 0, roll = 0, restore = 0, wait = 0;
-    const char *chain_path = NULL;
+    const char *chain_path = NULL, *backup_path = NULL, *accept_digits = NULL;
+    int pair = 0;
     for (int i = 1; i < argc; i++) {
         if ((!strcmp(argv[i], "-c") || !strcmp(argv[i], "--config")) && i + 1 < argc) {
             path = argv[++i];
@@ -232,8 +457,14 @@ int main(int argc, char **argv)
             roll = 1;
         } else if (!strcmp(argv[i], "--restore")) {
             restore = 1;
-        } else if (!strcmp(argv[i], "--chain") && i + 1 < argc) {
+        } else if ((!strcmp(argv[i], "--chain") || !strcmp(argv[i], "--from")) && i + 1 < argc) {
             chain_path = argv[++i];
+        } else if (!strcmp(argv[i], "--pair")) {
+            pair = 1;
+        } else if (!strcmp(argv[i], "--accept") && i + 1 < argc) {
+            accept_digits = argv[++i];
+        } else if (!strcmp(argv[i], "--backup") && i + 1 < argc) {
+            backup_path = argv[++i];
         } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
             usage(stdout);
             return 0;
@@ -250,7 +481,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    if (init + roll + restore + wait > 1) {
+    if (init + roll + restore + wait + pair + (backup_path != NULL) + (accept_digits != NULL) > 1) {
         usage(stderr);
         return 2;
     }
@@ -258,6 +489,12 @@ int main(int argc, char **argv)
         return roll_keys(&cfg);
     if (restore)
         return restore_identity(&cfg, chain_path);
+    if (backup_path)
+        return write_backup(&cfg, backup_path);
+    if (pair)
+        return pair_device(&cfg);
+    if (accept_digits)
+        return accept_by_check(&cfg, accept_digits);
 
     int unfinished = puddle_identity_unconfirmed(cfg.data_dir);
     if (!puddle_identity_exists(cfg.data_dir) || unfinished) {

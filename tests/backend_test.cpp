@@ -73,6 +73,8 @@ int main(int argc, char **argv)
 
     {   // ---- a brand new install ----
         Backend b;
+        CHECK(b.mode().isEmpty() && !b.needsSetup() && !b.running()); // first, where the Puddle is to run
+        CHECK(b.choose("here") && b.mode() == "here");
         CHECK(b.needsSetup() && !b.setupRedo() && !b.running() && b.error().isEmpty());
         CHECK(!port_open(port));                              // nothing is listening while setting up
 
@@ -133,6 +135,22 @@ int main(int argc, char **argv)
         CHECK(!anywhere(home.path(), bare.toUtf8()));
         CHECK(!anywhere(home.path(), bare.toLower().toUtf8()));
     }
+
+    {   // ---- "Recover my Puddle": rebuilt in another folder from the latest phrase and a copy of the chain ----
+        const QString chainCopy = home.path() + "/chain-copy.jsonl", dataDir2 = home.path() + "/data2";
+        QFile cc(chainCopy);
+        CHECK(cc.open(QIODevice::WriteOnly) && cc.write(chainBefore) == chainBefore.size());
+        cc.close();
+        writeConfig(QString("address: 127.0.0.1\nport: %1\ndata_dir: %2\nprofiles:\n").arg(port).arg(dataDir2));
+        Backend b;
+        CHECK(b.mode() == "here" && b.needsSetup() && !b.running());
+        CHECK(!b.restoreIdentity(secondPhrase, QUrl::fromLocalFile(chainCopy)).isEmpty()); // not this identity's phrase
+        CHECK(!b.restoreIdentity(thirdPhrase, QUrl::fromLocalFile(home.path() + "/nothing")).isEmpty());
+        CHECK(!puddle_identity_exists(dataDir2.toUtf8()));
+        CHECK(b.restoreIdentity(thirdPhrase, QUrl::fromLocalFile(chainCopy)).isEmpty());
+        CHECK(!b.needsSetup() && b.running() && b.hasLocalPuddle() && chain_of(dataDir2) == chainBefore);
+    }
+    writeConfig(QString("address: 127.0.0.1\nport: %1\ndata_dir: %2\nprofiles:\n").arg(port).arg(dataDir));
 
     {   // ---- theme.yaml: plain `key: value` lines ----
         const QVariantMap t = Backend::parseTheme("# my theme\ncanvas: \"#101418\"\n card: '#1b2026'  \naccent: #7aa2f7 # blue\ncardRadius: 28\nbroken line\nempty:\n");

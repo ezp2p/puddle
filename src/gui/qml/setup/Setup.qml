@@ -1,16 +1,35 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Dialogs
 import "../components"
 import "../theme"
 
-// First run: make the identity and show its recovery phrase once. The Puddle does not start until the
-// owner says the phrase is written down.
+// First run, for a Puddle that runs here: make the identity and show its recovery phrase once. The Puddle does not start until
+// the owner says the phrase is written down. Or (`recovering`) rebuild one from its phrase and a copy of its chain.
 Pane {
     id: setup
     padding: 0
 
     required property var backend
+    property bool recovering: false
+    property url chainFile: ""
+    property string recoverError: ""
+
+    function back() {
+        recovering = false
+        recoverError = ""
+        chainFile = ""
+        backend.unchoose()
+    }
+
+    function restore() {
+        recoverError = backend.restoreIdentity(recoverPhrase.text, chainFile)
+        if (recoverError === "") {
+            recoverPhrase.text = ""
+            recovering = false
+        }
+    }
 
     // Held only while it is on screen, and cleared the moment setup is finished.
     property string phrase: ""
@@ -43,9 +62,109 @@ Pane {
             y: 24
             spacing: 16
 
+            // ---- recovering: the phrase and a copy of the chain ----
+            ColumnLayout {
+                visible: setup.recovering && setup.phrase === ""
+                Layout.fillWidth: true
+                spacing: 16
+
+                Label {
+                    text: qsTr("Recover your Puddle")
+                    font.pixelSize: 26
+                    font.bold: true
+                }
+                Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.Wrap
+                    text: qsTr("You need your recovery phrase and one of these:")
+                }
+                Label {
+                    Layout.fillWidth: true
+                    Layout.leftMargin: 12
+                    wrapMode: Text.Wrap
+                    text: qsTr("• A backup (a .puddle file, from Settings, \"Back up…\"). Everything comes back: friends, chats, "
+                               + "files, phones and profiles. Use the phrase you had when it was made.")
+                }
+                Label {
+                    Layout.fillWidth: true
+                    Layout.leftMargin: 12
+                    wrapMode: Text.Wrap
+                    text: qsTr("• Or a copy of your identity's chain, identity/chain.jsonl from your old Puddle's data folder (it "
+                               + "isn't secret). Only your identity comes back, so friends still know you; chats don't. Use your "
+                               + "latest phrase.")
+                }
+                Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.Wrap
+                    color: Theme.banner
+                    text: qsTr("Only do this if your old Puddle is gone. If it still runs, go back and choose \"Connect to my "
+                               + "Puddle\": two Puddles with one identity get in each other's way.")
+                }
+                TextField {
+                    id: recoverPhrase
+                    objectName: "recoverPhrase"
+                    Layout.fillWidth: true
+                    placeholderText: qsTr("Recovery phrase")
+                    echoMode: TextInput.Password
+                    font.family: setup.mono
+                    inputMethodHints: Qt.ImhNoAutoUppercase | Qt.ImhNoPredictiveText | Qt.ImhSensitiveData
+                    Accessible.name: qsTr("Recovery phrase")
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 12
+                    Button {
+                        text: qsTr("Choose the file…")
+                        onClicked: chainPicker.open()
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        elide: Text.ElideMiddle
+                        opacity: 0.7
+                        text: setup.chainFile.toString() === "" ? qsTr("No file chosen")
+                                                                : decodeURIComponent(setup.chainFile.toString().replace(/^.*\//, ""))
+                    }
+                }
+                Label {
+                    visible: setup.recoverError !== ""
+                    Layout.fillWidth: true
+                    wrapMode: Text.Wrap
+                    color: Theme.alert
+                    text: setup.recoverError
+                }
+                Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.Wrap
+                    opacity: 0.7
+                    text: qsTr("If the old computer might be in someone else's hands, change your keys once your Puddle is back, "
+                               + "so whatever is left on it stops working.")
+                }
+                RowLayout {
+                    spacing: 12
+                    Button {
+                        text: qsTr("Back")
+                        onClicked: setup.back()
+                    }
+                    Button {
+                        objectName: "recoverButton"
+                        text: qsTr("Recover")
+                        highlighted: true
+                        enabled: recoverPhrase.text.trim() !== "" && setup.chainFile.toString() !== ""
+                        onClicked: setup.restore()
+                    }
+                }
+                FileDialog {
+                    id: chainPicker
+                    title: qsTr("Your backup, or your identity's chain")
+                    fileMode: FileDialog.OpenFile
+                    nameFilters: [qsTr("Backup or chain (*.puddle *.jsonl)"), qsTr("All files (*)")]
+                    onAccepted: setup.chainFile = selectedFile
+                }
+            }
+
             // ---- step 1: before anything exists ----
             ColumnLayout {
-                visible: setup.phrase === ""
+                visible: setup.phrase === "" && !setup.recovering
                 Layout.fillWidth: true
                 spacing: 16
 
@@ -75,10 +194,17 @@ Pane {
                     color: Theme.alert
                     text: setup.backend.error
                 }
-                Button {
-                    text: "Make my identity"
-                    highlighted: true
-                    onClicked: setup.make()
+                RowLayout {
+                    spacing: 12
+                    Button {
+                        text: qsTr("Back")
+                        onClicked: setup.back()
+                    }
+                    Button {
+                        text: "Make my identity"
+                        highlighted: true
+                        onClicked: setup.make()
+                    }
                 }
             }
 
