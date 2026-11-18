@@ -17,6 +17,8 @@ Pane {
     padding: 0
     background: null
 
+    ConfirmDialog { id: confirm }
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
@@ -309,17 +311,52 @@ Pane {
             ColumnLayout {
                 Layout.fillWidth: true
                 spacing: 2
-                Label { text: qsTr("This phone"); font.bold: true }
+                Label { text: page.backend.modeFixed ? qsTr("This phone") : qsTr("This device"); font.bold: true }
                 Label {
                     Layout.fillWidth: true
                     wrapMode: Text.Wrap
                     opacity: 0.65
                     font.pixelSize: 12
-                    text: qsTr("Uses your Puddle at %1. Disconnecting forgets it here; remove the phone in Puddle on your computer too.")
+                    text: (page.backend.modeFixed
+                           ? qsTr("Uses your Puddle at %1. Disconnecting forgets it here; remove the phone on your Puddle too.")
+                           : qsTr("Uses your Puddle at %1. Disconnecting forgets it here (remove this device on your Puddle too); "
+                                  + "then you can pair again, or run a Puddle on this computer instead."))
                           .arg(page.backend.phone ? page.backend.phoneLink.address : "")
                 }
             }
-            Button { text: qsTr("Disconnect"); onClicked: page.backend.phoneLink.forget() }
+            Button {
+                text: qsTr("Disconnect")
+                onClicked: confirm.ask(qsTr("Disconnect from your Puddle?"),
+                                       qsTr("This device forgets your Puddle and its key. To use it again, pair it again with a new link."),
+                                       qsTr("Disconnect"), () => page.backend.phoneLink.forget())
+            }
+        }
+        // the Puddle runs here: the owner may want this app to use one somewhere else instead
+        RowLayout {
+            objectName: "thisComputer"
+            visible: !page.backend.phone && !page.backend.modeFixed
+            Layout.fillWidth: true
+            Layout.margins: 16
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 2
+                Label { text: qsTr("This computer"); font.bold: true }
+                Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.Wrap
+                    opacity: 0.65
+                    font.pixelSize: 12
+                    text: qsTr("Your Puddle runs here. If it should run somewhere else, such as a server, this app can use that one instead.")
+                }
+            }
+            Button {
+                text: qsTr("Change…")
+                onClicked: confirm.ask(qsTr("Stop running your Puddle here?"),
+                                       qsTr("Puddle restarts and asks where your Puddle is. The one on this computer stops, so friends "
+                                            + "can't reach it here, but nothing is deleted: its identity, friends and chats stay in %1, "
+                                            + "and come back if you choose this computer again.").arg(page.backend.dataDir),
+                                       qsTr("Restart and choose"), () => page.backend.askAgain())
+            }
         }
         Rectangle { Layout.fillWidth: true; height: 1; color: Theme.hairline }
         // people you blocked, and a way to let them back

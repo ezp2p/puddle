@@ -176,12 +176,28 @@ int main(int argc, char **argv)
     auto *msgs_b = static_cast<JsonListModel *>(B.messages());
 
     qputenv("PUDDLE_TEST_NO_AUDIO", "1"); // calls below: not this computer's microphone and speaker
-    Backend backend; // the app's own Puddle
+    {   /* the first run asks where the Puddle is; "remote", then back, leaves nothing behind */
+        Backend first;
+        CHECK(first.mode().isEmpty() && !first.running() && !first.needsSetup() && !first.phone());
+        CHECK(first.choose("remote") && first.mode() == "remote" && first.phone() && !first.running());
+        CHECK(!first.choose("here")); /* chosen already */
+        CHECK(first.unchoose() && first.mode().isEmpty() && !first.phone());
+        CHECK(first.choose("here") && first.needsSetup() && !first.hasLocalPuddle());
+        CHECK(first.unchoose() && first.mode().isEmpty());
+    }
+    {   /* asked again on the next run, since nothing was made */
+        Backend again;
+        CHECK(again.mode().isEmpty());
+        CHECK(again.choose("here"));
+    }
+    Backend backend; // the app's own Puddle: chosen above, so remembered
+    CHECK(backend.mode() == "here");
     if (backend.needsSetup()) {
         CHECK(!backend.createIdentity().isEmpty());
         CHECK(backend.finishSetup());
     }
-    CHECK(backend.running() && backend.error().isEmpty());
+    CHECK(backend.running() && backend.error().isEmpty() && backend.hasLocalPuddle());
+    CHECK(!backend.unchoose()); /* a Puddle runs here: only Settings, with a restart, asks again */
     CHECK(backend.myLink().startsWith(QString("127.0.0.1:%1?k=").arg(port)) && backend.myLink().size() == QString("127.0.0.1:%1?k=").arg(port).size() + 52);
     Chats &A = *backend.chats();
     A.setInterval(100);

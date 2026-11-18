@@ -13,6 +13,7 @@
 #include <QGuiApplication>
 #include <QKeyEvent>
 #include <QKeySequence>
+#include <QProcess>
 #include <QSettings>
 
 #include "dock.h"
@@ -81,26 +82,158 @@ Backend::Backend(QObject *parent) : QObject(parent)
     connect(&speakTimer_, &QTimer::timeout, this, &Backend::sampleSpeaking);
     connect(&video_, &CallVideo::cameraFailed, this, [this](const QString &why) { append(QStringLiteral("warning: call: camera: ") + why); });
 
-    if (phoneMode()) { /* no Puddle here: this is a phone of the owner's, once paired */
-        phone_ = new Phone(&chats_, phoneDir(), this);
-        connect(phone_, &Phone::changed, this, &Backend::startedChanged);
-        connect(&chats_, &Chats::profilesChanged, this, &Backend::startedChanged); /* myLink, from the Puddle */
-        return;
-    }
+    connect(&chats_, &Chats::profilesChanged, this, &Backend::startedChanged); /* a phone's myLink, from the Puddle */
 
     char err[512];
-    if (puddle_config_load(&cfg_, nullptr, err, sizeof err) != 0) {
-        error_ = QString::fromUtf8(err);
+    if (puddle_config_load(&cfg_, nullptr, err, sizeof err) == 0)
+        haveConfig_ = true;
+    else
+        configError_ = QString::fromUtf8(err);
+
+    // What this app is: a phone always uses a Puddle elsewhere; anywhere else it is what the owner chose on the first run. Before
+    // that was remembered, an identity here meant "here" and a pairing meant "remote", so whoever had either isn't asked.
+    QString m = phoneMode() ? QStringLiteral("remote") : savedMode();
+    if (m == QLatin1String("ask")) {
+        m.clear();
+    } else if (m != QLatin1String("here") && m != QLatin1String("remote")) {
+        m.clear();
+        if (haveConfig_ && puddle_identity_exists(cfg_.data_dir))
+            m = QStringLiteral("here");
+        else if (QFile::exists(phoneDir() + QStringLiteral("/device.json")))
+            m = QStringLiteral("remote");
+        if (!m.isEmpty())
+            saveMode(m);
+    }
+    if (m == QLatin1String("here"))
+        startHere();
+    else if (m == QLatin1String("remote"))
+        startRemote();
+}
+
+QString Backend::savedMode()
+{
+    return QSettings().value("mode").toString();
+}
+
+void Backend::saveMode(const QString &mode)
+{
+    QSettings().setValue("mode", mode);
+}
+
+bool Backend::hasLocalPuddle() const
+{
+    return haveConfig_ && puddle_identity_exists(cfg_.data_dir) && !puddle_identity_unconfirmed(cfg_.data_dir);
+}
+
+void Backend::startHere()
+{
+    mode_ = QStringLiteral("here");
+    if (!haveConfig_) {
+        setError(configError_);
+        emit modeChanged();
         return;
     }
-    haveConfig_ = true;
-
     // No identity, or one whose phrase was shown but never confirmed: setup comes first, and the
     // server stays off until the owner has written the phrase down.
     setupRedo_ = puddle_identity_unconfirmed(cfg_.data_dir) != 0;
     needsSetup_ = setupRedo_ || !puddle_identity_exists(cfg_.data_dir);
+    emit modeChanged();
+    emit needsSetupChanged();
     if (!needsSetup_)
         startServer();
+}
+
+void Backend::startRemote()
+{
+    mode_ = QStringLiteral("remote");
+    phone_ = new Phone(&chats_, phoneDir(), this);
+    connect(phone_, &Phone::changed, this, &Backend::startedChanged);
+    emit modeChanged();
+    emit startedChanged();
+}
+
+bool Backend::choose(const QString &mode)
+{
+    if (!mode_.isEmpty() || (mode != QLatin1String("here") && mode != QLatin1String("remote")))
+        return false;
+    setError(QString());
+    saveMode(mode);
+    if (mode == QLatin1String("here"))
+        startHere();
+    else
+        startRemote();
+    return true;
+}
+
+bool Backend::unchoose()
+{
+    if (phoneMode() || mode_.isEmpty())
+        return false;
+    if (phone_) {
+        if (phone_->state() != QLatin1String("unpaired"))
+            return false; /* paired, or asking: Disconnect first */
+        phone_->deleteLater();
+        phone_ = nullptr;
+    } else {
+        if (srv_ || hasLocalPuddle())
+            return false; /* there is a Puddle here: Settings asks again, with a restart */
+        char err[512];
+        if (haveConfig_ && puddle_identity_unconfirmed(cfg_.data_dir) &&
+            puddle_identity_discard_unconfirmed(cfg_.data_dir, err, sizeof err) < 0) { /* never used: nothing is lost */
+            setError(QString::fromUtf8(err));
+            return false;
+        }
+        needsSetup_ = setupRedo_ = false;
+        emit needsSetupChanged();
+    }
+    mode_.clear();
+    saveMode(QStringLiteral("ask"));
+    setError(QString());
+    emit modeChanged();
+    emit startedChanged();
+    return true;
+}
+
+bool Backend::askAgain()
+{
+    if (phoneMode())
+        return false;
+    // An AppImage runs from a mount that goes when it quits: start the image itself, not what is inside it.
+    QString program = qEnvironmentVariable("APPIMAGE");
+    if (program.isEmpty())
+        program = QCoreApplication::applicationFilePath();
+    saveMode(QStringLiteral("ask"));
+    if (!QProcess::startDetached(program, QCoreApplication::arguments().mid(1))) {
+        saveMode(mode_);
+        return false;
+    }
+    QCoreApplication::quit();
+    return true;
+}
+
+QString Backend::restoreIdentity(const QString &phrase, const QUrl &chainFile)
+{
+    if (mode_ != QLatin1String("here") || !haveConfig_ || !needsSetup_)
+        return tr("There is already an identity here.");
+    QFile f(chainFile.isLocalFile() ? chainFile.toLocalFile() : chainFile.toString());
+    if (!f.open(QIODevice::ReadOnly))
+        return tr("Couldn't read that file.");
+    const QByteArray chain = f.read((1 << 20) + 1);
+    if (chain.size() > (1 << 20))
+        return tr("That file is too large to be a chain.");
+    char err[512];
+    if (puddle_identity_unconfirmed(cfg_.data_dir) && puddle_identity_discard_unconfirmed(cfg_.data_dir, err, sizeof err) < 0)
+        return QString::fromUtf8(err);
+    QByteArray p = phrase.trimmed().toUtf8();
+    puddle_identity *id = puddle_identity_restore(cfg_.data_dir, p.constData(), chain.constData(), size_t(chain.size()), err, sizeof err);
+    p.fill('\0');
+    if (!id)
+        return QString::fromUtf8(err);
+    puddle_identity_close(id);
+    needsSetup_ = setupRedo_ = false;
+    emit needsSetupChanged();
+    startServer();
+    return running() ? QString() : error_;
 }
 
 // Frames from the friend, on one of the Puddle's network threads: into the jitter buffer, which is safe for that.

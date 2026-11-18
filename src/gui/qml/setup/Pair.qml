@@ -12,6 +12,8 @@ Pane {
     padding: 0
 
     required property var link   // the Phone object (backend.phoneLink)
+    property bool canGoBack: false // the owner chose this on the first run, and may choose again
+    signal back()
 
     readonly property string mono: Qt.platform.os === "osx" ? "Menlo" : Qt.platform.os === "windows" ? "Consolas" : "monospace"
 
@@ -44,8 +46,9 @@ Pane {
                 Label {
                     Layout.fillWidth: true
                     wrapMode: Text.Wrap
-                    text: qsTr("This phone uses the Puddle on your computer. On the computer, open Puddle, go to Settings, choose "
-                               + "\"Add a phone\", and copy the link it shows here.")
+                    text: qsTr("This device uses your Puddle where it runs. Get a pairing link from it: in Puddle on that "
+                               + "computer, open Settings and choose \"Add a phone\". For a Puddle on a server, with no window, "
+                               + "ask it with its owner token (see Puddle's docs/docker.md). Paste the link here.")
                 }
                 TextField {
                     id: linkField
@@ -58,7 +61,7 @@ Pane {
                     Accessible.name: qsTr("Pairing link")
                     FieldMenu {}
                 }
-                Label { text: qsTr("Call this phone"); opacity: 0.7 }
+                Label { text: qsTr("Call this device"); opacity: 0.7 }
                 TextField {
                     id: nameField
                     objectName: "pairName"
@@ -66,15 +69,23 @@ Pane {
                     text: pair.link.defaultName()
                     maximumLength: 64
                     enabled: pair.link.state !== "pairing"
-                    Accessible.name: qsTr("Name for this phone")
+                    Accessible.name: qsTr("Name for this device")
                     FieldMenu {}
                 }
-                Button {
-                    objectName: "pairButton"
-                    text: pair.link.state === "pairing" ? qsTr("Connecting…") : qsTr("Connect")
-                    highlighted: true
-                    enabled: pair.link.state !== "pairing" && linkField.text.trim() !== "" && nameField.text.trim() !== ""
-                    onClicked: pair.link.pair(linkField.text, nameField.text)
+                RowLayout {
+                    spacing: 12
+                    Button {
+                        visible: pair.canGoBack && pair.link.state === "unpaired"
+                        text: qsTr("Back")
+                        onClicked: pair.back()
+                    }
+                    Button {
+                        objectName: "pairButton"
+                        text: pair.link.state === "pairing" ? qsTr("Connecting…") : qsTr("Connect")
+                        highlighted: true
+                        enabled: pair.link.state !== "pairing" && linkField.text.trim() !== "" && nameField.text.trim() !== ""
+                        onClicked: pair.link.pair(linkField.text, nameField.text)
+                    }
                 }
             }
 
@@ -87,7 +98,7 @@ Pane {
                 Label {
                     Layout.fillWidth: true
                     wrapMode: Text.Wrap
-                    text: qsTr("Now accept this phone on your computer, in Puddle's Settings. Check it shows the same number:")
+                    text: qsTr("Now accept this device on your Puddle (in Puddle's Settings, or with its owner token). Check it shows the same number:")
                 }
                 Label {
                     objectName: "pairCheck"
@@ -101,7 +112,7 @@ Pane {
                     Layout.fillWidth: true
                     wrapMode: Text.Wrap
                     opacity: 0.7
-                    text: qsTr("If the numbers are different, don't accept it: something between this phone and your Puddle is not what it seems.")
+                    text: qsTr("If the numbers are different, don't accept it: something between this device and your Puddle is not what it seems.")
                 }
                 Label {
                     Layout.fillWidth: true

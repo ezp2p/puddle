@@ -83,21 +83,34 @@ ApplicationWindow {
         }
     }
 
-    Setup {
+    // the first run: does this app run the owner's Puddle, or use one somewhere else?
+    Welcome {
         anchors.fill: parent
-        visible: root.backend.needsSetup
+        visible: root.backend.mode === ""
+        backend: root.backend
+        onRecover: setup.recovering = true
+    }
+
+    Setup {
+        id: setup
+        anchors.fill: parent
+        visible: root.backend.mode === "here" && root.backend.needsSetup
         backend: root.backend
     }
 
-    // a phone, before its Puddle has let it in (docs/identity.md, "Devices")
+    // a phone, or this app using a Puddle elsewhere, before that Puddle has let it in (docs/identity.md, "Devices")
     Loader {
         anchors.fill: parent
         active: root.backend.phone && !root.backend.running
-        sourceComponent: Pair { link: root.backend.phoneLink }
+        sourceComponent: Pair {
+            link: root.backend.phoneLink
+            canGoBack: !root.backend.modeFixed
+            onBack: root.backend.unchoose()
+        }
     }
 
     Label {
-        visible: root.backend.error !== "" && !root.backend.needsSetup
+        visible: root.backend.error !== "" && !root.backend.needsSetup && root.backend.mode !== ""
         anchors.centerIn: parent
         width: parent.width - 2 * root.margin
         horizontalAlignment: Text.AlignHCenter

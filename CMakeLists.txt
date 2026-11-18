@@ -312,6 +312,7 @@ if(PUDDLE_BUILD_GUI)
         src/gui/qml/Main.qml
         src/gui/qml/setup/Setup.qml
         src/gui/qml/setup/Pair.qml
+        src/gui/qml/setup/Welcome.qml
         src/gui/qml/shell/CallBar.qml
         src/gui/qml/shell/VoicePanel.qml
         src/gui/qml/shell/Shell.qml

@@ -2,6 +2,7 @@
 
 #include <QFileSystemWatcher>
 #include <QTimer>
+#include <QUrl>
 #include <QObject>
 #include <QVariantMap>
 #include <QStringListModel>
@@ -45,8 +46,14 @@ class Backend : public QObject {
     Q_PROPERTY(QVariantMap themeValues READ themeValues NOTIFY themeChanged)
     // The app on a phone (Android, or PUDDLE_PHONE=1 to try it on a desktop): no Puddle of its own, a thin client of the owner's
     // (docs/identity.md, "Devices"). `phoneLink` is the pairing; `running` means paired and let in.
-    Q_PROPERTY(bool phone READ phone CONSTANT)
-    Q_PROPERTY(QObject *phoneLink READ phoneLink CONSTANT)
+    Q_PROPERTY(bool phone READ phone NOTIFY modeChanged)
+    Q_PROPERTY(QObject *phoneLink READ phoneLink NOTIFY modeChanged)
+    // What this app is, chosen on the first run and remembered: "here" (it runs the owner's Puddle), "remote" (it uses one that
+    // runs somewhere else, as a phone does), or "" (not chosen yet: the window asks). `modeFixed`: no choice (a phone).
+    Q_PROPERTY(QString mode READ mode NOTIFY modeChanged)
+    Q_PROPERTY(bool modeFixed READ modeFixed CONSTANT)
+    Q_PROPERTY(bool hasLocalPuddle READ hasLocalPuddle NOTIFY modeChanged) // an identity is kept here, whatever the mode
+    Q_PROPERTY(QString dataDir READ dataDir NOTIFY modeChanged)
     Q_PROPERTY(bool canDrawQr READ canDrawQr CONSTANT) // "image://qr/..." works (libqrencode was found)
     // Voice channels (docs/ponds.md, "Voice channels"): how the microphone goes there, kept between runs. `talkMode` is "voice"
     // (voice activation, the default) or "push" (push to talk, while `pushKey` is held: a Qt::Key, 0 for none chosen yet);
@@ -67,9 +74,13 @@ public:
     QString listenUrl() const { return listenUrl_; }
     bool running() const { return phone_ ? phone_->state() == QLatin1String("ready") : srv_ != nullptr; }
     bool phone() const { return phone_ != nullptr; }
+    QString mode() const { return mode_; }
+    bool modeFixed() const { return phoneMode(); }
+    bool hasLocalPuddle() const;
+    QString dataDir() const { return haveConfig_ ? QString::fromUtf8(cfg_.data_dir) : QString(); }
     bool canDrawQr() const;
     QObject *phoneLink() { return phone_; }
-    // Whether the app runs as a phone, and where a phone keeps what it knows.
+    // Whether the app must run as a phone (Android, --phone, PUDDLE_PHONE), and where a phone keeps what it knows.
     static bool phoneMode();
     static QString phoneDir();
     QString error() const { return error_; }
@@ -108,6 +119,18 @@ public:
     // The owner has written the phrase down: confirm the identity and start the Puddle.
     Q_INVOKABLE bool finishSetup();
 
+    // Rebuild the identity here from the latest recovery phrase and a copy of its chain (identity/chain.jsonl, not secret), then
+    // start the Puddle. "" when done, else what went wrong.
+    Q_INVOKABLE QString restoreIdentity(const QString &phrase, const QUrl &chainFile);
+
+    // The first run's answer: "here" or "remote". Remembered, so it is asked once.
+    Q_INVOKABLE bool choose(const QString &mode);
+    // Back to the question, while nothing has been made yet for the answer (no identity confirmed here, no phone paired).
+    Q_INVOKABLE bool unchoose();
+    // Later, from Settings: ask again, which takes a restart. The Puddle kept here, if any, is left as it is, and comes back if
+    // "here" is chosen again. False if the app could not start again.
+    Q_INVOKABLE bool askAgain();
+
     Q_INVOKABLE void copyText(const QString &text);
 
     // True exactly once per install: the "still running in the tray" hint.
@@ -130,6 +153,7 @@ signals:
     void startedChanged();
     void errorChanged();
     void needsSetupChanged();
+    void modeChanged();
     void themeChanged();
     void talkChanged();
     void speakingChanged();
@@ -141,6 +165,10 @@ protected:
 private:
     Phone *phone_ = nullptr;
     void startServer();
+    void startHere();   // the owner's Puddle runs in this app: load the config, then set up or start
+    void startRemote(); // the app uses a Puddle elsewhere
+    static QString savedMode();
+    static void saveMode(const QString &mode);
     void setError(const QString &message);
     void loadTheme();
     void followCall(); // the sound starts when a call connects, or a voice channel does, and stops when it ends
@@ -159,6 +187,8 @@ private:
     bool needsSetup_ = false;
     bool setupRedo_ = false;
     bool haveConfig_ = false;
+    QString mode_;
+    QString configError_;  // why puddle.yaml couldn't be read, shown if the Puddle is to run here
     puddle_config cfg_;
     puddle_server *srv_ = nullptr;
     std::thread worker_;
