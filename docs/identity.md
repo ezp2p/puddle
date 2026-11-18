@@ -191,6 +191,10 @@ or relay role can come later with self-hosted servers.
 
 ## Encryption (decided for now: one key per Puddle)
 
+> **Superseded for the wire** by the protocol's `spec/09-sealing.md` (roadmap phase 10): every request and answer is
+> sealed to the other end's key, which covers message bodies between Puddles and takes the TLS certificate out of the
+> protocol. What follows is the older plan for encrypting only `body`.
+
 Each Puddle has a single encryption key pair (the X25519 key above). DMs and groups all use it:
 a message body is encrypted to each recipient Puddle's public key, and each Puddle decrypts with its
 one private key. There are no per-chat or per-group keys, and no key rotation on membership changes.

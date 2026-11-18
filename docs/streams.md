@@ -169,6 +169,10 @@ Events inside chats are signed separately, over their exact bytes, and name the 
 
 ## Proving who answers
 
+> **Being replaced** (roadmap phase 10; protocol `spec/09-sealing.md`): bodies will be sealed to keys, and receipts will
+> stop naming the TLS certificate, so a Puddle works behind a reverse proxy and on any certificate. This section
+> describes what is built today.
+
 A request signature proves the sender to the recipient. This is the other direction: the sender learning that what
 answered really is the Puddle it meant, by its keys, before it hands anything over and before it believes anything was
 received.
