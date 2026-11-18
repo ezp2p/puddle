@@ -12,6 +12,8 @@
 #include "http/client.h"
 
 #include <ftw.h>
+#include "sealing.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -96,7 +98,7 @@ static reply *call(const char *method, const char *target, const char *body, con
     if (bl) memcpy(copy, body, bl);
     copy[bl] = 0;
     memset(&rp, 0, sizeof rp);
-    rp.n = puddle_router_handle(&R, &req, owner, copy, bl, rp.out, sizeof rp.out - 1, &rp.status);
+    rp.n = st_handle(&R, &req, owner, copy, bl, rp.out, sizeof rp.out - 1, &rp.status);
     free(copy);
     return &rp;
 }
@@ -108,7 +110,7 @@ static reply *peer_call(person *from, const char *method, const char *target, co
 {
     char sig[800];
     const char *b = body ? body : "";
-    if (puddle_reqsig_sign(from->id, method, target, b, strlen(b), me.uid, clock_now, sig, sizeof sig) != 0) exit(2);
+    if (st_sign(from->id, method, target, b, strlen(b), me.uid, clock_now, sig, sizeof sig) != 0) exit(2);
     clock_now += 5;
     return call(method, target, body, sig, 0);
 }
@@ -224,6 +226,7 @@ int main(void)
     ob = puddle_outbox_open(data, &hooks, err, sizeof err);
     ctx = (puddle_ctx){ .courier = &puddle_federation_courier, .config = &cfg, .identity = me.id, .profiles = profiles, .assignments = as, .streams = ss, .people = ps, .groups = gs, .outbox = ob,
                         .replay = puddle_replay_new(4096), .now_ms = now_cb, .peer_key = puddle_streams_peer_key, .peer_key_user = ss };
+    st_use(me.id);
     R = (puddle_router){ .ctx = &ctx };
     R.routes = puddle_all_routes(&R.count);
     reply *r;
@@ -300,7 +303,7 @@ int main(void)
     CHECK(peer_call(&alice, "GET", t, NULL)->status == 404);                                     /* nothing chosen for her: nothing of ours is hers to see */
     CHECK(puddle_assignments_set(as, place_alice, "main", err, sizeof err) == 0);
     r = peer_call(&alice, "GET", t, NULL);
-    CHECK(r->status == 200 && strstr(r->out, "image/png") && !memcmp(strstr(r->out, "\r\n\r\n") + 4, "\x89PNG", 4));
+    CHECK(r->status == 200 && !memcmp(strstr(r->out, "\r\n\r\n") + 4, "\x89PNG", 4)); /* sealed: what it is is inside */
     snprintf(t, sizeof t, "/stream/v1/media?hash=%s", avatar_work);
     CHECK(peer_call(&alice, "GET", t, NULL)->status == 404);                                     /* in a profile she is not shown */
     snprintf(t, sizeof t, "/stream/v1/media?hash=%s", banner_work);
@@ -616,7 +619,7 @@ int main(void)
         snprintf(rq.path, sizeof rq.path, "/api/v1/media/upload");
         rq.content_length = sizeof png;
         static reply up;
-        up.n = puddle_router_handle(&R, &rq, 1, png, sizeof png, up.out, sizeof up.out - 1, &up.status);
+        up.n = st_handle(&R, &rq, 1, png, sizeof png, up.out, sizeof up.out - 1, &up.status);
         char hash[65];
         puddle_sha256_hex(png, sizeof png, hash);
         CHECK(up.status == 201 && strstr(body_of(&up), hash) && strstr(body_of(&up), "\"mime\":\"image/png\"") && puddle_media_have(data, hash));

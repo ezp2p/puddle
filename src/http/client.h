@@ -1,16 +1,12 @@
 #ifndef PUDDLE_CLIENT_H
 #define PUDDLE_CLIENT_H
 
-/* Calling another Puddle (or a Pond): one signed HTTPS request (docs/streams.md, "Request signatures" and "Proving who
- * answers").
+/* Calling another Puddle (or a Pond): one signed, sealed HTTPS request (the protocol's spec/02 and spec/09).
  *
- * TLS here is not what authenticates anyone. Every Puddle makes its own certificate, so none can be checked
- * against a CA or a host name, and none is, or is remembered: it only encrypts. The request is signed, which proves
- * us to them; a Puddle's answer carries a signed receipt, which proves them to us. Given the key we hold for the peer
- * (`peer_pub`), the receipt is checked here, including that it names the certificate this connection showed, so
- * someone in the middle passing things on is caught. Given a certificate already proven to be theirs (`expect_fp`),
- * nothing is sent on a connection that shows another. A Pond that signs receipts is called the same way, with its key; one
- * that does not is pinned to its certificate: `fingerprint_ok` is asked before anything is sent.
+ * TLS only carries it. No certificate is checked, compared or remembered, so a peer behind a reverse proxy, or on a certificate
+ * that changes every day, is reached the same. The body is sealed to the peer's sealing key (`seal_pub`) and the answer comes
+ * back sealed to us, so whatever carries them reads nothing; the request is signed, which proves us to them; and their answer
+ * carries a signed receipt, which proves them to us: given the key we hold for them (`peer_pub`), it is checked here.
  *
  * Addresses come from strangers (a link, a request), so the ones that can only be a mistake or a probe are
  * refused before connecting: unspecified, multicast, broadcast and link-local (which includes the cloud
@@ -34,10 +30,10 @@ typedef struct {
     int io_timeout_s;         /* each read or write; 0 = 10 */
     int total_timeout_s;      /* the whole call; 0 = 30 */
     size_t max_body;          /* the largest answer to accept; 0 = PUDDLE_NET_BODY_MAX. Larger ones fail rather than fill memory. */
-    /* A Pond's: asked once the certificate is known and before anything is sent: 1 to go on, 0 to stop. NULL = always. */
-    int (*fingerprint_ok)(void *user, const char *fingerprint_hex);
     const unsigned char *peer_pub; /* a Puddle's current signing key: their answer must carry their receipt. NULL = not checked. */
-    const char *expect_fp;    /* a certificate already proven to be theirs: send nothing on a connection that shows another. NULL/"" = any. */
+    /* Their sealing key (spec/09): the body is sealed to it and the answer opened, so whatever carries it reads nothing. NULL =
+     * sent as it is, which only a first request to a bare address does. */
+    const unsigned char *seal_pub;
     /* Told the connection once it is made, and PUDDLE_SOCK_NONE just before it is closed, so another thread can end a call
      * that is waiting (puddle_sock_cut): a Pond holds a request for events open for up to 25 seconds. NULL = not told. */
     void (*on_socket)(void *user, puddle_sock s);

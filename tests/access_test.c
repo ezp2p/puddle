@@ -8,6 +8,8 @@
 #include "federation/courier.h"
 
 #include <ftw.h>
+#include "sealing.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -75,7 +77,7 @@ static reply post(const char *body, const char *sig)
     memcpy(copy, body, bl + 1);
     reply rp;
     memset(&rp, 0, sizeof rp);
-    rp.n = puddle_router_handle(&R, &req, 0, copy, bl, rp.out, sizeof rp.out, &rp.status);
+    rp.n = st_handle(&R, &req, 0, copy, bl, rp.out, sizeof rp.out, &rp.status);
     free(copy);
     return rp;
 }
@@ -112,7 +114,7 @@ static char *body_for(person *who, const char *profile, const char *address, con
 
 static void sign_for(person *who, const char *body, char *sig, size_t cap)
 {
-    if (puddle_reqsig_sign(who->id, "POST", "/stream/v1/access", body, strlen(body), bob.uid, clock_now, sig, cap) != 0) {
+    if (st_sign(who->id, "POST", "/stream/v1/access", body, strlen(body), bob.uid, clock_now, sig, cap) != 0) {
         fprintf(stderr, "sign failed\n"); exit(2);
     }
 }
@@ -180,6 +182,7 @@ int main(void)
     if (!ps) ps = puddle_people_open(dd, err, sizeof err);
     ctx = (puddle_ctx){ .courier = &puddle_federation_courier, .identity = bob.id, .streams = ss, .people = ps, .replay = puddle_replay_new(1024), .now_ms = now_cb,
                         .anon_bucket = puddle_bucket_new(50, 100), .access_limit = puddle_keyed_new(64, 1000, 3600 * 1000LL) };
+    st_use(bob.id);
     R = (puddle_router){ .ctx = &ctx };
     R.routes = puddle_all_routes(&R.count);
 
@@ -190,7 +193,8 @@ int main(void)
     CHECK(puddle_streams_access(ss) == PUDDLE_ACCESS_MANUAL);
     CHECK(ask(&alice, "{\"display_name\":\"Alice\",\"blurb\":\"hi\",\"evil\":{\"x\":1},\"color\":{\"colors\":[\"#AABBCC\",\"#001122\"],\"angle\":90},"
                   "\"avatar\":{\"hash\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"mime\":\"image/png\",\"size\":1234}}", "\"message\":\"hey it's Alice\\nfrom work\"", &first) == 202);
-    CHECK(first.n > 0 && strstr(first.out, "202 Accepted") && strstr(first.out, "Content-Length: 0\r\n"));
+    /* sealed (spec/09): an empty answer is one record of nothing, 16 bytes, which only Alice can open */
+    CHECK(first.n > 0 && strstr(first.out, "202 Accepted") && strstr(first.out, "Content-Length: 16\r\n") && st_raw_len == 16);
     CHECK(strcmp(strstr(first.out, "\r\n\r\n") + 4, "") == 0);
     CHECK(is(&alice, PUDDLE_STREAM_PENDING_IN) && owes(&alice, PUDDLE_OWED_NONE));
     CHECK(puddle_streams_get(ss, alice.uid, &rec) == 0);
@@ -226,7 +230,7 @@ int main(void)
         puddle_request q;
         memset(&q, 0, sizeof q);
         strcpy(q.method, "GET"); strcpy(q.path, "/nope"); strcpy(q.target, "/nope");
-        nothing.n = puddle_router_handle(&R, &q, 0, (const unsigned char *)"", 0, nothing.out, sizeof nothing.out, &nothing.status);
+        nothing.n = st_handle(&R, &q, 0, (const unsigned char *)"", 0, nothing.out, sizeof nothing.out, &nothing.status);
 
         char *good = body_for(&carol, PROFILE, "203.0.113.7:8443", NULL, NULL);
         char sig[700], sig2[700];
@@ -259,7 +263,7 @@ int main(void)
         free(mismatch);
         /* a request meant for someone else's Puddle */
         char sigx[700];
-        puddle_reqsig_sign(carol.id, "POST", "/stream/v1/access", good, strlen(good), alice.uid, clock_now, sigx, sizeof sigx);
+        st_sign(carol.id, "POST", "/stream/v1/access", good, strlen(good), alice.uid, clock_now, sigx, sizeof sigx);
         CHECK(post(good, sigx).status == 404);
         free(good);
 

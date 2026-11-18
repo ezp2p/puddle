@@ -26,6 +26,7 @@ typedef struct {
     int provisional; /* a request to an address, not yet answered (kept in the index so finding one does not read every file) */
     char kid[65];
     unsigned char sign_pub[32];
+    unsigned char enc_pub[32]; /* their current sealing key (spec/09): what we seal to */
 } entry;
 
 typedef struct {
@@ -212,6 +213,8 @@ static char *encode(const puddle_stream *st, size_t *out_len)
         puddle_jw_str(&w, "ticket", st->ticket);
     if (st->provisional)
         puddle_jw_flag(&w, "provisional", 1);
+    if (st->link_key[0])
+        puddle_jw_str(&w, "link_key", st->link_key);
     if (st->scoped_req)
         puddle_jw_flag(&w, "scoped_req", 1);
     if (st->group_ok)
@@ -303,6 +306,11 @@ static int decode(const char *json, size_t len, const char *expect_id, puddle_st
         unsigned char raw[16];
         if (trc < 0 || (trc == 0 && (puddle_json_string(tv, st->ticket, sizeof st->ticket) != 0 || puddle_hex_decode(st->ticket, raw, 16) != 0)))
             return -1;
+        int krc = puddle_json_member(json, len, "link_key", &tv);
+        unsigned char key[32];
+        if (krc < 0 || (krc == 0 && (puddle_json_string(tv, st->link_key, sizeof st->link_key) != 0 ||
+                                     puddle_hex_decode(st->link_key, key, 32) != 0)))
+            return -1;
         int prc = puddle_json_member(json, len, "provisional", &tv);
         if (prc < 0)
             return -1;
@@ -393,6 +401,7 @@ static int index_put(puddle_streams *s, const char *id, puddle_stream_state stat
     e->has_key = head != NULL;
     if (head) {
         memcpy(e->sign_pub, head->sign_pub, 32);
+        memcpy(e->enc_pub, head->enc_pub, 32);
         puddle_key_id(head->sign_pub, e->kid);
     }
     return 0;
@@ -1069,6 +1078,32 @@ int puddle_streams_current_key(void *streams, const char *id, unsigned char sign
         return 1;
     }
     return 0;
+}
+
+int puddle_streams_seal_key(void *streams, const char *id, unsigned char enc_pub[32])
+{
+    puddle_streams *s = (puddle_streams *)streams;
+    if (!s || !puddle_id_valid(id))
+        return 0;
+    {
+        std::lock_guard<std::mutex> hold(s->mu);
+        entry *e = find_entry(s, id);
+        if (!e || is_blocked_locked(s, id))
+            return 0;
+        if (e->has_key) {
+            memcpy(enc_pub, e->enc_pub, 32);
+            return 1;
+        }
+        if (!e->provisional)
+            return 0;
+    }
+    /* a request to an address: sealed to the key its link gave, if it gave one */
+    puddle_stream st;
+    if (puddle_streams_get(s, id, &st) != 0)
+        return 0;
+    int ok = st.link_key[0] && puddle_hex_decode(st.link_key, enc_pub, 32) == 0;
+    puddle_stream_free(&st);
+    return ok;
 }
 
 /* ---- blocks ---- */

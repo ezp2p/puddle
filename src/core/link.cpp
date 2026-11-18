@@ -1,11 +1,13 @@
 #include "core/link.h"
 
 #include "core/config.h"
+#include "base/encoding.h"
 
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <string>
 
 static void seterr(char *err, size_t n, const char *msg)
 {
@@ -219,30 +221,48 @@ static int parse_link(const char *text, int pond, puddle_link *out, char *err, s
         seterr(err, errlen, "that address is not valid; it should look like host or host:port");
         return -1;
     }
-    if (q) {
-        static const char KEY[] = "invite=";
+    if (q) { /* `invite=` and `k=`, each at most once, in either order */
         const char *v = q + 1;
-        if (strncmp(v, KEY, sizeof KEY - 1) != 0) {
-            seterr(err, errlen, "the only thing an address can carry is ?invite=");
-            return -1;
-        }
-        v += sizeof KEY - 1;
-        size_t vl = strlen(v);
-        if (vl > 0 && v[vl - 1] == '/')
-            vl--;
-        if (vl != PUDDLE_INVITE_TOKEN_LEN) {
-            seterr(err, errlen, "that invite is not valid");
-            return -1;
-        }
-        memcpy(l.invite, v, vl);
-        l.invite[vl] = '\0';
-        if (!puddle_invite_token_valid(l.invite)) {
-            seterr(err, errlen, "that invite is not valid");
-            return -1;
+        size_t ql = strlen(v);
+        if (ql > 0 && v[ql - 1] == '/')
+            ql--;
+        std::string query(v, ql);
+        size_t at = 0;
+        while (at <= query.size()) {
+            size_t amp = query.find('&', at);
+            std::string part = query.substr(at, amp == std::string::npos ? std::string::npos : amp - at);
+            if (!part.compare(0, 7, "invite=") && !l.invite[0]) {
+                std::string tok = part.substr(7);
+                if (tok.size() != PUDDLE_INVITE_TOKEN_LEN) {
+                    seterr(err, errlen, "that invite is not valid");
+                    return -1;
+                }
+                memcpy(l.invite, tok.c_str(), tok.size() + 1);
+                if (!puddle_invite_token_valid(l.invite)) {
+                    seterr(err, errlen, "that invite is not valid");
+                    return -1;
+                }
+            } else if (!part.compare(0, 2, "k=") && !l.has_key) {
+                if (puddle_base32_decode(part.c_str() + 2, l.key, 32) != 0) {
+                    seterr(err, errlen, "the key in that link is not valid; copy the whole link");
+                    return -1;
+                }
+                l.has_key = 1;
+            } else {
+                seterr(err, errlen, "an address can carry only ?k= and &invite=");
+                return -1;
+            }
+            if (amp == std::string::npos)
+                break;
+            at = amp + 1;
         }
     }
     if (pond && !l.invite[0]) {
         seterr(err, errlen, "that Pond link has no invite in it");
+        return -1;
+    }
+    if (pond && !l.has_key) { /* what the join is sealed to (spec/09): invites made before it don't carry one */
+        seterr(err, errlen, "that Pond invite is an old kind, without the Pond's key: ask for a new one");
         return -1;
     }
     *out = l;
@@ -259,7 +279,7 @@ int puddle_pond_link_parse(const char *text, puddle_link *out, char *err, size_t
     return parse_link(text, 1, out, err, errlen);
 }
 
-int puddle_link_format(const char *address, const char *invite, char *out, size_t cap)
+int puddle_link_format(const char *address, const unsigned char *key, const char *invite, char *out, size_t cap)
 {
     char shown[PUDDLE_ADDR_MAX];
     snprintf(shown, sizeof shown, "%s", address);
@@ -269,7 +289,14 @@ int puddle_link_format(const char *address, const char *invite, char *out, size_
     size_t dl = strlen(def);
     if (n > dl && !strcmp(shown + n - dl, def))
         shown[n - dl] = '\0'; /* the port everyone assumes is not written */
-    int w = (invite && *invite) ? snprintf(out, cap, "%s?invite=%s", shown, invite) : snprintf(out, cap, "%s", shown);
+    char k[PUDDLE_LINK_KEY_LEN + 1] = "";
+    if (key && !puddle_base32_encode(key, 32, k, sizeof k))
+        return -1;
+    int has_invite = invite && *invite;
+    int w = snprintf(out, cap, "%s%s%s%s%s%s", shown, k[0] || has_invite ? "?" : "", k[0] ? "k=" : "", k,
+                     k[0] && has_invite ? "&" : "", has_invite ? "invite=" : "");
+    if (w > 0 && (size_t)w < cap && has_invite)
+        w = snprintf(out + w, cap - (size_t)w, "%s", invite) + w;
     return w > 0 && (size_t)w < cap ? 0 : -1;
 }
 
@@ -294,8 +321,11 @@ int puddle_my_address(const puddle_config *cfg, char *out, size_t cap)
     return 1;
 }
 
-int puddle_make_link(const puddle_config *cfg, const char *invite, char *out, size_t cap)
+int puddle_make_link(const puddle_config *cfg, puddle_identity *me, const char *invite, char *out, size_t cap)
 {
     char where[PUDDLE_ADDR_MAX];
-    return puddle_my_address(cfg, where, sizeof where) && puddle_link_format(where, invite, out, cap) == 0;
+    unsigned char enc[32];
+    if (me)
+        puddle_identity_public(me, NULL, enc, NULL);
+    return puddle_my_address(cfg, where, sizeof where) && puddle_link_format(where, me ? enc : NULL, invite, out, cap) == 0;
 }

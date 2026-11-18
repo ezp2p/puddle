@@ -1,5 +1,6 @@
 #include "http/serve.h"
 
+#include "base/seal.h"
 #include "platform/fsutil.h"
 
 #include <stdio.h>
@@ -26,6 +27,32 @@ static void send_file(puddle_io *io, int fd, int64_t left)
         left -= n;
     }
     free(piece);
+}
+
+/* The same for a sealed answer (spec/09): each record read, sealed and sent in turn. A file that ends early stops it, and
+ * the client, missing the last record, knows. */
+static void send_sealed_file(puddle_io *io, const puddle_big *big)
+{
+    unsigned char *piece = (unsigned char *)malloc(PUDDLE_SEAL_RECORD), *sealed = (unsigned char *)malloc(PUDDLE_SEAL_RECORD + PUDDLE_SEAL_TAG_LEN);
+    int64_t left = big->file_len;
+    for (uint64_t i = big->first_record; piece && sealed; i++) {
+        size_t want = left < (int64_t)PUDDLE_SEAL_RECORD ? (size_t)left : PUDDLE_SEAL_RECORD, got = 0;
+        while (got < want) {
+            int64_t n = puddle_fd_read(big->fd, piece + got, want - got);
+            if (n <= 0)
+                break;
+            got += (size_t)n;
+        }
+        if (got != want ||
+            puddle_seal_record(big->seal_key, i, big->seal_status, i == big->final_record, piece, want, sealed) != 0 ||
+            io->write(io->io, sealed, want + PUDDLE_SEAL_TAG_LEN) != 0)
+            break;
+        left -= (int64_t)want;
+        if (i == big->final_record || left <= 0)
+            break;
+    }
+    free(piece);
+    free(sealed);
 }
 
 /* offset just past the blank line ending the headers, or 0 if it has not arrived (binary-safe) */
@@ -166,7 +193,10 @@ int puddle_http_serve(const puddle_http_handler *h, puddle_io *io, puddle_serve_
         free(big.data);
     }
     if (big.has_file) {
-        send_file(io, big.fd, big.file_len);
+        if (big.sealed)
+            send_sealed_file(io, &big);
+        else
+            send_file(io, big.fd, big.file_len);
         puddle_fd_close(big.fd);
     }
     memset(out, 0, sizeof out); /* an answer can hold a recovery phrase; don't leave it on the stack */

@@ -170,27 +170,31 @@ Events inside chats are signed separately, over their exact bytes, and name the 
 ## Proving who answers
 
 A request signature proves the sender to the recipient. This is the other direction: the sender learning that what
-answered really is the Puddle it meant, by its keys, before it hands anything over and before it believes anything was
-received.
+answered really is the Puddle it meant, by its keys, and both of them knowing that nobody between them read anything.
 
-**TLS only encrypts.** Every Puddle makes its own certificate, nobody checks it against anything, and it may be
-replaced at any time. It is not remembered between connections and never needs anyone's approval. What a certificate
-does still give is a fingerprint of *this* connection, and that is what ties the signatures below to the connection
-they arrived on.
+**TLS only carries it.** Nothing names, pins, remembers or compares a certificate (the protocol's spec/09): every Puddle
+makes its own, a reverse proxy may show its own instead, and either may change at any time.
+
+**Sealing.** Every request body is sealed (HPKE, `base/seal.h`) to the recipient's sealing key, the X25519 key in their
+chain, and its answer comes back sealed in records under a key exported from that request, so only the two ends can read
+either. The request carries `X-Puddle-Seal: v1 kid=<hex SHA-256 of the key sealed to>; enc=<base64>`, and the signature
+covers the sealed bytes. A first request to an address is sealed to the `k` in its link (`home.example.org?k=<key>`);
+only a bare address typed without one sends that single `access` request unsealed. A request sealed to a key the
+recipient has rolled away from is answered `409 stale_key` with its chain; any other request that isn't sealed, once it
+has authenticated, `400 not_sealed`. Spec/09 has the bytes.
 
 **Receipts.** A Puddle answering a request it has authenticated (from step 4 of the checks above, so `clock_skew`,
 `replayed` and refusals included) from someone it already holds a record of adds
 
-    X-Puddle-Receipt: v1 id=<responder id>; kid=<key id>; fp=<certificate fingerprint>; sig=<base64>
+    X-Puddle-Receipt: v2 id=<responder id>; kid=<key id>; sig=<base64>
 
-where `fp` is the hex SHA-256 of its own TLS certificate, and `sig` an Ed25519 signature by its current key over
+where `sig` is an Ed25519 signature by its current key over
 
-    puddle-receipt-v1
+    puddle-receipt-v2
     <the responder's user id>
     <the request's nonce>
     <the HTTP status>
-    <hex SHA-256 of the answer's body>
-    <hex SHA-256 of the responder's own TLS certificate>
+    <hex SHA-256 of the answer's body, as sent: sealed>
 
 A request that did not authenticate gets the usual `404` with no receipt, so a stranger still learns nothing, not even
 whose Puddle it reached. Neither does a stranger who *did* authenticate, as anyone can on the routes proven by a chain
@@ -198,32 +202,19 @@ in the body: an answer is signed only for someone we already hold a record of, i
 block is not given away; for an answer to our own request, that is decided after it has been filed). `access` and
 `access/status`, which must answer everyone the same whatever they decide, are never signed at all.
 
-An answer sent straight from a file on disk (a download, any part of it asked for with `Range`) is signed for over
-exactly the bytes that go, hashed as they are read. A Pond with the feature `receipts` signs its answers the same way;
-one without is still pinned to its certificate (`docs/ponds.md`, "Proving who answers").
+An answer sent straight from a file on disk (a download, any part of it asked for with `Range`) is sealed record by
+record as it is read and signed for over exactly the bytes that go. A Pond signs and seals its answers the same way
+(`docs/ponds.md`, "Proving who answers").
 
 **Checking a receipt.** When the sender holds a key for the peer, it accepts an answer only if the receipt is there,
-names the peer's id and the key it holds for them, carries this request's nonce, the status and body it got, and the
-fingerprint of the certificate *it* saw on this connection. That last part is what catches someone in the middle: they
-can pass the request on to the real Puddle and its signed answer back, but the real Puddle signs its own certificate,
-and the sender saw theirs.
+names the peer's id and the key it holds for them, and carries this request's nonce and the status and body it got.
+There is no handshake: what goes is sealed to the key the sender holds, so someone in the middle can pass it on but not
+read it, and can't answer in the peer's name.
 
-**Handshake first.** A receipt arrives after the request has gone. So before sending anything to a peer it holds a key
-for on a route that needs a stream (every route but the four below: `events`, `close`, `address`, `profile`, `media`,
-`group/invite` and the `files/...` routes), the sender calls
-`GET /stream/v1/hello`, which carries nothing, and checks its receipt. That proves the certificate on that connection
-belongs to the peer. The real request then goes out on a connection only if it shows that same certificate; one that
-shows another gets a fresh handshake first. A proof is kept in memory for ten minutes, and each good receipt renews it,
-so a steady conversation costs one handshake, not one per message.
-
-Requests that set up or repair a stream (`access`, `access/result`, `access/status`, `identity`) are checked by the receipt
-alone (or, for `access` and `access/status`, not at all, as below): the other
-side may not have our current key, so it could not answer a handshake without answering a stranger. What they carry is
-our public chain, a profile and a one-time ticket bound to that recipient, so nothing a squatter could use.
-
-**First contact** (a request to an address, with no key for whoever lives there) can't be checked at all; see "Proving
-who you are". Nor can any request for a stream (`access`, and `access/status`), since those answers are never signed.
-The answer to it, `access/result`, brings their chain, and everything from then on is checked.
+**First contact** (a request to an address, with no key for whoever lives there) can't be checked by a receipt; see
+"Proving who you are". Nor can any request for a stream (`access`, and `access/status`), since those answers are never
+signed. The answer to it, `access/result`, brings their chain (which must have the link's `k`, if it gave one), and
+everything from then on is checked.
 
 **What the sender makes of it.** Only a signed answer means anything. Everything else means nothing was delivered: the
 item stays queued, is retried on the outbox's schedule, and carries the reason, which the app shows on the message:
@@ -236,7 +227,6 @@ item stays queued, is retried on the outbox's schedule, and carries the reason, 
 | something answered that isn't a Puddle (no TLS, no HTTP) | waiting | something at the address answered, but it isn't a Puddle |
 | an answer with no receipt (such as the plain `404` a stranger gets) | waiting | the Puddle at the address didn't recognise us: it isn't them, or they no longer have a stream with us |
 | a receipt from another key, or one that doesn't verify | waiting | the Puddle at the address couldn't prove it's them |
-| a good signature for a different certificate | waiting | the connection to the address was intercepted |
 
 A peer that rolled its keys and hasn't reached us yet "couldn't prove it's them" until its new chain arrives (its
 outbox is retrying it); taking the new chain, like taking a new address, sends whatever was waiting for them at once,

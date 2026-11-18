@@ -10,6 +10,7 @@
 #include <QTemporaryDir>
 
 #include "testnode.h"
+#include "base/encoding.h"
 #include "../src/gui/app/phone.h"
 #include "federation/calls.h"
 #include "service/server.h"
@@ -30,16 +31,26 @@ static QJsonObject row(JsonListModel *m, const QString &key, const QString &valu
     return {};
 }
 
-static QByteArray signingKeyOf(const QString &dataDir)
+/* what a phone holds for its Puddle: its signing key, then its sealing key (spec/09) */
+static QByteArray keysOf(const QString &dataDir)
 {
     char err[300];
     puddle_identity *id = puddle_identity_open(dataDir.toUtf8().constData(), err, sizeof err);
     if (!id)
         return QByteArray();
-    unsigned char pub[32];
-    puddle_identity_public(id, pub, nullptr, nullptr);
+    unsigned char pub[32], enc[32];
+    puddle_identity_public(id, pub, enc, nullptr);
     puddle_identity_close(id);
-    return QByteArray(reinterpret_cast<const char *>(pub), 32);
+    return QByteArray(reinterpret_cast<const char *>(pub), 32) + QByteArray(reinterpret_cast<const char *>(enc), 32);
+}
+
+/* the `k` a pairing link carries: the sealing key, base32 */
+static QString linkKeyOf(const QString &dataDir)
+{
+    const QByteArray k = keysOf(dataDir).mid(32);
+    char out[60];
+    puddle_base32_encode(reinterpret_cast<const unsigned char *>(k.constData()), 32, out, sizeof out);
+    return QString::fromLatin1(out);
 }
 
 int main(int argc, char **argv)
@@ -72,13 +83,15 @@ int main(int argc, char **argv)
     CHECK(phone.state() == "unpaired" && phone.error().contains("isn't a pairing link"));
     {
         ApiClient::PairingLink l;
-        const QString id = alice.uid, secret(32, QLatin1Char('a'));
-        CHECK(ApiClient::parsePairingLink("puddle-pair://203.0.113.7:8443?id=" + id + "&secret=" + secret, &l) && l.base.toString() == "https://203.0.113.7:8443");
-        CHECK(ApiClient::parsePairingLink("puddle-pair://[2001:db8::1]?id=" + id + "&secret=" + secret, &l) && l.base.port() == 443);
+        const QString id = alice.uid, secret(32, QLatin1Char('a')), k = "&k=" + linkKeyOf(alice.cfg.data_dir);
+        CHECK(ApiClient::parsePairingLink("puddle-pair://203.0.113.7:8443?id=" + id + k + "&secret=" + secret, &l) && l.base.toString() == "https://203.0.113.7:8443" &&
+              l.sealKey == keysOf(alice.cfg.data_dir).mid(32));
+        CHECK(ApiClient::parsePairingLink("puddle-pair://[2001:db8::1]?id=" + id + k + "&secret=" + secret, &l) && l.base.port() == 443);
+        CHECK(!ApiClient::parsePairingLink("puddle-pair://203.0.113.7:8443?id=" + id + "&secret=" + secret, &l)); /* no key: the old kind */
         CHECK(!ApiClient::parsePairingLink("puddle-pair://203.0.113.7?id=short&secret=" + secret, &l));
         CHECK(!ApiClient::parsePairingLink("puddle-pair://203.0.113.7?id=" + id + "&secret=XYZ", &l));
         /* a well-formed link whose secret was never made: the Puddle says nothing, and the phone says the link didn't work */
-        phone.pair(QString("puddle-pair://127.0.0.1:%1?id=%2&secret=%3").arg(alice.cfg.port).arg(alice.uid, secret), "My phone");
+        phone.pair(QString("puddle-pair://127.0.0.1:%1?id=%2&k=%3&secret=%4").arg(alice.cfg.port).arg(alice.uid, linkKeyOf(alice.cfg.data_dir), secret), "My phone");
         CHECK(until([&] { return phone.state() == "unpaired" && phone.error().contains("didn't work"); }));
     }
 
@@ -165,7 +178,7 @@ int main(int argc, char **argv)
         qint64 seen = 0;
         P.api()->download(QString("/api/v1/files/%1/content").arg(fid), dest, [&](qint64 got, qint64) { seen = got; },
                           [&](bool ok) { done = ok; });
-        CHECK(until([&] { return done != -1; }, 30000) && done == 1 && seen == size);
+        CHECK(until([&] { return done != -1; }, 30000) && done == 1 && seen >= size); /* sealed on the way: a little more than the file */
         QFile got(dest);
         CHECK(got.open(QIODevice::ReadOnly) && got.readAll() == bytes);
         CHECK(!QFile::exists(dest + ".part") && P.problem().isEmpty());
@@ -428,14 +441,14 @@ int main(int argc, char **argv)
         QFile df(phoneDir + "/device.json");
         CHECK(df.open(QIODevice::ReadOnly));
         const QByteArray seed = QByteArray::fromHex(QJsonDocument::fromJson(df.readAll()).object().value("seed").toString().toLatin1());
-        CHECK(c.configureDevice(QUrl(QString("https://127.0.0.1:%1").arg(alice.cfg.port)), alice.uid, signingKeyOf(bob.cfg.data_dir), seed));
+        CHECK(c.configureDevice(QUrl(QString("https://127.0.0.1:%1").arg(alice.cfg.port)), alice.uid, keysOf(bob.cfg.data_dir), seed));
         QSignalSpy rolled(&c, &ApiClient::puddleKeyChanged);
         int st = -1;
         c.get("/health", [&](int s, const QJsonDocument &) { st = s; });
-        CHECK(until([&] { return st != -1; }) && st == 200 && rolled.count() == 1 && c.puddleKey() == signingKeyOf(alice.cfg.data_dir));
+        CHECK(until([&] { return st != -1; }) && st == 200 && rolled.count() == 1 && c.puddleKey() == keysOf(alice.cfg.data_dir));
         /* nor Bob's, at Bob's address, with Alice's key: what answered isn't her Puddle */
         ApiClient c2;
-        CHECK(c2.configureDevice(QUrl(QString("https://127.0.0.1:%1").arg(bob.cfg.port)), alice.uid, signingKeyOf(alice.cfg.data_dir), seed));
+        CHECK(c2.configureDevice(QUrl(QString("https://127.0.0.1:%1").arg(bob.cfg.port)), alice.uid, keysOf(alice.cfg.data_dir), seed));
         st = -1;
         c2.get("/health", [&](int s, const QJsonDocument &) { st = s; });
         CHECK(until([&] { return st != -1; }) && st == 0 && c2.lastProblem().contains("didn't recognise"));

@@ -24,8 +24,6 @@ static int failures, checked;
 #define CHECK(cond) do { checked++; if (!(cond)) { fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); failures++; } } while (0)
 
 #define NOW 1760000000000LL /* the time every request vector is checked at */
-#define FP_A "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-#define FP_B "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
 static int rm_cb(const char *p, const struct stat *sb, int t, struct FTW *f) { (void)sb; (void)t; (void)f; remove(p); return 0; }
 
@@ -85,9 +83,9 @@ typedef struct {
 } req_case;
 
 typedef struct {
-    const char *name, *expect;    /* ok, missing, wrong_key, bad, other_cert */
+    const char *name, *expect;    /* ok, missing, wrong_key, bad */
     int status, signed_status;
-    const char *body, *signed_body, *seen_fp, *signed_fp;
+    const char *body, *signed_body;
     int other_key, no_header;
 } receipt_case;
 
@@ -98,7 +96,7 @@ static const char *check_name(puddle_receipt_check c)
     case PUDDLE_RECEIPT_MISSING: return "missing";
     case PUDDLE_RECEIPT_WRONG_KEY: return "wrong_key";
     case PUDDLE_RECEIPT_BAD: return "bad";
-    default: return "other_cert";
+    default: return "?";
     }
 }
 
@@ -139,7 +137,7 @@ static int write_signatures(const char *dir)
         return -1;
     fprintf(f, "{\n  \"about\": \"Request signatures and answer receipts (spec/02-signatures.md). Keys are hex here; in the headers they are as the "
                "spec says. A request is checked by its recipient at now_ms, knowing the sender's public key; a receipt by the caller, knowing the "
-               "responder's public key, the request's nonce and the certificate it saw.\",\n");
+               "responder's public key and the request's nonce (receipts v2: no certificate, spec/09).\",\n");
     fprintf(f, "  \"now_ms\": %lld,\n", (long long)NOW);
     fprintf(f, "  \"sender\": { \"id\": \"%s\", \"public_key\": \"%s\" },\n", sender, spub_h);
     fprintf(f, "  \"responder\": { \"id\": \"%s\", \"public_key\": \"%s\" },\n", responder, rpub_h);
@@ -173,14 +171,13 @@ static int write_signatures(const char *dir)
     fprintf(f, "  ],\n");
 
     const receipt_case recs[] = {
-        { "a good receipt", "ok", 200, 200, "{\"ok\":true}", NULL, FP_A, FP_A, 0, 0 },
-        { "a good receipt for an empty answer", "ok", 204, 204, "", NULL, FP_A, FP_A, 0, 0 },
-        { "a good refusal is still them", "ok", 403, 403, "{\"error\":\"no_stream\"}", NULL, FP_A, FP_A, 0, 0 },
-        { "no receipt at all", "missing", 404, 404, "{\"error\":\"Not Found\"}", NULL, FP_A, FP_A, 0, 1 },
-        { "signed by someone else", "wrong_key", 200, 200, "{}", NULL, FP_A, FP_A, 1, 0 },
-        { "signed for another status", "bad", 200, 201, "{}", NULL, FP_A, FP_A, 0, 0 },
-        { "signed for another body", "bad", 200, 200, "{\"a\":1}", "{\"a\":2}", FP_A, FP_A, 0, 0 },
-        { "good, but over a certificate the caller did not see (intercepted)", "other_cert", 200, 200, "{}", NULL, FP_B, FP_A, 0, 0 },
+        { "a good receipt", "ok", 200, 200, "{\"ok\":true}", NULL, 0, 0 },
+        { "a good receipt for an empty answer", "ok", 204, 204, "", NULL, 0, 0 },
+        { "a good refusal is still them", "ok", 403, 403, "{\"error\":\"no_stream\"}", NULL, 0, 0 },
+        { "no receipt at all", "missing", 404, 404, "{\"error\":\"Not Found\"}", NULL, 0, 1 },
+        { "signed by someone else", "wrong_key", 200, 200, "{}", NULL, 1, 0 },
+        { "signed for another status", "bad", 200, 201, "{}", NULL, 0, 0 },
+        { "signed for another body", "bad", 200, 200, "{\"a\":1}", "{\"a\":2}", 0, 0 },
     };
     fprintf(f, "  \"receipts\": [\n");
     for (size_t i = 0; i < sizeof recs / sizeof *recs; i++) {
@@ -194,11 +191,11 @@ static int write_signatures(const char *dir)
         if (!c->no_header) {
             /* "signed by someone else": the other identity signs, naming itself */
             puddle_identity *who = c->other_key ? ids[0] : ids[1];
-            if (puddle_receipt_sign(who, nonce, c->signed_status, sb, strlen(sb), c->signed_fp, header, sizeof header) != 0)
+            if (puddle_receipt_sign(who, nonce, c->signed_status, sb, strlen(sb), header, sizeof header) != 0)
                 return -1;
         }
         /* what Puddle says, so a vector can't disagree with the code that made it */
-        puddle_receipt_check got = puddle_receipt_verify(header[0] ? header : NULL, responder, rpub, nonce, c->status, c->body, strlen(c->body), c->seen_fp);
+        puddle_receipt_check got = puddle_receipt_verify(header[0] ? header : NULL, responder, rpub, nonce, c->status, c->body, strlen(c->body));
         if (strcmp(check_name(got), c->expect) != 0) {
             fprintf(stderr, "vector '%s': Puddle says %s, not %s\n", c->name, check_name(got), c->expect);
             return -1;
@@ -207,7 +204,7 @@ static int write_signatures(const char *dir)
         jstr(f, c->name);
         fprintf(f, ", \"nonce\": \"%s\", \"status\": %d, \"body\": ", nonce, c->status);
         jstr(f, c->body);
-        fprintf(f, ", \"seen_fp\": \"%s\", \"header\": ", c->seen_fp);
+        fprintf(f, ", \"header\": ");
         jstr(f, header);
         fprintf(f, ", \"expect\": \"%s\" }%s\n", c->expect, i + 1 < sizeof recs / sizeof *recs ? "," : "");
     }
@@ -336,20 +333,20 @@ static void check_signatures(const char *dir)
     count = 0;
     CHECK(puddle_json_member(t, n, "receipts", &arr) == 0);
     while (puddle_json_array_next(arr, &cur, &item) == 1) {
-        char name[200], nonce[64], body[600], fp[80], header[PUDDLE_RECEIPT_MAX], expect[32];
+        char name[200], nonce[64], body[600], header[PUDDLE_RECEIPT_MAX], expect[32];
         int64_t status = 0;
         CHECK(str_of(item, "name", name, sizeof name) == 0 && str_of(item, "nonce", nonce, sizeof nonce) == 0 &&
-              str_of(item, "body", body, sizeof body) == 0 && str_of(item, "seen_fp", fp, sizeof fp) == 0 &&
+              str_of(item, "body", body, sizeof body) == 0 &&
               str_of(item, "header", header, sizeof header) == 0 && str_of(item, "expect", expect, sizeof expect) == 0 &&
               puddle_json_member(item.p, item.len, "status", &v) == 0 && puddle_json_int64(v, &status) == 0);
         puddle_receipt_check c = puddle_receipt_verify(header[0] ? header : NULL, responder.id, responder.pub, nonce, (int)status, body,
-                                                       strlen(body), fp);
+                                                       strlen(body));
         if (strcmp(check_name(c), expect) != 0)
             fprintf(stderr, "receipt vector '%s': Puddle says %s, the vector %s\n", name, check_name(c), expect);
         CHECK(strcmp(check_name(c), expect) == 0);
         count++;
     }
-    CHECK(count >= 8);
+    CHECK(count >= 7);
     free(t);
 }
 

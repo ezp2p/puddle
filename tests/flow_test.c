@@ -43,7 +43,7 @@ static puddle_link link_to(const char *addr, const char *invite)
 {
     puddle_link l;
     char t[400], err[100];
-    puddle_link_format(addr, invite, t, sizeof t);
+    puddle_link_format(addr, NULL, invite, t, sizeof t);
     if (puddle_link_parse(t, &l, err, sizeof err) != 0) { fprintf(stderr, "bad link %s: %s\n", t, err); exit(2); }
     return l;
 }

@@ -109,7 +109,7 @@ int puddle_http_parse(const char *buf, size_t len, puddle_request *req)
     /* headers: only Authorization and X-Puddle-Signature matter */
     const char *p = eol + 1;
     const char *end = buf + len;
-    int seen_auth = 0, seen_sig = 0, seen_len = 0, seen_expect = 0, seen_range = 0;
+    int seen_auth = 0, seen_sig = 0, seen_len = 0, seen_expect = 0, seen_range = 0, seen_seal = 0;
     while (p < end) {
         const char *le = (const char *)memchr(p, '\n', (size_t)(end - p));
         if (!le)
@@ -137,6 +137,8 @@ int puddle_http_parse(const char *buf, size_t len, puddle_request *req)
             dst = req->authorization; cap = sizeof req->authorization; seen = &seen_auth;
         } else if (nl == 18 && puddle_ascii_ncasecmp(p, "X-Puddle-Signature", 18) == 0) {
             dst = req->signature; cap = sizeof req->signature; seen = &seen_sig;
+        } else if (nl == 13 && puddle_ascii_ncasecmp(p, "X-Puddle-Seal", 13) == 0) {
+            dst = req->seal; cap = sizeof req->seal; seen = &seen_seal;
         } else if (nl == 5 && puddle_ascii_ncasecmp(p, "Range", 5) == 0) {
             dst = req->range; cap = sizeof req->range; seen = &seen_range;
         }

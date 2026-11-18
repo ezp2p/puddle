@@ -3,6 +3,8 @@
 #include "api/api.h"
 
 #include <ftw.h>
+#include "sealing.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -122,7 +124,7 @@ static reply call(const puddle_router *r, const char *method, const char *target
     copy[bl] = 0;
     reply rp;
     memset(&rp, 0, sizeof rp);
-    rp.n = puddle_router_handle(r, &req, owner, copy, bl, rp.out, sizeof rp.out, &rp.status);
+    rp.n = st_handle(r, &req, owner, copy, bl, rp.out, sizeof rp.out, &rp.status);
     rp.out[rp.n < sizeof rp.out ? rp.n : sizeof rp.out - 1] = '\0';
     free(copy);
     return rp;
@@ -136,7 +138,7 @@ static const char *body_of(const reply *r)
 
 static void sign(puddle_identity *who, const char *method, const char *target, const char *body, const char *to, int64_t ts, char *out, size_t cap)
 {
-    if (puddle_reqsig_sign(who, method, target, body, body ? strlen(body) : 0, to, ts, out, cap) != 0) {
+    if (st_sign(who, method, target, body, body ? strlen(body) : 0, to, ts, out, cap) != 0) {
         fprintf(stderr, "sign failed\n");
         exit(2);
     }
@@ -155,6 +157,7 @@ int main(void)
     puddle_key_id(alice_pub, alice_kid);
 
     ctx = (puddle_ctx){ .identity = bob, .replay = puddle_replay_new(64), .peer_key = peer_key, .now_ms = now_cb };
+    st_use(bob);
     puddle_router R = { routes, sizeof routes / sizeof routes[0], &ctx };
     reply r;
     char sig[600];

@@ -63,6 +63,8 @@ typedef struct {
     int scoped_req;        /* a request we sent only because we share a group with them: if it is answered yes, the stream is `scoped` */
     int group_ok;          /* we have a group connection with them: group events pass whatever else is true of the stream (friends or not) */
     int provisional;       /* a request we sent to an address whose owner we do not know yet: filed under a made-up id */
+    char link_key[65];     /* the sealing key their link gave (`k=`, hex), which a request to an address is sealed to and their chain
+                            * must then have (spec/09, "First contact"); "" if the link had none */
     char error[200];       /* why a request we sent, or an answer we owed, did not get through; "" if nothing went wrong */
     char note[PUDDLE_NOTE_MAX_BYTES + 1]; /* the message sent with the request */
     int64_t created_ms, updated_ms;
@@ -155,6 +157,9 @@ int puddle_streams_peer_key(void *streams, const char *sender_id, const char *ki
  * no chain yet, or a blocked id. Their answers must be signed by it (the outbox's `peer_key`; docs/streams.md, "Proving who
  * answers"). `streams` is the puddle_streams. Their TLS certificate is not recorded: it only encrypts. */
 int puddle_streams_current_key(void *streams, const char *id, unsigned char sign_pub[32]);
+
+/* Their current sealing key (X25519, from their chain), to seal what we send them to (spec/09): 1, or 0 as above. */
+int puddle_streams_seal_key(void *streams, const char *id, unsigned char enc_pub[32]);
 
 /* Do we hold any record of `id` (in any state, with or without their chain; blocked or not)? Whether to sign for an answer to
  * them: a stranger, who could have proven a request with a chain of their own, is told nothing, and a blocked peer is told

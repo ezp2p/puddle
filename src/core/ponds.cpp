@@ -60,15 +60,15 @@ struct InVoice {
 };
 
 struct Pond {
-    std::string id, address, tls_fp, name, description, status = "connecting";
+    std::string id, address, name, description, status = "connecting";
     int64_t cursor = 0, joined = 0;
     int64_t protocol = 1;              /* what /info says it speaks (the Pond's docs/design.md, "Versions") */
     int64_t files_max = -1;            /* the largest file it takes; 0 turned off, -1 it does not say (a Pond without files) */
     int64_t offer = 0;                 /* a role it offers us, waiting for the owner's answer; 0 for none */
     std::string offer_role;
     std::vector<std::string> features;
-    std::string key; /* the Pond's public key, hex, as its /info says (protocol 3); its id is base32(SHA-256(key)) */
-    bool signs = false; /* it signs receipts (feature `receipts`, with a key): checked on every answer, and never pinned again */
+    std::string key;      /* the Pond's public key, hex, as its /info says; its id is base32(SHA-256(key)) */
+    std::string seal_key; /* its sealing key, hex (spec/09): what every request to it is sealed to */
     std::string me;
     std::vector<Channel> channels;
     std::map<std::string, Member> members;
@@ -282,12 +282,6 @@ static void parse_protocol(puddle_span all, Pond &pd)
     }
 }
 
-/* Does an Info answer offer receipts: a key, and the feature? */
-static bool offers_receipts(const Pond &pd)
-{
-    return !pd.key.empty() && std::find(pd.features.begin(), pd.features.end(), "receipts") != pd.features.end();
-}
-
 /* The pond, me and channels of an Info answer into `pd` (its id must match unless `pd` is new). */
 static bool parse_info(puddle_ponds *p, const char *json, size_t len, Pond &pd, std::vector<Channel> &channels, std::string &me_id,
                        Member &me)
@@ -312,6 +306,14 @@ static bool parse_info(puddle_ponds *p, const char *json, size_t len, Pond &pd, 
         if (puddle_base32_encode(h, 32, hid, sizeof hid) != PUDDLE_USER_ID_LEN || id != hid)
             return false;
         pd.key = key;
+    }
+    std::string seal;
+    pd.seal_key.clear();
+    if (get_text(pond, "seal_key", 64, 0, seal)) {
+        unsigned char raw[32];
+        if (seal.size() != 64 || puddle_hex_decode(seal.c_str(), raw, 32) != 0)
+            return false;
+        pd.seal_key = seal;
     }
     parse_protocol(all, pd);
     parse_files_max(pond, pd);
@@ -515,6 +517,8 @@ static void save_pond(puddle_ponds *p, const Pond &pd)
         puddle_jw_str(w, "description", pd.description.c_str());
         if (!pd.key.empty())
             puddle_jw_str(w, "key", pd.key.c_str());
+        if (!pd.seal_key.empty())
+            puddle_jw_str(w, "seal_key", pd.seal_key.c_str());
         write_files_max(w, pd);
         puddle_jw_end_object(w);
         puddle_jw_key(w, "me");
@@ -529,8 +533,6 @@ static void save_pond(puddle_ponds *p, const Pond &pd)
         write_protocol(w, pd);
         write_offer(w, pd);
         puddle_jw_str(w, "address", pd.address.c_str());
-        puddle_jw_str(w, "tls_fp", pd.tls_fp.c_str());
-        puddle_jw_flag(w, "signs", pd.signs);
         puddle_jw_num(w, "joined", pd.joined);
         puddle_jw_key(w, "filled");
         puddle_jw_array(w);
@@ -595,13 +597,15 @@ static void load_one(puddle_ponds *p, const std::string &id)
     std::vector<Channel> channels;
     puddle_span all = {data.data(), data.size()}, filled, item;
     if (!parse_info(p, data.data(), data.size(), pd, channels, pd.me, me) || pd.id != id ||
-        !get_text(all, "address", PUDDLE_ADDR_MAX, 0, pd.address) || !get_text(all, "tls_fp", 64, 0, pd.tls_fp)) {
+        !get_text(all, "address", PUDDLE_ADDR_MAX, 0, pd.address)) {
         puddle_log(PUDDLE_LOG_WARN, "ponds: %s/pond.json is damaged; leaving it out", id.c_str());
         return;
     }
+    if (pd.key.empty() || pd.seal_key.empty()) { /* joined before Ponds sealed (spec/09): nothing can be sent to it */
+        puddle_log(PUDDLE_LOG_WARN, "ponds: %s was joined before Ponds had sealing keys; join it again with a new invite", id.c_str());
+        return;
+    }
     get_int(all, "joined", &pd.joined);
-    puddle_span sv;
-    pd.signs = !pd.key.empty() && member(all, "signs", &sv) && sv.len == 4 && !memcmp(sv.p, "true", 4);
     pd.channels = std::move(channels);
     pd.members[pd.me] = me;
     if (member(all, "filled", &filled)) {
@@ -688,34 +692,22 @@ int puddle_ponds_conn(puddle_ponds *p, const char *id, puddle_pond_conn *out)
     if (puddle_address_parse(it->second.address.c_str(), &out->address) != 0)
         return -1;
     snprintf(out->id, sizeof out->id, "%s", id);
-    snprintf(out->tls_fp, sizeof out->tls_fp, "%s", it->second.tls_fp.c_str());
     out->cursor = it->second.cursor;
-    out->signs = it->second.signs && puddle_hex_decode(it->second.key.c_str(), out->key, 32) == 0;
-    return 0;
-}
-
-int puddle_ponds_set_tls_fp(puddle_ponds *p, const char *id, const char *tls_fp)
-{
-    std::lock_guard<std::mutex> g(p->mu);
-    auto it = p->ponds.find(id);
-    if (it == p->ponds.end() || strlen(tls_fp) != 64)
+    if (puddle_hex_decode(it->second.key.c_str(), out->key, 32) != 0 || puddle_hex_decode(it->second.seal_key.c_str(), out->seal_key, 32) != 0)
         return -1;
-    if (it->second.tls_fp != tls_fp) {
-        puddle_log(PUDDLE_LOG_INFO, "ponds: %.12s… proved a new certificate (%.16s…)", id, tls_fp);
-        it->second.tls_fp = tls_fp;
-        save_pond(p, it->second);
-    }
     return 0;
 }
 
-int puddle_ponds_add(puddle_ponds *p, const puddle_address *addr, const char *tls_fp, const char *info, size_t len,
+int puddle_ponds_add(puddle_ponds *p, const puddle_address *addr, const unsigned char link_key[32], const char *info, size_t len,
                      char id_out[PUDDLE_USER_ID_LEN + 1])
 {
     Pond pd;
     Member me;
     std::vector<Channel> channels;
-    if (!parse_info(p, info, len, pd, channels, pd.me, me))
-        return -1;
+    char want[65];
+    puddle_hex_encode(link_key, 32, want);
+    if (!parse_info(p, info, len, pd, channels, pd.me, me) || pd.key.empty() || pd.seal_key != want)
+        return -1; /* the invite named the Pond by its sealing key: an answer with another is someone else's */
     std::lock_guard<std::mutex> g(p->mu);
     auto it = p->ponds.find(pd.id);
     if (it != p->ponds.end()) { /* joined again: keep what is held of channels that are still there */
@@ -724,11 +716,9 @@ int puddle_ponds_add(puddle_ponds *p, const puddle_address *addr, const char *tl
                 c.recent = std::move(old->recent), c.filled = old->filled, c.complete = old->complete;
         pd.members = std::move(it->second.members);
     }
-    if (it != p->ponds.end() && it->second.signs && pd.key != it->second.key)
+    if (it != p->ponds.end() && pd.key != it->second.key)
         return -1; /* a Pond's key never changes: this is not the Pond we are in */
     pd.address = addr->address;
-    pd.tls_fp = tls_fp;
-    pd.signs = offers_receipts(pd) || (it != p->ponds.end() && it->second.signs);
     pd.joined = puddle_wall_ms();
     pd.channels = std::move(channels);
     sort_channels(pd.channels);
@@ -753,8 +743,8 @@ int puddle_ponds_info(puddle_ponds *p, const char *id, const char *info, size_t 
     std::vector<Channel> channels;
     if (!parse_info(p, info, len, fresh, channels, fresh.me, me) || fresh.me != pd.me)
         return -1;
-    if (!pd.key.empty() && fresh.key != pd.key)
-        return -1; /* a Pond's key never changes */
+    if (fresh.key != pd.key || fresh.seal_key != pd.seal_key)
+        return -1; /* a Pond's keys never change (its sealing key is derived from the other) */
     for (auto &c : channels) {
         Channel *old = find_channel(pd, c.id);
         if (old && !reset)
@@ -769,12 +759,6 @@ int puddle_ponds_info(puddle_ponds *p, const char *id, const char *info, size_t 
         puddle_log(PUDDLE_LOG_INFO, "ponds: %s now speaks protocol %lld", pd.id.c_str(), (long long)fresh.protocol);
     pd.protocol = fresh.protocol;
     pd.features = std::move(fresh.features);
-    if (pd.key.empty())
-        pd.key = fresh.key; /* a Pond we joined before it had receipts, telling us its key over the certificate pinned then */
-    if (!pd.signs && offers_receipts(pd)) {
-        pd.signs = true; /* and once it signs, never again unsigned: nothing can talk us back into pinning */
-        puddle_log(PUDDLE_LOG_INFO, "ponds: %.12s… signs its answers now", pd.id.c_str());
-    }
     pd.files_max = fresh.files_max;
     pd.offer = fresh.offer, pd.offer_role = fresh.offer_role;
     pd.voice = std::move(fresh.voice); /* who is in voice now: /info always says it whole */
@@ -1063,7 +1047,7 @@ static void write_summary(puddle_jw *w, const Pond &pd)
     puddle_jw_str(w, "name", pd.name.c_str());
     puddle_jw_str(w, "description", pd.description.c_str());
     char link[PUDDLE_ADDR_MAX + 16];
-    puddle_jw_str(w, "address", puddle_link_format(pd.address.c_str(), NULL, link, sizeof link) == 0 ? link : pd.address.c_str());
+    puddle_jw_str(w, "address", puddle_link_format(pd.address.c_str(), NULL, NULL, link, sizeof link) == 0 ? link : pd.address.c_str());
     puddle_jw_str(w, "status", pd.status.c_str());
     write_protocol(w, pd);
     write_files_max(w, pd);

@@ -110,7 +110,6 @@ struct puddle_ctx {
     puddle_replay *replay;                 /* one nonce memory for the whole Puddle */
     puddle_bucket *anon_bucket;            /* work done for strangers before they are authenticated; NULL = unlimited */
     puddle_keyed *access_limit;            /* requests for a stream, per requester; NULL = unlimited */
-    char own_tls_fp[65];                   /* the SHA-256 of our certificate, hex; "" if not known */
     size_t max_peers;                      /* records on file before new strangers are ignored; 0 = PUDDLE_MAX_PEERS */
     puddle_roll_slot *roll_slot;
     puddle_peer_key_fn peer_key;           /* PEER routes: current signing key of a known peer (puddle_streams_peer_key); NULL = none known */

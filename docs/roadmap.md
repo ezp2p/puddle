@@ -599,10 +599,28 @@ activation or push to talk, no cap on people or voices, cameras too, and the Pon
   `groupcall_test`, `callvideo_test`, `ui_test` and the pond repository's `voice_test`.
 - [ ] **9.5 Moderation.** Disconnecting and muting someone, by administrators.
 
+## Phase 10: TLS is transport only
+
+Receipts name the TLS certificate (phase 6), because TLS is the only thing keeping bodies private. That breaks behind a
+reverse proxy, and on every Let's Encrypt renewal. The owner decided nothing may depend on a certificate: bodies are
+sealed to keys instead, and receipts stop naming one. The design is in the protocol repository, `spec/09-sealing.md`;
+its open decisions were taken as recommended (a bare address may still send its one `access` request unsealed; v1
+changed in place; routes stay visible; no unsealed fallback).
+
+- [x] **10.1 Sealing.** HPKE (RFC 9180, X25519 / HKDF-SHA256 / ChaCha20-Poly1305) over OpenSSL 3.0's primitives, and
+  sealed answer records (`base/seal.h`), checked against RFC 9180's vectors (`seal_test`).
+- [x] **10.2 Streams.** Every request and answer sealed both ways, receipts v2 without `fp`, links carrying `k`, and
+  `hello`, the proven-certificate cache and the "intercepted" outcome gone. Tests drive the router sealed
+  (`tests/sealing.h`); the e2e tests run it between real Puddles.
+- [x] **10.3 Phones.** Pairing links carry `k`; device requests sealed; `status` no longer a handshake.
+- [x] **10.4 Ponds.** The Pond's sealing key and sealed routes (in the pond repository), and Puddle's Pond client:
+  no pinning and no certificate proving. A Pond then runs behind any proxy, on any certificate. The pond repository's
+  e2e test checks it with real Puddles, an impostor at the Pond's address and a new certificate included.
+
 ## Later, not planned in detail
 
-Removing a member, a display name for the group-only connection, more of Ponds (docs/ponds.md, "Not yet"), encrypting message
-bodies, encrypting data at rest. Parked questions are in
+Removing a member, a display name for the group-only connection, more of Ponds (docs/ponds.md, "Not yet"), encrypting data
+at rest. Parked questions are in
 `discuss-later.md`.
 
 ## Decisions
@@ -611,5 +629,5 @@ bodies, encrypting data at rest. Parked questions are in
 |---|----------|--------|
 | 1 | Keys derived from the phrase; the old key counter-signs | Yes, and **the phrase rolls with the keys**: each roll makes a new phrase, authorized by a roll key from the old one. |
 | 2 | Showing the phrase | `puddled` prints once on first run (terminal only, else `--init`). The app shows it once, in a small first-run screen. |
-| 3 | TLS trust | Self-generated certificates, accept any, record the fingerprint, announce changes in the signed address record. |
+| 3 | TLS trust | Self-generated certificates, accept any, record the fingerprint, announce changes in the signed address record. Replaced by phase 6 (receipts), and that by phase 10: TLS is transport only, and nothing depends on a certificate. |
 | 4 | Retries | Offline: every 5 minutes for a day, then every 30, and at once when they are heard from. Anything else fails once; the reason is kept. |

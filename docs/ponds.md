@@ -57,20 +57,18 @@ What the owner changes is carried by the same thread, which is woken to say it:
 
 ## Proving who answers
 
-A Pond that lists `receipts` in `features` (protocol 3, the Puddle Protocol's spec/05) signs every answer to a member
-with its key, over its own TLS certificate: the same `X-Puddle-Receipt` a Puddle sends (`docs/streams.md`, "Proving who
-answers"). For such a Pond (`signs` in `pond.json`) every call passes the Pond's key to the client, which believes an
-answer only with a good receipt, and sends nothing over a certificate the Pond hasn't proven. Shown a new one (a
-renewed certificate, say), the Puddle asks `GET /pond/v1/info` over it, which changes nothing; if the receipt names that
-certificate, it is kept as the Pond's and the call is made again (`federation/ponds.cpp`, `member_call`). If not, the
-status is `not_proven` and the call fails with `not_proven`, and the follower tries again later.
+A Pond speaks protocol 5 (the Puddle Protocol's spec/05 and spec/09): its invite carries its sealing key (`k`), and its
+`pond` object its signing `key` and `seal_key`, both kept in `pond.json`. Every call is sealed to `seal_key` and passes
+`key` to the client, which believes an answer only with a good receipt (`federation/ponds.cpp`, `member_call`). No
+certificate is looked at, so a Pond behind a reverse proxy, or renewing its certificate, is reached the same; what
+answers without the Pond's receipt (someone else at its address) leaves the status `not_proven`, and the follower tries
+again later.
 
-The one answer a Pond leaves unsigned to a member's Puddle is the plain `404` for someone it doesn't know. Over a
-certificate the Pond has proven, that still means it no longer has us (`removed`).
+The one answer a Pond leaves unsigned to a member's Puddle is the `404` for someone it doesn't know. It comes sealed
+under our request's key, which only the Pond could do, so it means it no longer has us (`removed`); a plain `404`, or one
+that won't open, means nothing of the kind.
 
-A Pond without `receipts` is pinned to the certificate it showed at join, as before: another one is
-`certificate_changed`, and nothing is sent. A Pond that gains receipts tells us its key in an `/info` over the pinned
-certificate; from then on it is held to its receipts, and it is never pinned again, whatever a later answer says.
+A Pond joined before sealing (no `seal_key` in `pond.json`) is left out with a warning: join it again with a new invite.
 
 ## Versions
 

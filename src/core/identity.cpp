@@ -1117,6 +1117,18 @@ void puddle_identity_public(puddle_identity *id, unsigned char sign_pub[32], uns
     id->mu.unlock();
 }
 
+int puddle_identity_open_seal(puddle_identity *id, const unsigned char enc[32], const void *info, size_t info_len, puddle_hpke *ctx)
+{
+    std::lock_guard<std::mutex> hold(id->mu);
+    return puddle_hpke_receiver(enc, id->enc.priv, info, info_len, ctx);
+}
+
+void puddle_identity_seal_kid(puddle_identity *id, char out[65])
+{
+    std::lock_guard<std::mutex> hold(id->mu);
+    puddle_sha256_hex(id->enc.pub, 32, out);
+}
+
 int puddle_identity_sign(puddle_identity *id, const void *data, size_t len, unsigned char sig[64])
 {
     id->mu.lock();

@@ -37,7 +37,7 @@ static Error failure(const char *code)
         return Error(429, code);
     if (!strcmp(code, "invite_refused") || !strcmp(code, "removed"))
         return Error(409, code);
-    return Error(502, code); /* unreachable, not_a_pond, certificate_changed, not_proven, failed */
+    return Error(502, code); /* unreachable, not_a_pond, not_proven, failed */
 }
 
 /* Answer with JSON that `fn` writes, however big: a Pond can have many members, and a page of messages up to 4000 characters
@@ -341,7 +341,7 @@ static Error voiceFailure(const char *code)
         return Error(404, code);
     if (!strcmp(code, "busy") || !strcmp(code, "no_calls") || !strcmp(code, "not_voice") || !strcmp(code, "full") || !strcmp(code, "removed"))
         return Error(409, code);
-    return Error(502, code); /* unreachable, certificate_changed, not_proven, failed */
+    return Error(502, code); /* unreachable, not_proven, failed */
 }
 
 /* {"voice": the voice channel we are in, or null} */

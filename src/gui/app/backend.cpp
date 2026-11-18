@@ -398,7 +398,7 @@ void Backend::startServer()
     char id[PUDDLE_USER_ID_LEN + 1], link[512];
     puddle_identity_id(puddle_server_identity(srv_), id);
     myId_ = QString::fromLatin1(id);
-    myLink_ = puddle_make_link(&cfg_, nullptr, link, sizeof link) ? QString::fromUtf8(link) : QString();
+    myLink_ = puddle_make_link(&cfg_, puddle_server_identity(srv_), nullptr, link, sizeof link) ? QString::fromUtf8(link) : QString();
     emit startedChanged();
 }
 

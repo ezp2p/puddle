@@ -12,9 +12,10 @@
 
 #include "core/devices.h"
 #include "core/identity.h"
+#include "base/encoding.h"
+#include "base/seal.h"
 #include "http/reqsig.h"
 
-static constexpr qint64 ProofMs = 10 * 60 * 1000; // as the Puddles' outboxes: docs/streams.md, "Proving who answers"
 
 ApiClient::ApiClient(QObject *parent) : QObject(parent)
 {
@@ -76,7 +77,7 @@ bool ApiClient::configureDevice(const QUrl &base, const QString &puddleId, const
 {
     ready_ = false;
     puddle_devkey k;
-    if (!base.isValid() || puddleId.size() != PUDDLE_USER_ID_LEN || puddleKey.size() != 32 || deviceSeed.size() != 32 ||
+    if (!base.isValid() || puddleId.size() != PUDDLE_USER_ID_LEN || puddleKey.size() != 64 || deviceSeed.size() != 32 ||
         puddle_devkey_from_seed(&k, reinterpret_cast<const unsigned char *>(deviceSeed.constData())) != 0)
         return false;
     base_ = base;
@@ -85,8 +86,6 @@ bool ApiClient::configureDevice(const QUrl &base, const QString &puddleId, const
     puddleId_ = puddleId;
     puddleKey_ = puddleKey;
     seed_ = deviceSeed;
-    proven_ = QSslCertificate();
-    provenUntil_ = 0;
     renew(net_);
     ready_ = true;
     return true;
@@ -232,19 +231,10 @@ void ApiClient::download(const QString &path, const QString &dest, std::function
 }
 
 // ---- a phone ----
-
-static qint64 nowMs() { return QDateTime::currentMSecsSinceEpoch(); }
-
-static QByteArray fingerprintOf(QNetworkReply *r)
-{
-    QSslCertificate c = r->sslConfiguration().peerCertificate();
-    /* Qt puts the certificate only on the reply that opened the connection; later ones on a kept connection carry none.
-     * A pinned request's connection trusts nothing but the certificate it was pinned to, and every kept connection is
-     * dropped whenever that changes (forgetProof), so a pinned reply that shows none came over that one. */
-    if (c.isNull())
-        c = r->property("puddlePinned").value<QSslCertificate>();
-    return c.isNull() ? QByteArray() : c.digest(QCryptographicHash::Sha256).toHex();
-}
+//
+// Every request is sealed to the Puddle's sealing key and signed with the phone's own; the answer comes back sealed, and
+// counts only with the Puddle's receipt (the protocol's spec/09). TLS only carries it: no certificate is checked, so the
+// Puddle can sit behind a reverse proxy, on any certificate, changed whenever.
 
 void ApiClient::setProblem(const QString &why)
 {
@@ -253,58 +243,68 @@ void ApiClient::setProblem(const QString &why)
         emit problem(why);
 }
 
-QNetworkReply *ApiClient::signedRequest(const QByteArray &method, const QString &path, const QByteArray &body, const QByteArray &contentType,
-                                        int timeoutMs, bool pinned, QByteArray *nonce)
+QNetworkReply *ApiClient::signedRequest(const QByteArray &method, const QString &path, const QByteArray &body, int timeoutMs,
+                                        const QByteArray &sealKey, QByteArray *nonce, QByteArray *answerKey)
 {
     const QUrl url(base_.toString() + path);
     const QByteArray target = url.toEncoded(QUrl::RemoveScheme | QUrl::RemoveAuthority); // path and query, exactly as sent
     puddle_devkey k;
-    char sig[1024];
-    puddle_reqsig parsed;
-    if (puddle_devkey_from_seed(&k, reinterpret_cast<const unsigned char *>(seed_.constData())) != 0 ||
-        puddle_reqsig_sign_as(k.id, k.pub, puddle_devkey_sign, &k, method.constData(), target.constData(), body.constData(), size_t(body.size()),
-                              puddleId_.toLatin1().constData(), 0, sig, sizeof sig) != 0 ||
-        puddle_reqsig_parse(sig, &parsed) != 0)
+    puddle_sealed_request sealed;
+    if (sealKey.size() != 32 || puddle_devkey_from_seed(&k, reinterpret_cast<const unsigned char *>(seed_.constData())) != 0 ||
+        puddle_seal_request_as(k.id, k.pub, puddle_devkey_sign, &k, method.constData(), target.constData(), body.constData(),
+                               size_t(body.size()), puddleId_.toLatin1().constData(),
+                               reinterpret_cast<const unsigned char *>(sealKey.constData()), 0, &sealed) != 0)
         return nullptr;
-    *nonce = QByteArray(parsed.nonce);
+    *nonce = QByteArray(sealed.nonce);
+    *answerKey = QByteArray(reinterpret_cast<const char *>(sealed.answer_key), 32);
+    const QByteArray sealedBody = sealed.body ? QByteArray(reinterpret_cast<const char *>(sealed.body), qsizetype(sealed.body_len)) : QByteArray();
     QNetworkRequest req(url);
     QSslConfiguration ssl = QSslConfiguration::defaultConfiguration();
-    if (pinned) {
-        ssl.setCaCertificates({ proven_ }); // the certificate it signed for, and no other: nothing goes anywhere else
-        ssl.setPeerVerifyMode(QSslSocket::VerifyPeer);
-    } else {
-        ssl.setPeerVerifyMode(QSslSocket::VerifyNone); // the handshake carries nothing; its receipt says whose this is
-        req.setRawHeader("Connection", "close");       // a connection of its own, so its reply shows the certificate
-    }
+    ssl.setPeerVerifyMode(QSslSocket::VerifyNone); // TLS only carries it: the seal keeps it private, the receipt says who answered
     req.setSslConfiguration(ssl);
-    req.setRawHeader("X-Puddle-Signature", sig);
+    req.setRawHeader("X-Puddle-Signature", sealed.signature);
+    req.setRawHeader("X-Puddle-Seal", sealed.seal);
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
     req.setTransferTimeout(timeoutMs);
-    /* unpinned (the handshake, pairing) on a manager of its own: Qt keeps connections, with the trust they started with */
-    QNetworkAccessManager &via = *manager(!pinned);
+    puddle_sealed_request_free(&sealed);
+    QNetworkAccessManager &via = *manager(true);
     QNetworkReply *r;
     if (method == "POST") {
-        req.setHeader(QNetworkRequest::ContentTypeHeader, contentType.isEmpty() ? QByteArray("application/json") : contentType);
-        r = via.post(req, body);
+        req.setHeader(QNetworkRequest::ContentTypeHeader, QByteArray(PUDDLE_SEALED_TYPE));
+        r = via.post(req, sealedBody);
     } else {
         r = via.get(req);
     }
-    if (pinned) {
-        allowHostMismatch(r);
-        r->setProperty("puddlePinned", QVariant::fromValue(proven_));
-    }
+    allowHostMismatch(r);
     return r;
+}
+
+bool ApiClient::openAnswer(QNetworkReply *r, int status, const QByteArray &raw, const QByteArray &answerKey, QByteArray *plain)
+{
+    const QByteArray type = r->header(QNetworkRequest::ContentTypeHeader).toByteArray().split(';').value(0).trimmed().toLower();
+    if (type != PUDDLE_SEALED_TYPE) { /* a refusal that couldn't be sealed (or a 204, which has nothing to seal) comes plain */
+        *plain = raw;
+        return status == 204 || status >= 400;
+    }
+    QByteArray out(qsizetype(puddle_seal_plain_len(size_t(raw.size()))) + 1, '\0');
+    size_t got = 0;
+    if (puddle_open_answer(reinterpret_cast<const unsigned char *>(answerKey.constData()), status,
+                           reinterpret_cast<const unsigned char *>(raw.constData()), size_t(raw.size()),
+                           reinterpret_cast<unsigned char *>(out.data()), &got) != 0)
+        return false;
+    out.truncate(qsizetype(got));
+    *plain = out;
+    return true;
 }
 
 int ApiClient::checkReceipt(QNetworkReply *r, int status, const QByteArray &body, const QByteArray &nonce, const QByteArray &key,
                             const QByteArray &bodyHash)
 {
     const QByteArray receipt = r->rawHeader("X-Puddle-Receipt");
-    const QByteArray fp = fingerprintOf(r);
     const QByteArray hash = bodyHash.isEmpty() ? QCryptographicHash::hash(body, QCryptographicHash::Sha256).toHex() : bodyHash;
     const int rc = puddle_receipt_verify_hash(receipt.isEmpty() ? nullptr : receipt.constData(), puddleId_.toLatin1().constData(),
                                               reinterpret_cast<const unsigned char *>(key.constData()), nonce.constData(), status,
-                                              hash.constData(), fp.isEmpty() ? nullptr : fp.constData());
+                                              hash.constData());
     const QString where = base_.authority();
     switch (rc) {
     case PUDDLE_RECEIPT_OK: problem_.clear(); break;
@@ -313,34 +313,43 @@ int ApiClient::checkReceipt(QNetworkReply *r, int status, const QByteArray &body
                                  : tr("Something at %1 answered, but it isn't your Puddle.").arg(where);
         break;
     case PUDDLE_RECEIPT_WRONG_KEY: problem_ = tr("What answered at %1 couldn't prove it is your Puddle.").arg(where); break;
-    case PUDDLE_RECEIPT_OTHER_CERT: problem_ = tr("The connection to %1 was intercepted. Nothing was sent.").arg(where); break;
     default: problem_ = tr("What answered at %1 couldn't prove it is your Puddle (its signature doesn't check out).").arg(where); break;
     }
     return rc;
 }
 
+/* The Puddle has rolled its keys if an answer signed by a key we don't hold brings a chain that is our Puddle's (by its id)
+ * and whose key signed it (its `stale_key` refusal, and /device/v1/status, carry the chain). Then that key is kept. */
+bool ApiClient::learnRoll(QNetworkReply *r, int status, const QByteArray &raw, const QByteArray &plain, const QByteArray &nonce)
+{
+    const QByteArray chain = jsonOf(plain).object().value(QStringLiteral("chain")).toString().toUtf8();
+    puddle_chain_head h;
+    char err[200];
+    if (chain.isEmpty() || puddle_chain_verify(chain.constData(), size_t(chain.size()), puddleId_.toLatin1().constData(), &h, err, sizeof err) != 0)
+        return false;
+    const QByteArray sign(reinterpret_cast<const char *>(h.sign_pub), 32);
+    if (checkReceipt(r, status, raw, nonce, sign) != PUDDLE_RECEIPT_OK)
+        return false;
+    puddleKey_ = sign + QByteArray(reinterpret_cast<const char *>(h.enc_pub), 32);
+    emit puddleKeyChanged(puddleKey_);
+    return true;
+}
+
 void ApiClient::deviceSend(Pending p)
 {
-    if (proven_.isNull() || provenUntil_ <= nowMs()) {
-        waiting_ << std::move(p);
-        handshake();
-        return;
-    }
     if (!p.dest.isEmpty())
         return deviceDownload(std::move(p));
-    QByteArray nonce;
-    QNetworkReply *r = signedRequest(p.method, p.path, p.body, p.contentType, p.timeoutMs, true, &nonce);
+    QByteArray nonce, answerKey;
+    QNetworkReply *r = signedRequest(p.method, p.path, p.body, p.timeoutMs, puddleKey_.mid(32), &nonce, &answerKey);
     if (!r)
         return p.done(0, QByteArray());
-    connect(r, &QNetworkReply::finished, this, [this, r, nonce, p = std::move(p)]() mutable {
+    connect(r, &QNetworkReply::finished, this, [this, r, nonce, answerKey, p = std::move(p)]() mutable {
         const int status = r->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-        const QByteArray body = r->readAll();
-        const QNetworkReply::NetworkError err = r->error();
+        const QByteArray raw = r->readAll();
         r->deleteLater();
-        if ((err == QNetworkReply::SslHandshakeFailedError || status == 0) && p.tries > 0) {
-            /* most likely another certificate since (it may show as any failure to connect): prove it before anything goes
-             * to it. If the Puddle is simply not there, the handshake says so. */
-            forgetProof();
+        if (status == 0 && p.tries > 0) {
+            /* a kept connection to a Puddle that has restarted since (with a new certificate, say): once more, afresh */
+            renew(open_);
             p.tries--;
             return deviceSend(std::move(p));
         }
@@ -348,29 +357,25 @@ void ApiClient::deviceSend(Pending p)
             problem_ = tr("Your Puddle can't be reached at %1.").arg(base_.authority());
             return p.done(0, QByteArray());
         }
-        const int rc = checkReceipt(r, status, body, nonce, puddleKey_);
-        if (rc == PUDDLE_RECEIPT_OK) {
-            provenUntil_ = nowMs() + ProofMs;
-            return p.done(status, body);
-        }
-        forgetProof();
-        if (rc == PUDDLE_RECEIPT_WRONG_KEY && p.tries > 0) { /* it may have rolled its keys: the handshake learns the new one */
+        const int rc = checkReceipt(r, status, raw, nonce, puddleKey_.left(32));
+        QByteArray plain;
+        const bool opened = openAnswer(r, status, raw, answerKey, &plain);
+        if (rc == PUDDLE_RECEIPT_OK && opened && !(status == 409 && jsonOf(plain).object().value(QStringLiteral("error")).toString() == QLatin1String("stale_key")))
+            return p.done(status, plain);
+        if (opened && p.tries > 0 && learnRoll(r, status, raw, plain, nonce)) { /* it rolled its keys: again, with the new ones */
             p.tries--;
             return deviceSend(std::move(p));
         }
+        if (rc == PUDDLE_RECEIPT_OK && !opened)
+            problem_ = tr("Your Puddle's answer was sealed, but not for this phone.");
         setProblem(problem_);
         p.done(0, QByteArray());
     });
 }
 
-void ApiClient::forgetProof()
-{
-    proven_ = QSslCertificate();
-    renew(net_); /* kept connections were pinned to it */
-}
-
-/* A phone's download: written to "<dest>.part" as it comes and hashed on the way, then kept only if the Puddle signed for
- * exactly those bytes. Over a connection showing the proven certificate, like everything else. */
+/* A phone's download: opened record by record as it comes (spec/09, "Sealing an answer") and written to "<dest>.part", the
+ * sealed bytes hashed on the way, then kept only if the Puddle signed for exactly those bytes. A record is opened once the
+ * next has begun, since only the end of the answer says which one is the last. */
 void ApiClient::deviceDownload(Pending p)
 {
     auto *file = new QFile(p.dest + ".part");
@@ -378,39 +383,66 @@ void ApiClient::deviceDownload(Pending p)
         delete file;
         return p.fetched(false);
     }
-    QByteArray nonce;
-    QNetworkReply *r = signedRequest("GET", p.path, QByteArray(), QByteArray(), p.timeoutMs, true, &nonce);
+    QByteArray nonce, answerKey;
+    QNetworkReply *r = signedRequest("GET", p.path, QByteArray(), p.timeoutMs, puddleKey_.mid(32), &nonce, &answerKey);
     if (!r) {
         file->remove();
         delete file;
         return p.fetched(false);
     }
-    auto hash = std::make_shared<QCryptographicHash>(QCryptographicHash::Sha256);
-    connect(r, &QNetworkReply::readyRead, this, [r, file, hash] {
+    struct Opening {
+        QCryptographicHash hash{ QCryptographicHash::Sha256 };
+        QByteArray pending;
+        quint64 index = 0;
+        bool bad = false;
+    };
+    auto st = std::make_shared<Opening>();
+    const qsizetype Full = PUDDLE_SEAL_RECORD + PUDDLE_SEAL_TAG_LEN;
+    auto openRecord = [st, file, answerKey](const QByteArray &rec, int status, bool last) {
+        QByteArray out(rec.size(), '\0');
+        if (rec.size() < PUDDLE_SEAL_TAG_LEN ||
+            puddle_open_record(reinterpret_cast<const unsigned char *>(answerKey.constData()), st->index, status, last ? 1 : 0,
+                               reinterpret_cast<const unsigned char *>(rec.constData()), size_t(rec.size()),
+                               reinterpret_cast<unsigned char *>(out.data())) != 0) {
+            st->bad = true;
+            return;
+        }
+        st->index++;
+        file->write(out.constData(), rec.size() - PUDDLE_SEAL_TAG_LEN);
+    };
+    connect(r, &QNetworkReply::readyRead, this, [r, st, openRecord, Full] {
         const QByteArray got = r->readAll();
-        hash->addData(got);
-        file->write(got);
+        st->hash.addData(got);
+        st->pending += got;
+        const int status = r->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        while (!st->bad && st->pending.size() > Full) { /* more follows this one, so it isn't the last */
+            openRecord(st->pending.left(Full), status, false);
+            st->pending.remove(0, Full);
+        }
     });
     auto progress = p.progress;
     connect(r, &QNetworkReply::downloadProgress, this, [progress](qint64 got, qint64 total) { if (progress) progress(got, total); });
-    connect(r, &QNetworkReply::finished, this, [this, r, file, hash, nonce, p = std::move(p)]() mutable {
+    connect(r, &QNetworkReply::finished, this, [this, r, file, st, openRecord, nonce, Full, p = std::move(p)]() mutable {
         const QByteArray rest = r->readAll();
-        hash->addData(rest);
-        file->write(rest);
+        st->hash.addData(rest);
+        st->pending += rest;
         const int status = r->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-        const bool came = r->error() == QNetworkReply::NoError && status == 200 && file->flush();
+        const QByteArray type = r->header(QNetworkRequest::ContentTypeHeader).toByteArray().split(';').value(0).trimmed().toLower();
+        bool came = r->error() == QNetworkReply::NoError && status == 200 && type == PUDDLE_SEALED_TYPE;
+        while (came && !st->bad && st->pending.size() > Full) {
+            openRecord(st->pending.left(Full), status, false);
+            st->pending.remove(0, Full);
+        }
+        if (came && !st->bad)
+            openRecord(st->pending, status, true);
+        came = came && !st->bad && file->flush();
         file->close();
         r->deleteLater();
         bool ok = false;
         if (came) {
-            const int rc = checkReceipt(r, status, QByteArray(), nonce, puddleKey_, hash->result().toHex());
-            if (rc == PUDDLE_RECEIPT_OK) {
-                provenUntil_ = nowMs() + ProofMs;
-                ok = true;
-            } else {
-                forgetProof();
+            ok = checkReceipt(r, status, QByteArray(), nonce, puddleKey_.left(32), st->hash.result().toHex()) == PUDDLE_RECEIPT_OK;
+            if (!ok)
                 setProblem(problem_);
-            }
         }
         if (ok) {
             QFile::remove(p.dest);
@@ -424,70 +456,6 @@ void ApiClient::deviceDownload(Pending p)
     });
 }
 
-void ApiClient::handshake()
-{
-    if (shaking_)
-        return;
-    shaking_ = true;
-    QByteArray nonce;
-    QNetworkReply *r = signedRequest("GET", QStringLiteral("/device/v1/status"), QByteArray(), QByteArray(), 15000, false, &nonce);
-    if (!r)
-        return handshakeDone(false);
-    connect(r, &QNetworkReply::finished, this, [this, r, nonce] {
-        const int status = r->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-        const QByteArray body = r->readAll();
-        r->deleteLater();
-        if (status == 0) {
-            problem_ = tr("Your Puddle can't be reached at %1.").arg(base_.authority());
-            return handshakeDone(false);
-        }
-        int rc = checkReceipt(r, status, body, nonce, puddleKey_);
-        if (rc == PUDDLE_RECEIPT_WRONG_KEY) {
-            /* signed by a key we don't hold: if the chain it brings is our Puddle's (by its id) and its key signed this, it rolled */
-            const QByteArray chain = jsonOf(body).object().value(QStringLiteral("chain")).toString().toUtf8();
-            puddle_chain_head h;
-            char err[200];
-            if (!chain.isEmpty() &&
-                puddle_chain_verify(chain.constData(), size_t(chain.size()), puddleId_.toLatin1().constData(), &h, err, sizeof err) == 0) {
-                const QByteArray key(reinterpret_cast<const char *>(h.sign_pub), 32);
-                if (checkReceipt(r, status, body, nonce, key) == PUDDLE_RECEIPT_OK) {
-                    puddleKey_ = key;
-                    rc = PUDDLE_RECEIPT_OK;
-                    emit puddleKeyChanged(key);
-                }
-            }
-        }
-        if (rc == PUDDLE_RECEIPT_OK && status == 200) {
-            const QSslCertificate c = r->sslConfiguration().peerCertificate();
-            if (c != proven_)
-                renew(net_); /* kept connections carry the certificate they were pinned to */
-            proven_ = c;
-            provenUntil_ = nowMs() + ProofMs;
-            return handshakeDone(true);
-        }
-        if (rc == PUDDLE_RECEIPT_OK) /* it is our Puddle, and it says no (this phone was removed) */
-            problem_ = tr("Your Puddle no longer lets this phone in.");
-        handshakeDone(false);
-    });
-}
-
-void ApiClient::handshakeDone(bool ok)
-{
-    shaking_ = false;
-    QList<Pending> all;
-    all.swap(waiting_);
-    if (!ok)
-        setProblem(problem_);
-    for (Pending &p : all) {
-        if (ok)
-            deviceSend(std::move(p));
-        else if (p.fetched)
-            p.fetched(false);
-        else
-            p.done(0, QByteArray());
-    }
-}
-
 // ---- pairing ----
 
 bool ApiClient::parsePairingLink(const QString &link, PairingLink *out)
@@ -496,7 +464,11 @@ bool ApiClient::parsePairingLink(const QString &link, PairingLink *out)
     if (!u.isValid() || u.scheme() != QLatin1String("puddle-pair") || u.host().isEmpty())
         return false;
     const QUrlQuery q(u);
-    const QString id = q.queryItemValue(QStringLiteral("id")), secret = q.queryItemValue(QStringLiteral("secret"));
+    const QString id = q.queryItemValue(QStringLiteral("id")), secret = q.queryItemValue(QStringLiteral("secret")),
+                  key = q.queryItemValue(QStringLiteral("k"));
+    unsigned char sealKey[32];
+    if (puddle_base32_decode(key.toLatin1().constData(), sealKey, 32) != 0)
+        return false;
     static const QString b32 = QStringLiteral("abcdefghijklmnopqrstuvwxyz234567"), hex = QStringLiteral("0123456789abcdef");
     if (id.size() != PUDDLE_USER_ID_LEN || secret.size() != PUDDLE_PAIR_SECRET_LEN)
         return false;
@@ -513,6 +485,7 @@ bool ApiClient::parsePairingLink(const QString &link, PairingLink *out)
     out->base = base;
     out->puddleId = id;
     out->secret = secret;
+    out->sealKey = QByteArray(reinterpret_cast<const char *>(sealKey), 32);
     return true;
 }
 
@@ -557,17 +530,24 @@ void ApiClient::pair(const PairingLink &link, const QString &name, const QByteAr
     const QByteArray pub = QByteArray(reinterpret_cast<const char *>(k.pub), 32).toHex();
     const QByteArray body = QJsonDocument(QJsonObject{ { "name", name.trimmed() }, { "key", QString::fromLatin1(pub) }, { "secret", link.secret } })
                                 .toJson(QJsonDocument::Compact);
-    QByteArray nonce;
-    QNetworkReply *r = signedRequest("POST", QStringLiteral("/device/v1/pair"), body, "application/json", 15000, false, &nonce);
+    QByteArray nonce, answerKey;
+    QNetworkReply *r = signedRequest("POST", QStringLiteral("/device/v1/pair"), body, 15000, link.sealKey, &nonce, &answerKey);
     if (!r) {
         Paired p;
         p.error = tr("Could not sign the request.");
         return done(p);
     }
-    connect(r, &QNetworkReply::finished, this, [this, r, nonce, done = std::move(done), deviceSeed] {
+    const QByteArray linkKey = link.sealKey;
+    connect(r, &QNetworkReply::finished, this, [this, r, nonce, answerKey, linkKey, done = std::move(done), deviceSeed] {
         const int status = r->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-        const QByteArray b = r->readAll();
+        const QByteArray raw = r->readAll();
         r->deleteLater();
+        QByteArray b;
+        if (status != 0 && !openAnswer(r, status, raw, answerKey, &b)) {
+            Paired p;
+            p.error = tr("What answered isn't the Puddle in the link.");
+            return done(p);
+        }
         Paired p;
         if (status == 0) {
             p.error = tr("Nothing answered at %1.").arg(base_.authority());
@@ -587,8 +567,12 @@ void ApiClient::pair(const PairingLink &link, const QString &name, const QByteAr
             p.error = tr("What answered isn't the Puddle in the link.");
             return done(p);
         }
-        const QByteArray key(reinterpret_cast<const char *>(h.sign_pub), 32);
-        if (checkReceipt(r, status, b, nonce, key) != PUDDLE_RECEIPT_OK) {
+        const QByteArray key(reinterpret_cast<const char *>(h.sign_pub), 32), seal(reinterpret_cast<const char *>(h.enc_pub), 32);
+        if (seal != linkKey) { /* the link named whose Puddle it is: one with another key is someone else's */
+            p.error = tr("What answered isn't the Puddle in the link.");
+            return done(p);
+        }
+        if (checkReceipt(r, status, raw, nonce, key) != PUDDLE_RECEIPT_OK) {
             p.error = problem_;
             return done(p);
         }
@@ -602,7 +586,7 @@ void ApiClient::pair(const PairingLink &link, const QString &name, const QByteAr
         p.ok = true;
         p.deviceId = o.value(QStringLiteral("device")).toString();
         p.check = o.value(QStringLiteral("check")).toString();
-        p.puddleKey = key;
+        p.puddleKey = key + seal;
         if (p.deviceId != deviceIdOf(deviceSeed) || p.check != checkOf(deviceSeed)) { /* it must be talking about this phone */
             p.ok = false;
             p.error = tr("Your Puddle's answer was about another device.");

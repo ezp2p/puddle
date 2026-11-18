@@ -45,7 +45,7 @@ static void link_member(puddle_jw *w, const puddle_ctx *ctx)
 {
     char link[256];
     puddle_jw_key(w, "link");
-    if (ctx->config && puddle_make_link(ctx->config, NULL, link, sizeof link))
+    if (ctx->config && puddle_make_link(ctx->config, ctx->identity, NULL, link, sizeof link))
         puddle_jw_string(w, link);
     else
         puddle_jw_null(w);

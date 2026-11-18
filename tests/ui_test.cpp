@@ -182,7 +182,7 @@ int main(int argc, char **argv)
         CHECK(backend.finishSetup());
     }
     CHECK(backend.running() && backend.error().isEmpty());
-    CHECK(backend.myLink() == QString("127.0.0.1:%1").arg(port));
+    CHECK(backend.myLink().startsWith(QString("127.0.0.1:%1?k=").arg(port)) && backend.myLink().size() == QString("127.0.0.1:%1?k=").arg(port).size() + 52);
     Chats &A = *backend.chats();
     A.setInterval(100);
     CHECK(until([&] { return A.connected(); }));

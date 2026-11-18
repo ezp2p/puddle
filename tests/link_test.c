@@ -80,9 +80,12 @@ int main(void)
     CHECK(puddle_link_parse("1.2.3.4:1", &l, NULL, 0) == 0);
 
     /* a Pond invite: pond:// and an invite, both needed; and never taken for a Puddle address */
-    CHECK(puddle_pond_link_parse("pond://pond.example.org?invite=abcdefghijklmnopqrstuvwxyz", &l, e, sizeof e) == 0 &&
-          !strcmp(l.address.address, "pond.example.org:443") && !strcmp(l.invite, "abcdefghijklmnopqrstuvwxyz"));
-    CHECK(puddle_pond_link_parse("pond://[::1]:8900?invite=abcdefghijklmnopqrstuvwxyz", &l, e, sizeof e) == 0 && l.address.port == 8900);
+    /* and the Pond's sealing key, `k` (spec/09): an invite without one is the old kind */
+#define K52 "aebagbafaydqqcikbmga2dqpcaireeyuculbogazdinryhi6d4qa"
+    CHECK(puddle_pond_link_parse("pond://pond.example.org?invite=abcdefghijklmnopqrstuvwxyz&k=" K52, &l, e, sizeof e) == 0 &&
+          !strcmp(l.address.address, "pond.example.org:443") && !strcmp(l.invite, "abcdefghijklmnopqrstuvwxyz") && l.has_key);
+    CHECK(puddle_pond_link_parse("pond://[::1]:8900?invite=abcdefghijklmnopqrstuvwxyz&k=" K52, &l, e, sizeof e) == 0 && l.address.port == 8900);
+    CHECK(puddle_pond_link_parse("pond://pond.example.org?invite=abcdefghijklmnopqrstuvwxyz", &l, e, sizeof e) == -1 && strstr(e, "old kind"));
     CHECK(puddle_pond_link_parse("pond://pond.example.org", &l, e, sizeof e) == -1 && strstr(e, "no invite"));
     CHECK(puddle_pond_link_parse("pond.example.org?invite=abcdefghijklmnopqrstuvwxyz", &l, e, sizeof e) == -1);
     CHECK(puddle_pond_link_parse("puddle://pond.example.org?invite=abcdefghijklmnopqrstuvwxyz", &l, e, sizeof e) == -1);
@@ -117,14 +120,37 @@ int main(void)
 
     /* formatting, and back: the port everyone assumes is not written */
     char out[300];
-    CHECK(puddle_link_format("[::1]:8443", NULL, out, sizeof out) == 0 && !strcmp(out, "[::1]:8443"));
-    CHECK(puddle_link_format("[::1]:443", NULL, out, sizeof out) == 0 && !strcmp(out, "[::1]") && parse(out, &l) == 0 && l.address.port == 443);
-    CHECK(puddle_link_format("home.example.org:443", NULL, out, sizeof out) == 0 && !strcmp(out, "home.example.org"));
-    CHECK(puddle_link_format("1.2.3.4:5443", NULL, out, sizeof out) == 0 && !strcmp(out, "1.2.3.4:5443")); /* only exactly :443 */
-    CHECK(puddle_link_format("1.2.3.4:5", TOKEN, out, sizeof out) == 0 && parse(out, &l) == 0 && !strcmp(l.invite, TOKEN) && l.address.port == 5);
-    CHECK(puddle_link_format("1.2.3.4:443", TOKEN, out, sizeof out) == 0 && !strcmp(out, "1.2.3.4?invite=" TOKEN));
-    CHECK(puddle_link_format("1.2.3.4:5", "", out, sizeof out) == 0 && !strchr(out, '?'));
-    CHECK(puddle_link_format("1.2.3.4:5", NULL, out, 4) == -1);
+    CHECK(puddle_link_format("[::1]:8443", NULL, NULL, out, sizeof out) == 0 && !strcmp(out, "[::1]:8443"));
+    CHECK(puddle_link_format("[::1]:443", NULL, NULL, out, sizeof out) == 0 && !strcmp(out, "[::1]") && parse(out, &l) == 0 && l.address.port == 443);
+    CHECK(puddle_link_format("home.example.org:443", NULL, NULL, out, sizeof out) == 0 && !strcmp(out, "home.example.org"));
+    CHECK(puddle_link_format("1.2.3.4:5443", NULL, NULL, out, sizeof out) == 0 && !strcmp(out, "1.2.3.4:5443")); /* only exactly :443 */
+    CHECK(puddle_link_format("1.2.3.4:5", NULL, TOKEN, out, sizeof out) == 0 && parse(out, &l) == 0 && !strcmp(l.invite, TOKEN) && l.address.port == 5);
+    CHECK(puddle_link_format("1.2.3.4:443", NULL, TOKEN, out, sizeof out) == 0 && !strcmp(out, "1.2.3.4?invite=" TOKEN));
+    CHECK(puddle_link_format("1.2.3.4:5", NULL, "", out, sizeof out) == 0 && !strchr(out, '?'));
+    CHECK(puddle_link_format("1.2.3.4:5", NULL, NULL, out, 4) == -1);
+
+    /* the sealing key (spec/09): `k=`, before the invite, in either order when read, once each */
+    unsigned char key[32];
+    for (int i = 0; i < 32; i++)
+        key[i] = (unsigned char)(i * 9 + 1);
+    CHECK(puddle_link_format("home.example.org:443", key, NULL, out, sizeof out) == 0 && !strncmp(out, "home.example.org?k=", 19) &&
+          strlen(out) == 19 + 52 && parse(out, &l) == 0 && l.has_key && !memcmp(l.key, key, 32) && !l.invite[0]);
+    CHECK(puddle_link_format("home.example.org:8443", key, TOKEN, out, sizeof out) == 0 && strstr(out, "&invite=" TOKEN) &&
+          parse(out, &l) == 0 && l.has_key && !memcmp(l.key, key, 32) && !strcmp(l.invite, TOKEN));
+    {
+        char swapped[300], k[60];
+        snprintf(k, sizeof k, "%s", strstr(out, "k=") + 2);
+        *strchr(k, '&') = '\0';
+        snprintf(swapped, sizeof swapped, "puddle://home.example.org:8443?invite=" TOKEN "&k=%s", k);
+        CHECK(parse(swapped, &l) == 0 && l.has_key && !memcmp(l.key, key, 32) && !strcmp(l.invite, TOKEN));
+        snprintf(swapped, sizeof swapped, "home.example.org?k=%s&k=%s", k, k);
+        CHECK(parse(swapped, &l) == -1); /* twice */
+        snprintf(swapped, sizeof swapped, "home.example.org?k=%.51s", k);
+        CHECK(parse(swapped, &l) == -1); /* cut short */
+        CHECK(parse("home.example.org?k=", &l) == -1);
+        CHECK(parse("home.example.org?other=1", &l) == -1);
+    }
+    CHECK(parse("home.example.org", &l) == 0 && !l.has_key);
 
     /* nothing random crashes, and what is accepted is always the canonical thing */
     srand(11);
@@ -140,7 +166,7 @@ int main(void)
             snprintf(buf, sizeof buf, "10.0.0.%s", t);
             if (parse(buf, &l) == 0) {
                 char again[300];
-                CHECK(puddle_link_format(l.address.address, l.invite, again, sizeof again) == 0 && parse(again, &l) == 0);
+                CHECK(puddle_link_format(l.address.address, l.has_key ? l.key : NULL, l.invite, again, sizeof again) == 0 && parse(again, &l) == 0);
             }
         } else {
             (void)parse(t, &l);

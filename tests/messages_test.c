@@ -11,6 +11,8 @@
 #include "http/client.h"
 
 #include <ftw.h>
+#include "sealing.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -100,7 +102,7 @@ static reply *call(const char *method, const char *target, const char *body, con
     if (bl) memcpy(copy, body, bl);
     copy[bl] = 0;
     memset(&rp, 0, sizeof rp);
-    rp.n = puddle_router_handle(&R, &req, owner, copy, bl, rp.out, sizeof rp.out - 1, &rp.status);
+    rp.n = st_handle(&R, &req, owner, copy, bl, rp.out, sizeof rp.out - 1, &rp.status);
     free(copy);
     return &rp;
 }
@@ -137,7 +139,7 @@ static reply *dm_delete(const char *to, const char *msg)
 static reply *peer_post(person *from, const char *body)
 {
     char sig[800];
-    if (puddle_reqsig_sign(from->id, "POST", "/stream/v1/events", body, strlen(body), me.uid, clock_now, sig, sizeof sig) != 0) exit(2);
+    if (st_sign(from->id, "POST", "/stream/v1/events", body, strlen(body), me.uid, clock_now, sig, sizeof sig) != 0) exit(2);
     return call("POST", "/stream/v1/events", body, sig, 0);
 }
 
@@ -241,6 +243,7 @@ int main(void)
     ob = puddle_outbox_open(data, &hooks, err, sizeof err);
     ctx = (puddle_ctx){ .courier = &puddle_federation_courier, .identity = me.id, .store = store, .streams = ss, .conversations = cs, .outbox = ob, .replay = puddle_replay_new(1024), .now_ms = now_cb,
                         .peer_key = puddle_streams_peer_key, .peer_key_user = ss };
+    st_use(me.id);
     R = (puddle_router){ .ctx = &ctx };
     R.routes = puddle_all_routes(&R.count);
 
@@ -269,7 +272,7 @@ int main(void)
     {
         /* the very same request sent twice is a replay, whatever it carries */
         char sig[800];
-        puddle_reqsig_sign(alice.id, "POST", "/stream/v1/events", b, strlen(b), me.uid, clock_now, sig, sizeof sig);
+        st_sign(alice.id, "POST", "/stream/v1/events", b, strlen(b), me.uid, clock_now, sig, sizeof sig);
         CHECK(call("POST", "/stream/v1/events", b, sig, 0)->status == 200);
         CHECK(call("POST", "/stream/v1/events", b, sig, 0)->status == 401);
     }
@@ -402,7 +405,7 @@ int main(void)
         e1 = make_env(&carol, &carol, chat_c, T0 + 50, "hi", NULL);
         b = delivery(chat_c, &e1, 1);
         char sig[800];
-        puddle_reqsig_sign(carol.id, "POST", "/stream/v1/events", b, strlen(b), me.uid, clock_now, sig, sizeof sig);
+        st_sign(carol.id, "POST", "/stream/v1/events", b, strlen(b), me.uid, clock_now, sig, sizeof sig);
         CHECK(call("POST", "/stream/v1/events", b, sig, 0)->status == 404);                      /* a stranger: no such route */
         set_peer(&carol, PUDDLE_STREAM_PENDING_IN);
         clock_now += 1000;

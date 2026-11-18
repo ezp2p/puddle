@@ -1,5 +1,6 @@
 #include "federation/flow.h"
 
+#include "base/hash.h"
 #include "base/text.h"
 #include "federation/access.h"
 #include "federation/keysync.h"
@@ -112,6 +113,9 @@ static int apply_asking(void *user, puddle_stream *st, int exists)
     st->state = PUDDLE_STREAM_PENDING_OUT;
     st->provisional = 1;
     snprintf(st->ticket, sizeof st->ticket, "%s", a->ticket);
+    st->link_key[0] = '\0'; /* what the request is sealed to, and what their chain must then have (spec/09, "First contact") */
+    if (a->link->has_key)
+        puddle_hex_encode(a->link->key, 32, st->link_key);
     st->owed = PUDDLE_OWED_NONE;
     st->error[0] = '\0';
     st->updated_ms = a->now;

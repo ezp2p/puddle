@@ -11,6 +11,10 @@ extern "C" {
  * `cap` is too small. 32 bytes give 52 characters (a user id). */
 size_t puddle_base32_encode(const unsigned char *in, size_t len, char *out, size_t cap);
 
+/* Exactly `len` bytes from lowercase, unpadded base32 that encodes exactly that many (spare bits zero, as the encoder leaves
+ * them). 0 or -1. */
+int puddle_base32_decode(const char *in, unsigned char *out, size_t len);
+
 /* Standard base64 with padding. Same return convention. */
 size_t puddle_base64_encode(const unsigned char *in, size_t len, char *out, size_t cap);
 
