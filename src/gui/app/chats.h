@@ -68,6 +68,19 @@ public:
     using TakeFile = std::function<int(int fd, char id[65])>;
     void setTakeFile(TakeFile fn, QThreadPool *pool) { takeFile_ = std::move(fn); takePool_ = pool; }
     QObject *profiles() { return &profiles_; }
+
+    // ---- the owner's profiles (docs/profiles.md), kept by the Puddle wherever it runs, so the same here and on a phone ----
+    // One profile as the Puddle gave it (display_name, pronouns, blurb, about, color, avatar, banner, background, links,
+    // places), pictures as their hashes; {} if there is none.
+    Q_INVOKABLE QVariantMap profile(const QString &id) const;
+    // Make one (`isNew`, with `id`) or change one: `fields` as the API takes them, a null clearing one. profileSaved says how.
+    Q_INVOKABLE void saveProfile(const QString &id, const QVariantMap &fields, bool isNew);
+    Q_INVOKABLE void deleteProfile(const QString &id);
+    // Send a picture to the Puddle for a profile (png, jpg, gif or webp, up to 25 MiB): pictureUploaded(slot, hash, error).
+    // `slot` is the caller's own name for it ("avatar", "banner"...), handed back.
+    Q_INVOKABLE void uploadPicture(const QUrl &file, const QString &slot);
+    // A free id for a new profile, from its name: "Work Stuff" gives "work-stuff" (or "work-stuff-2"...).
+    Q_INVOKABLE QString profileIdFor(const QString &name) const;
     QString myName() const { return myName_; }
     QString myLink() const { return myLink_; } // where others find this Puddle, as it says ("" until known)
     QString problem() const { return api_.lastProblem(); }
@@ -220,6 +233,9 @@ signals:
     void filesSent();
     void filesFailed(const QString &why);
     void profilesChanged();
+    void profileSaved(const QString &id, const QString &error);
+    void profileDeleted(const QString &id, const QString &error);
+    void pictureUploaded(const QString &slot, const QString &hash, const QString &error);
     void currentInfoChanged();
     void hasOlderChanged();
     void attentiveChanged();
@@ -296,6 +312,8 @@ private:
     int pageSize_ = 100;
     bool connected_ = true; // until a request fails, so the banner does not flash at start-up
     bool marking_ = false, profilesLoaded_ = false;
+    int profileTicks_ = 0;
+    QByteArray profilesSeen_; // the profiles as last shown, to redraw only when they change
     bool busy_[8] = { false, false, false, false, false, false, false, false };
     QSet<QString> fileRequests_;   // "<user> <message> <file>" of each request seen, to notify of new ones
     bool fileRequestsLoaded_ = false;

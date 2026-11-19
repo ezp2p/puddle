@@ -82,7 +82,7 @@ Chats::Chats(QObject *parent)
       messages_({ "id", "sender", "senderName", "ts", "body", "files", "outgoing", "edited", "deleted", "reply_to", "avatar", "tint", "grouped",
                   "dayStart", "replyName", "replyText", "replyMissing", "deliveryState", "deliveryReason", "deliveryNext", "kind", "noticeText" }),
       blocked_({ "id", "user", "name", "created_at" }, nullptr, "user"),
-      profiles_({ "id", "display_name", "avatar", "default" }),
+      profiles_({ "id", "display_name", "avatar", "default", "pronouns", "blurb", "place_count" }),
       invites_({ "id", "name", "invitedBy", "invitedByName" }),
       members_({ "id", "name", "avatar", "color", "state", "isMe", "friend" }),
       sidebar_({ "key", "kind", "id", "name", "avatar", "color", "preview", "lastTs", "unread", "state", "members", "note", "invitedBy", "section" }, nullptr, "key"),
@@ -127,7 +127,8 @@ void Chats::refresh()
     refreshBlocked();
     refreshGroups();
     refreshFileRequests();
-    if (!profilesLoaded_)
+    /* the profiles too, now and then: they can be changed from another device (a phone, the app on another computer) */
+    if (!profilesLoaded_ || ++profileTicks_ % 5 == 0)
         refreshProfiles();
     if (!api_.isDevice())
         refreshDevices();
@@ -264,12 +265,21 @@ void Chats::refreshProfiles()
             QJsonObject p = v.toObject();
             p.insert("avatar", p.value("avatar").toObject().value("hash").toString());
             p.insert("default", rows.isEmpty()); // the first is how the owner sees themselves
+            p.insert("place_count", p.value("places").toArray().size());
             if (rows.isEmpty()) {
                 myName_ = p.value("display_name").toString();
                 myAvatar_ = p.value("avatar").toString();
             }
             rows.append(p);
         }
+        /* the same as last time: nothing to redraw */
+        QJsonArray seen;
+        for (const QJsonObject &r : rows)
+            seen.append(r);
+        const QByteArray now = QJsonDocument(seen).toJson(QJsonDocument::Compact);
+        if (profilesLoaded_ && now == profilesSeen_)
+            return;
+        profilesSeen_ = now;
         profilesLoaded_ = true;
         profiles_.setItems(rows);
         emit profilesChanged();
@@ -1496,4 +1506,106 @@ QString Chats::selfName(const QJsonValue &author) const
 QString Chats::nameOf(const QString &userId) const
 {
     return names_.value(userId, shortId(userId));
+}
+
+// ---- the owner's profiles ----
+
+// What went wrong, in words, from an error answer
+static QString profileProblem(int status, const QJsonDocument &doc)
+{
+    const QJsonObject o = doc.object();
+    const QString code = o.value("error").toString(), detail = o.value("detail").toString().isEmpty() ? o.value("message").toString()
+                                                                                                     : o.value("detail").toString();
+    if (status == 0)
+        return QObject::tr("Can't reach your Puddle.");
+    if (code == QLatin1String("exists"))
+        return QObject::tr("There is already a profile with that id.");
+    if (code == QLatin1String("too_many"))
+        return QObject::tr("That's as many profiles as there can be.");
+    if (code == QLatin1String("too_large"))
+        return QObject::tr("That picture is too large: the most is 25 MiB.");
+    if (code == QLatin1String("bad_image"))
+        return QObject::tr("That isn't a picture Puddle can use: png, jpg, gif or webp.");
+    if (!detail.isEmpty())
+        return detail;
+    return code.isEmpty() ? QObject::tr("Your Puddle said no (%1).").arg(status) : QObject::tr("Your Puddle said no: %1.").arg(code);
+}
+
+QVariantMap Chats::profile(const QString &id) const
+{
+    for (const QJsonObject &p : profiles_.items())
+        if (p.value("id").toString() == id)
+            return p.toVariantMap();
+    return {};
+}
+
+void Chats::saveProfile(const QString &id, const QVariantMap &fields, bool isNew)
+{
+    QJsonObject body = QJsonObject::fromVariantMap(fields);
+    if (isNew)
+        body.insert("id", id);
+    const QString path = isNew ? QStringLiteral("/api/v1/profiles/create") : QStringLiteral("/api/v1/profiles/%1/edit").arg(id);
+    api_.post(path, body, [this, id](int status, const QJsonDocument &doc) {
+        const QString why = status / 100 == 2 ? QString() : profileProblem(status, doc);
+        if (why.isEmpty())
+            refreshProfiles();
+        emit profileSaved(id, why);
+    });
+}
+
+void Chats::deleteProfile(const QString &id)
+{
+    api_.post(QStringLiteral("/api/v1/profiles/%1/delete").arg(id), QJsonObject(), [this, id](int status, const QJsonDocument &doc) {
+        const QString why = status / 100 == 2 ? QString() : profileProblem(status, doc);
+        if (why.isEmpty())
+            refreshProfiles();
+        emit profileDeleted(id, why);
+    });
+}
+
+void Chats::uploadPicture(const QUrl &file, const QString &slot)
+{
+    QFile f(file.isLocalFile() ? file.toLocalFile() : file.toString());
+    if (!f.open(QIODevice::ReadOnly))
+        return emit pictureUploaded(slot, QString(), tr("Couldn't read that file."));
+    if (f.size() > 25LL * 1024 * 1024)
+        return emit pictureUploaded(slot, QString(), tr("That picture is too large: the most is 25 MiB."));
+    const QByteArray bytes = f.readAll();
+    api_.postBytes(QStringLiteral("/api/v1/media/upload"), bytes, [this, slot, bytes](int status, const QJsonDocument &doc) {
+        const QString hash = doc.object().value("hash").toString();
+        if (status / 100 != 2 || hash.isEmpty())
+            return emit pictureUploaded(slot, QString(), profileProblem(status, doc));
+        // kept here too, so it shows at once without fetching it back
+        QDir().mkpath(cacheDir_);
+        QFile c(cacheDir_ + "/" + hash);
+        if (!c.exists() && c.open(QIODevice::WriteOnly))
+            c.write(bytes);
+        emit pictureUploaded(slot, hash, QString());
+    });
+}
+
+QString Chats::profileIdFor(const QString &name) const
+{
+    QString base;
+    for (const QChar ch : name.toLower()) {
+        if ((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_')
+            base += ch;
+        else if (!base.isEmpty() && !base.endsWith('-'))
+            base += '-';
+    }
+    while (base.endsWith('-'))
+        base.chop(1);
+    base = base.left(28);
+    if (base.isEmpty())
+        base = QStringLiteral("profile");
+    auto taken = [this](const QString &id) {
+        for (const QJsonObject &p : profiles_.items())
+            if (p.value("id").toString() == id)
+                return true;
+        return false;
+    };
+    QString id = base;
+    for (int n = 2; taken(id); n++)
+        id = base + "-" + QString::number(n);
+    return id;
 }
