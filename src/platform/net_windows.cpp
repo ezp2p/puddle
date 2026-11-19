@@ -272,6 +272,12 @@ void puddle_sock_close(puddle_sock s)
         closesocket((SOCKET)s);
 }
 
+int puddle_sock_peek(puddle_sock s, char *buf, int n)
+{
+    int got = recv((SOCKET)s, buf, n, MSG_PEEK);
+    return got < 0 ? -1 : got;
+}
+
 int puddle_sock_fd(puddle_sock s)
 {
     return (int)s; /* OpenSSL's SSL_set_fd takes a SOCKET this way on Windows */

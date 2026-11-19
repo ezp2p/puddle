@@ -148,7 +148,7 @@ static void log_fingerprint(SSL_CTX *ctx)
     char hex[EVP_MAX_MD_SIZE * 3 + 1];
     for (unsigned i = 0; i < mdlen; i++)
         snprintf(hex + i * 3, 4, "%02X%s", md[i], i + 1 < mdlen ? ":" : "");
-    puddle_log(PUDDLE_LOG_INFO, "certificate SHA-256 %s", hex);
+    puddle_log(PUDDLE_LOG_DEBUG, "certificate SHA-256 %s (TLS only carries bytes: nothing checks it)", hex);
 }
 
 int puddle_tls_fingerprint_hex(SSL_CTX *ctx, char out[65])

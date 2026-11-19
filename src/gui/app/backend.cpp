@@ -40,8 +40,7 @@ Backend *g_self;
 
 void logSink(puddle_log_level level, const char *msg, void *)
 {
-    static const char *const names[] = { "info", "warn", "error" };
-    const QString line = QStringLiteral("%1: %2").arg(QLatin1String(names[level]), QString::fromUtf8(msg));
+    const QString line = QStringLiteral("%1: %2").arg(QLatin1String(puddle_log_level_name(level)), QString::fromUtf8(msg));
     // Called from connection threads; hop to the GUI thread.
     if (Backend *self = g_self)
         QMetaObject::invokeMethod(self, [self, line] { self->append(line); }, Qt::QueuedConnection);
@@ -142,6 +141,8 @@ void Backend::startHere()
         emit modeChanged();
         return;
     }
+    applyLogLevel();
+
     // No identity, or one whose phrase was shown but never confirmed: setup comes first, and the
     // server stays off until the owner has written the phrase down.
     setupRedo_ = puddle_identity_unconfirmed(cfg_.data_dir) != 0;
@@ -784,7 +785,15 @@ void Backend::setDeveloperMode(bool on)
         return;
     developerMode_ = on;
     QSettings().setValue("developerMode", on);
+    applyLogLevel();
     emit developerModeChanged();
+}
+
+// What goes in Activity: what puddle.yaml (or PUDDLE_LOG) says, and everything (debug) while Developer Mode is on.
+void Backend::applyLogLevel()
+{
+    const puddle_log_level chosen = haveConfig_ ? (puddle_log_level)puddle_config_log_level(&cfg_) : PUDDLE_LOG_INFO;
+    puddle_log_set_level(developerMode_ ? PUDDLE_LOG_DEBUG : chosen);
 }
 
 void Backend::setDockBadge(int count)

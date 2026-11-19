@@ -604,7 +604,7 @@ static void request_scoped(puddle_ctx *ctx, const puddle_group *g, const puddle_
     if (!body || puddle_outbox_enqueue(ctx->outbox, m->id, "access", "/stream/v1/access", body, len, err, sizeof err) != 0)
         puddle_log(PUDDLE_LOG_WARN, "cannot queue a group connection to %.12s…", m->id);
     else
-        puddle_log(PUDDLE_LOG_INFO, "asking %.12s… for a group connection (group %.12s…)", m->id, g->id);
+        puddle_log(PUDDLE_LOG_DEBUG, "asking %.12s… for a group connection (group %.12s…)", m->id, g->id);
     free(body);
 }
 

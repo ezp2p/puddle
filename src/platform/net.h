@@ -63,6 +63,10 @@ void puddle_sock_close(puddle_sock s);
  * closes it. */
 void puddle_sock_cut(puddle_sock s);
 
+/* Look at the first bytes waiting on a new connection without taking them, waiting for some as long as the socket's read
+ * timeout: how many (up to `n`), 0 if the other side closed without sending anything, -1 if nothing came or it failed. */
+int puddle_sock_peek(puddle_sock s, char *buf, int n);
+
 /* For OpenSSL's SSL_set_fd. */
 int puddle_sock_fd(puddle_sock s);
 

@@ -480,6 +480,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "puddled: %s\n", err);
         return 1;
     }
+    puddle_log_set_level((puddle_log_level)puddle_config_log_level(&cfg));
 
     if (init + roll + restore + wait + pair + (backup_path != NULL) + (accept_digits != NULL) > 1) {
         usage(stderr);
@@ -538,7 +539,7 @@ int main(int argc, char **argv)
 serve:;
     puddle_server *srv = puddle_server_create(&cfg, err, sizeof err);
     if (!srv) {
-        fprintf(stderr, "puddled: %s\n", err);
+        puddle_log(PUDDLE_LOG_CRITICAL, "cannot start: %s", err);
         return 1;
     }
     g_server = srv;
@@ -546,6 +547,7 @@ serve:;
     if (g_stop) /* told to stop while setting up */
         puddle_server_stop(srv);
 
+    puddle_log(PUDDLE_LOG_DEBUG, "logging at %s and above", puddle_log_level_name(puddle_log_get_level()));
     int rc = puddle_server_run(srv);
     puddle_server_destroy(srv);
     return rc == 0 ? 0 : 1;

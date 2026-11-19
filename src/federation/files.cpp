@@ -290,7 +290,7 @@ static int request_post(const puddle_call *c, puddle_jw *w)
     snprintf(line, sizeof line, "request %s %s %s %lld", c->sender, chat, message, (long long)puddle_ctx_now_ms(c->ctx));
     if (puddle_files_note_add(c->ctx->files, file, line) != 0)
         return puddle_fail(w, 404, "Not Found");
-    puddle_log(PUDDLE_LOG_INFO, "%.12s… asked for file %.12s… again", c->sender, file);
+    puddle_log(PUDDLE_LOG_DEBUG, "%.12s… asked for file %.12s… again", c->sender, file);
     return 200; /* the same answer whatever happens next, so nothing is learnt from it */
 }
 

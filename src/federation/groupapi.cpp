@@ -268,7 +268,7 @@ static const char *group_commit(void *user, const char *text, size_t tl, const c
             return "storage_error";
         const char *stored = puddle_store_delivered(p->ctx, p->chat, p->sender, text, tl, sigtext, id_out, dup);
         if (!stored && ur == 0) {
-            puddle_log(PUDDLE_LOG_INFO, "group %.12s…: %s from %.12s…", p->chat, ge.type == PUDDLE_GE_JOIN ? "a join" : ge.type == PUDDLE_GE_LEAVE ? "a leave" :
+            puddle_log(PUDDLE_LOG_DEBUG, "group %.12s…: %s from %.12s…", p->chat, ge.type == PUDDLE_GE_JOIN ? "a join" : ge.type == PUDDLE_GE_LEAVE ? "a leave" :
                        ge.type == PUDDLE_GE_INVITE ? "an invitation" : "a new name", p->sender);
             puddle_group_reconcile(p->ctx);
             char place[PUDDLE_PLACE_MAX];

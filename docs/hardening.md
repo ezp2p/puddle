@@ -102,6 +102,27 @@ wall, roughly in order of what they buy:
 - **headless `puddled` as its own system user,** so even a full compromise can't read the rest of the machine.
 - **Fuzzing** the request parser and router, and a test that no parameter type can ever match `.` or `/`.
 
+## The log
+
+What the Puddle writes to stderr (so `journalctl`, `docker logs`, `kubectl logs`) and to Activity in the app, by level
+(`src/base/log.h`):
+
+| Level | What |
+|---|---|
+| `debug` | the detail: every request and its answer, connections that never became TLS (a port check, a scanner), the certificate |
+| `info` | what the owner may want to know: friends, calls, phones, Ponds, starting and stopping |
+| `warn` | something didn't work and the Puddle carries on: a damaged record skipped, something to try again |
+| `error` | something failed that the owner should look at; the Puddle still runs |
+| `critical` | the Puddle can't go on, and stops |
+
+Only the chosen level and above are written: `log: info` (the default) in `puddle.yaml`, or `PUDDLE_LOG=debug` in the
+environment, which wins (handy in a container: `kubectl set env deploy/puddle PUDDLE_LOG=debug`). In the app, Developer Mode
+shows everything.
+
+Requests are `debug` because a stranger's probing (answered `404`, as anything unknown is) shouldn't fill the owner's log; one
+the Puddle itself failed (`5xx`) is `warn`. A connection speaking plain HTTP is `info`, at most once a minute, because it is
+almost always a proxy or health check set to `http://` that should be `https://`.
+
 ## Ideas to look at
 
 ### Banning addresses, fail2ban-style

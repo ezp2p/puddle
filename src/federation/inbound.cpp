@@ -113,7 +113,7 @@ static int result_post(const puddle_call *c, puddle_jw *w)
         }
         int ar = puddle_flow_adopt(c->ctx, ticket, p.id);
         if (ar == 0) {
-            puddle_log(PUDDLE_LOG_INFO, "%.12s… answered our request", p.id);
+            puddle_log(PUDDLE_LOG_DEBUG, "%.12s… answered our request", p.id);
             /* we withdrew the request, and they have said yes anyway: tell them the stream is closed */
             char oerr[200];
             if (approved && puddle_streams_update(c->ctx->streams, p.id, owe_closed, NULL, oerr, sizeof oerr) == 0)

@@ -183,7 +183,7 @@ int puddle_process_delivery(const puddle_call *c, puddle_jw *w, puddle_span evs,
     puddle_jw_end_object(w);
     free(acc); free(dup); free(rej_id); free(rej_why);
     if (na)
-        puddle_log(PUDDLE_LOG_INFO, "%zu message%s from %.12s…", na, na == 1 ? "" : "s", c->sender);
+        puddle_log(PUDDLE_LOG_DEBUG, "%zu message%s from %.12s…", na, na == 1 ? "" : "s", c->sender);
     return 200;
 }
 
