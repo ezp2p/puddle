@@ -5,6 +5,7 @@
 #include "core/profile.h"
 #include "objects/file.hpp"
 #include "storage/files.h"
+#include "storage/media.h"
 
 #include <cstdlib>
 #include <cstring>
@@ -201,7 +202,7 @@ static int fetch_file(const puddle_call *c, puddle_jw *)
 
 /* Ask the Pond, as an operator or administrator, and answer the owner with what it said (the Pond's docs/design.md, "Roles").
  * A Pond that does not know the route for us (we hold no role) is `409 no_role`. */
-static int relay(const puddle_call *c, const char *method, const std::string &target, const std::string &body, std::string *answer = nullptr)
+static int ask(const puddle_call *c, const char *method, const std::string &target, const std::string &body, std::string &text)
 {
     const char *pond = puddle_param(c, "pond"), *code = "internal";
     if (puddle_ponds_conn(pondsOf(c), pond, nullptr) != 0)
@@ -213,12 +214,19 @@ static int relay(const puddle_call *c, const char *method, const std::string &ta
         c->ctx->courier->pond_admin(c->ctx, pond, method, target.c_str(), body.empty() ? nullptr : body.data(), body.size(), &status, &reply,
                                     &len, &code) != 0)
         throw failure(code);
-    std::string text(reply, len);
+    text.assign(reply, len);
     free(reply);
     if (status == 404 && text.find("\"not_found\"") != std::string::npos)
         throw Error(409, "no_role");
     if (status >= 500)
         throw Error(502, "failed");
+    return status;
+}
+
+static int relay(const puddle_call *c, const char *method, const std::string &target, const std::string &body, std::string *answer = nullptr)
+{
+    std::string text;
+    int status = ask(c, method, target, body, text);
     if (answer)
         *answer = text;
     if (status == 204 || text.empty())
@@ -264,6 +272,35 @@ static int accept_offer(const puddle_call *c, puddle_jw *) { return answer_offer
 static int decline_offer(const puddle_call *c, puddle_jw *) { return answer_offer(c, false); }
 
 static int admin_pond(const puddle_call *c, puddle_jw *) { return relay(c, "POST", "/pond/v1/admin/pond", objectBody(c)); }
+/* {"hash": a picture this Puddle holds (POST /api/v1/media/upload), or null}: the Pond's icon. The picture is sent to the Pond
+ * first (the Pond's docs/design.md, "Pictures"), then named as its icon. */
+static int admin_icon(const puddle_call *c, puddle_jw *)
+{
+    Body b(c);
+    if (!b.has("hash"))
+        throw Error::badRequest();
+    if (b.isNull("hash"))
+        return relay(c, "POST", "/pond/v1/admin/icon", "{\"hash\":null}");
+    std::string hash = b.string("hash", 64);
+    if (!puddle_media_hash_valid(hash.c_str()))
+        throw Error::badRequest();
+    if (!puddle_ponds_has_feature(pondsOf(c), puddle_param(c, "pond"), "pictures"))
+        throw Error(409, "no_pictures"); /* an older Pond, without icons */
+    unsigned char *bytes = nullptr;
+    size_t len = 0;
+    char mime[40];
+    int r = puddle_media_read(c->ctx->config->data_dir, hash.c_str(), PUDDLE_POND_PICTURE_MAX, &bytes, &len, mime);
+    if (r == 1)
+        throw Error::notFound("no_picture");
+    if (r != 0)
+        throw Error(409, "too_large"); /* over what a Pond keeps (or not an image) */
+    std::string sent((const char *)bytes, len), said;
+    free(bytes);
+    int status = ask(c, "POST", "/pond/v1/pictures", sent, said);
+    if (status != 200)
+        throw Error(502, "failed");
+    return relay(c, "POST", "/pond/v1/admin/icon", "{\"hash\":\"" + hash + "\"}");
+}
 static int admin_channel_create(const puddle_call *c, puddle_jw *) { return relay(c, "POST", "/pond/v1/admin/channels/create", objectBody(c)); }
 static int admin_channel_edit(const puddle_call *c, puddle_jw *)
 {
@@ -407,6 +444,7 @@ const puddle_route puddle_pond_api_routes[] = {
     { "POST", POND "/offer/accept",                               PUDDLE_AUTH_OWNER, 64,    accept_offer,     NULL },
     { "POST", POND "/offer/decline",                              PUDDLE_AUTH_OWNER, 64,    decline_offer,    NULL },
     { "POST", POND "/admin/pond",                                 PUDDLE_AUTH_OWNER, 8192,  admin_pond,       NULL },
+    { "POST", POND "/admin/icon",                                 PUDDLE_AUTH_OWNER, 256,   admin_icon,       NULL },
     { "POST", POND "/admin/channels/create",                      PUDDLE_AUTH_OWNER, 4096,  admin_channel_create, NULL },
     { "POST", POND "/admin/channels/{channel:num}/edit",          PUDDLE_AUTH_OWNER, 4096,  admin_channel_edit,   NULL },
     { "POST", POND "/admin/channels/{channel:num}/delete",        PUDDLE_AUTH_OWNER, 64,    admin_channel_delete, NULL },

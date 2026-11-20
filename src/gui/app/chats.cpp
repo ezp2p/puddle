@@ -92,6 +92,8 @@ Chats::Chats(QObject *parent)
     fileCacheDir_ = QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + "/files";
     timer_.setInterval(2000);
     connect(&timer_, &QTimer::timeout, this, &Chats::refresh);
+    missingTimer_.setInterval(3000);
+    connect(&missingTimer_, &QTimer::timeout, this, &Chats::askAgain);
     calls_.setNameOf([this](const QString &u) { return nameOf(u); });
     connect(&calls_, &Calls::historyChanged, this, &Chats::refreshCallNotes);
 }
@@ -432,6 +434,14 @@ QString Chats::avatarFor(const QString &hash)
     fetching_.insert(hash);
     api_.getBytes(QStringLiteral("/api/v1/media?hash=") + hash, [this, hash, path](int status, const QByteArray &bytes) {
         fetching_.remove(hash);
+        if (status == 404 || status == 0) { // not on our Puddle yet (it fetches a friend's or a Pond's picture by itself): ask again
+            if (!missing_.contains(hash))
+                missing_.insert(hash, QDateTime::currentMSecsSinceEpoch());
+            if (!missingTimer_.isActive())
+                missingTimer_.start();
+            return;
+        }
+        missing_.remove(hash);
         if (status != 200 || bytes.isEmpty() || QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex() != hash.toLatin1())
             return; // not what was asked for: not shown
         QDir().mkpath(cacheDir_);
@@ -444,6 +454,20 @@ QString Chats::avatarFor(const QString &hash)
         }
     });
     return QString();
+}
+
+// Every few seconds for the first two minutes, then once a minute: a friend who is away sends their picture when they are back.
+void Chats::askAgain()
+{
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    const bool slow = now - missingSlow_ >= 60000;
+    if (slow)
+        missingSlow_ = now;
+    for (auto it = missing_.cbegin(); it != missing_.cend(); ++it)
+        if (now - it.value() < 120000 || slow)
+            avatarFor(it.key());
+    if (missing_.isEmpty())
+        missingTimer_.stop();
 }
 
 void Chats::copy(const QString &text)

@@ -9,6 +9,14 @@ properties:
   id: { $ref: "../wire/ids.yaml#/$defs/UserId", description: "The Pond's id, made from its key like a user id" }
   name: { type: string, maxLength: 400 }
   description: { type: string }
+  icon:
+    description: |
+      The Pond's icon (its feature `pictures`), as a profile names a picture; null for none. The Puddle fetches it from the Pond
+      by itself, so `GET /api/v1/media?hash=` has it once it is here (docs/ponds.md, "Pictures").
+    oneOf:
+      - type: object
+        properties: { hash: { type: string, pattern: "^[0-9a-f]{64}$" }, mime: { type: string }, size: { type: integer } }
+      - type: "null"
   address: { type: string, description: "host[:port] it is reached at" }
   status:
     enum: [connecting, connected, unreachable, removed, certificate_changed, not_proven]
@@ -64,7 +72,7 @@ $defs:
     type: object
     properties:
       id: { $ref: "../wire/ids.yaml#/$defs/UserId" }
-      profile: { oneOf: [{ $ref: "../wire/profile.yaml" }, { type: "null" }], description: What they chose to show in this Pond, cleaned }
+      profile: { oneOf: [{ $ref: "../wire/profile.yaml" }, { type: "null" }], description: "What they chose to show in this Pond, cleaned. Its pictures are fetched from the Pond by themselves (docs/ponds.md, \"Pictures\")" }
       joined: { type: integer, description: ms }
       role: { enum: [operator, administrator, member] }
   Message:

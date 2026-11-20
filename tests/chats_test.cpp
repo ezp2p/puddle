@@ -6,6 +6,7 @@
 #include <QNetworkAccessManager>
 #include <QSignalSpy>
 #include <QTemporaryDir>
+#include <QUrl>
 #include <functional>
 #include <thread>
 
@@ -101,6 +102,27 @@ int main(int argc, char **argv)
     CHECK(until([&] { return B.incomingRequests() == 0 && row(people_a, "id", bob.uid).value("state").toString() == "active"; }));
     CHECK(until([&] { return row(people_b, "id", alice.uid).value("name").toString() == "Alice"; }));
     CHECK(until([&] { return row(people_a, "id", bob.uid).value("name").toString() == "Bob"; }));
+
+    /* a friend's picture the window asks for before its Puddle has it (still on its way, or chosen later): asked for again,
+     * and shown once it is there, without anything else on screen changing */
+    {
+        A.setCacheDir(tmp.path() + "/alice-pictures");
+        B.setCacheDir(tmp.path() + "/bob-pictures");
+        const QString png = tmp.path() + "/face.png";
+        QFile f(png);
+        CHECK(f.open(QIODevice::WriteOnly) && f.write(QByteArray("\x89PNG\r\n\x1a\n", 8) + QByteArray(500, 'f')) > 0);
+        f.close();
+        QSignalSpy uploaded(&A, &Chats::pictureUploaded);
+        A.uploadPicture(QUrl::fromLocalFile(png), "avatar");
+        CHECK(until([&] { return uploaded.count() == 1; }));
+        const QString hash = uploaded.count() ? uploaded.at(0).at(1).toString() : QString();
+        CHECK(hash.size() == 64);
+        QSignalSpy ready(&B, &Chats::avatarReady);
+        CHECK(B.avatarFor(hash).isEmpty()); /* Bob's Puddle has never heard of it */
+        A.saveProfile("main", { { "display_name", "Alice" }, { "avatar", hash } }, false);
+        CHECK(until([&] { return ready.count() >= 1 && ready.at(0).at(0).toString() == hash; }, 20000));
+        CHECK(!B.avatarFor(hash).isEmpty());
+    }
 
     /* friends are in the sidebar before a word is said, and the requests are gone from it */
     CHECK(until([&] { return row(side_a, "key", "dm:" + bob.uid).value("kind").toString() == "dm" && row(side_b, "key", "dm:" + alice.uid).value("kind").toString() == "dm"; }));

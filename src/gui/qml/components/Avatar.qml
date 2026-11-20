@@ -11,7 +11,9 @@ Item {
     property string hash: ""
     property string tint: ""
     property int size: 40
+    property real radius: width / 2   // round unless said (a Pond's icon on the rail is a rounded square)
     property string url: ""
+    readonly property bool ready: img.status === Image.Ready   // the picture shows, not the letter
 
     width: size
     height: size
@@ -31,7 +33,7 @@ Item {
     Rectangle {
         id: disc
         anchors.fill: parent
-        radius: width / 2
+        radius: av.radius
         // the same name always gets the same colour
         color: av.tint !== "" ? av.tint : Qt.hsla((av.name.length ? av.name.charCodeAt(0) * 37 % 360 : 200) / 360, 0.45, 0.42, 1)
         Label {
@@ -48,10 +50,10 @@ Item {
         source: av.url
         visible: false
         fillMode: Image.PreserveAspectCrop
-        sourceSize: Qt.size(av.size * 2, av.size * 2)
+        sourceSize: Qt.size(av.width * 2, av.height * 2)
         asynchronous: true
     }
-    Rectangle { id: mask; anchors.fill: parent; radius: width / 2; visible: false; layer.enabled: true }
+    Rectangle { id: mask; anchors.fill: parent; radius: av.radius; visible: false; layer.enabled: true }
     MultiEffect {
         anchors.fill: parent
         source: img

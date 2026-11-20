@@ -273,7 +273,7 @@ Pane {
                             Layout.preferredWidth: 40
                             Layout.preferredHeight: msg.grouped ? 1 : 40
                             Layout.alignment: Qt.AlignTop
-                            Avatar { visible: !msg.grouped; name: msg.model.name || ""; tint: msg.model.tint || ""; size: 40 }
+                            Avatar { visible: !msg.grouped; chats: page.chats; name: msg.model.name || ""; hash: msg.model.avatar || ""; tint: msg.model.tint || ""; size: 40 }
                             Label {
                                 visible: msg.grouped && hover.hovered
                                 anchors.horizontalCenter: parent.horizontalCenter

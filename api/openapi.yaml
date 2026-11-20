@@ -455,6 +455,23 @@ paths:
         role there, `409 no_role`.
       requestBody: { content: { application/json: { schema: { type: object, properties: { name: { type: string }, description: { type: string } } } } } }
       responses: { "204": { description: Done } }
+  /api/v1/ponds/{pond}/admin/icon:
+    parameters: [{ $ref: "#/components/parameters/Pond" }]
+    post:
+      tags: [ponds]
+      summary: Set the Pond's icon, or take it away
+      description: |
+        `hash` is a picture this Puddle holds (`POST /api/v1/media/upload`), of at most 1 MiB: the Puddle sends it to the Pond
+        (its `/pond/v1/pictures`), then names it as the icon (`/pond/v1/admin/icon`). `null` leaves the Pond with none
+        (docs/ponds.md, "Pictures").
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [hash], properties: { hash: { oneOf: [{ type: string, pattern: "^[0-9a-f]{64}$" }, { type: "null" }] } } }
+      responses:
+        "204": { description: Done }
+        "404": { description: "`no_picture`: this Puddle does not hold it" }
+        "409": { description: "`too_large` (over 1 MiB), `no_pictures` (a Pond from before icons), `no_role`" }
   /api/v1/ponds/{pond}/admin/channels/create:
     parameters: [{ $ref: "#/components/parameters/Pond" }]
     post:

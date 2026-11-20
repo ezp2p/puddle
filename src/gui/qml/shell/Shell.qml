@@ -364,7 +364,19 @@ Pane {
                         Accessible.role: Accessible.Button
                         Accessible.name: model.name
                         Accessible.onPressAction: shell.openPond(model.id)
+                        // its icon, where it has one and it is here; its initials until then
+                        Avatar {
+                            id: pondPicture
+                            objectName: "pondIcon_" + pondIcon.model.name
+                            anchors.fill: parent
+                            chats: shell.chats
+                            name: pondIcon.model.name
+                            hash: pondIcon.model.icon || ""
+                            radius: pondIcon.radius
+                            visible: hash !== "" && ready
+                        }
                         Label {
+                            visible: !pondPicture.visible
                             anchors.centerIn: parent
                             // the first letter of up to the first three words, as Discord shows a server with no picture
                             text: String(pondIcon.model.name).split(/\s+/).filter(w => w.length).slice(0, 3).map(w => w.charAt(0)).join("")
@@ -502,6 +514,7 @@ Pane {
         id: pondMembers
         PondMembers {
             ponds: shell.ponds
+            chats: shell.chats
             closable: !shell.contextInline
             onCloseRequested: contextDrawer.close()
         }

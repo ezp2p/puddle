@@ -260,7 +260,7 @@ Rectangle {
                                 color: "transparent"
                                 border.width: 2
                                 border.color: person.talking ? Theme.primary : "transparent"
-                                Avatar { anchors.centerIn: parent; chats: bar.chats; name: person.modelData.name; tint: person.modelData.color || ""; size: 20 }
+                                Avatar { anchors.centerIn: parent; chats: bar.chats; name: person.modelData.name; hash: person.modelData.avatar || ""; tint: person.modelData.color || ""; size: 20 }
                             }
                             Label {
                                 text: person.modelData.name

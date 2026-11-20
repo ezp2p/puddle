@@ -9,6 +9,7 @@ Pane {
     id: panel
 
     required property var ponds
+    property var chats: null       // for the members' pictures (Chats.avatarFor)
     property bool closable: false
     signal closeRequested()
 
@@ -48,7 +49,7 @@ Pane {
                 width: ListView.view.width
                 height: 44
                 spacing: 10
-                Avatar { Layout.leftMargin: 8; name: parent.model.name; tint: parent.model.color || ""; size: 32 }
+                Avatar { objectName: "pondMemberAvatar"; Layout.leftMargin: 8; chats: panel.chats; name: parent.model.name; hash: parent.model.avatar || ""; tint: parent.model.color || ""; size: 32 }
                 Label {
                     Layout.fillWidth: !badge.visible
                     elide: Text.ElideRight

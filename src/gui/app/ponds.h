@@ -13,15 +13,17 @@
 // (`version`) whenever that does, so the timer asks for little until something happens.
 class Ponds : public QObject {
     Q_OBJECT
-    Q_PROPERTY(QObject *list READ list CONSTANT)           // the rail: id, name, status, address
-    Q_PROPERTY(QObject *channels READ channels CONSTANT)   // of the open Pond: id, name, topic, kind (text, voice), voice (who is in it: id, name, color, muted, deafened, isMe)
-    Q_PROPERTY(QObject *members READ members CONSTANT)     // of the open Pond: id, name, color, isMe, role
+    Q_PROPERTY(QObject *list READ list CONSTANT)           // the rail: id, name, status, address, icon (a picture's hash, "" for none)
+    Q_PROPERTY(QObject *channels READ channels CONSTANT)   // of the open Pond: id, name, topic, kind (text, voice), voice (who is in it: id, name, color, avatar, muted, deafened, isMe)
+    Q_PROPERTY(QObject *members READ members CONSTANT)     // of the open Pond: id, name, color, avatar, isMe, role
     Q_PROPERTY(QObject *bans READ bans CONSTANT)           // of the open Pond, once loadBans() has asked: member, name, by, byName, reason, ts
-    Q_PROPERTY(QObject *messages READ messages CONSTANT)   // the open channel, oldest first: id, author, name, tint, text, files, ts, mine, grouped, dayStart
+    Q_PROPERTY(QObject *messages READ messages CONSTANT)   // the open channel, oldest first: id, author, name, tint, avatar, text, files, ts, mine, grouped, dayStart
     Q_PROPERTY(QString current READ current NOTIFY currentChanged)            // the open Pond's id, "" for none
     Q_PROPERTY(QString currentName READ currentName NOTIFY currentInfoChanged)
     Q_PROPERTY(QString currentStatus READ currentStatus NOTIFY currentInfoChanged) // connecting, connected, unreachable, removed, not_proven
     Q_PROPERTY(QString currentDescription READ currentDescription NOTIFY currentInfoChanged)
+    Q_PROPERTY(QString currentIcon READ currentIcon NOTIFY currentInfoChanged)  // its icon, a picture's hash; "" for none
+    Q_PROPERTY(bool canIcon READ canIcon NOTIFY currentInfoChanged)             // it has icons (its `features` say `pictures`)
     Q_PROPERTY(QString channel READ channel NOTIFY channelChanged)            // the open channel's id, "" for none
     Q_PROPERTY(QString channelName READ channelName NOTIFY channelChanged)
     Q_PROPERTY(QString channelTopic READ channelTopic NOTIFY channelChanged)
@@ -61,6 +63,8 @@ public:
     QString currentName() const { return info_.value("name").toString(); }
     QString currentStatus() const { return info_.value("status").toString(); }
     QString currentDescription() const { return info_.value("description").toString(); }
+    QString currentIcon() const { return info_.value("icon").toObject().value("hash").toString(); }
+    bool canIcon() const { return info_.value("features").toArray().contains(QStringLiteral("pictures")); }
     QString channel() const { return channel_; }
     QString channelName() const;
     QString channelTopic() const;
@@ -97,11 +101,15 @@ public:
     Q_INVOKABLE QString nameAt(int row) const { return list_.at(row).value("name").toString(); }
     // A member of the open Pond's name, as they chose to appear there (their id's start if they show nothing)
     Q_INVOKABLE QString nameOf(const QString &memberId) const { return people_.value(memberId).value("name").toString(memberId.left(8)); }
+    // ...and their picture's hash there ("" for none)
+    Q_INVOKABLE QString avatarOf(const QString &memberId) const { return people_.value(memberId).value("avatar").toString(); }
 
     // ---- roles (the Pond's docs/design.md, "Roles") ----
     Q_INVOKABLE void answerOffer(bool accept);
     // What an operator or administrator does, in Server Settings. Each says how it went with adminDone or adminFailed.
     Q_INVOKABLE void saveOverview(const QString &name, const QString &description);
+    // The Pond's icon: a picture our Puddle holds (Chats.uploadPicture), or "" to have none
+    Q_INVOKABLE void setIcon(const QString &hash);
     // `kind`: "text" or "voice" (a voice channel, where the Pond has them)
     Q_INVOKABLE void createChannel(const QString &name, const QString &topic, const QString &kind = QStringLiteral("text"));
     Q_INVOKABLE void editChannel(const QString &channelId, const QString &name, const QString &topic);
@@ -152,7 +160,7 @@ private:
     QString current_, channel_, me_;
     QJsonObject info_;
     QHash<QString, QString> lastChannel_;          // pond id -> the channel open there last
-    QHash<QString, QJsonObject> people_;           // member id -> {name, color}
+    QHash<QString, QJsonObject> people_;           // member id -> {name, color, avatar}
     QJsonObject voice_;                            // GET /api/v1/voice's `voice`, or empty
     QHash<QString, QHash<QString, QString>> channelNames_; // pond id -> channel id -> name, of every Pond (for the voice bar)
     QHash<QString, QString> pondNames_;

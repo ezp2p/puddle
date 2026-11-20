@@ -1186,6 +1186,75 @@ int main(int argc, char **argv)
         }
     }
 
+    /* ---- a Pond (docs/ponds.md), only against a real one: PUDDLE_TEST_POND is an invite to it, and PUDDLE_TEST_PONDCTL the
+     * command that runs its pondctl (to give the window's owner a role). Its icon and members' pictures; the screens an
+     * administrator has. ---- */
+    if (const QString invite = qEnvironmentVariable("PUDDLE_TEST_POND"); !invite.isEmpty()) {
+        const QString ctl = qEnvironmentVariable("PUDDLE_TEST_PONDCTL"), shot = qEnvironmentVariable("PUDDLE_SHOT");
+        Ponds &P = *A.pondList(), &PB = *B.pondList();
+        auto picture = [&](Chats &who, const QString &file, char fill) {
+            QFile f(home.path() + "/" + file);
+            QImage img(64, 64, QImage::Format_RGB32);
+            img.fill(fill == 'a' ? QColor("#d9480f") : fill == 'b' ? QColor("#1971c2") : QColor("#2f9e44"));
+            CHECK(img.save(f.fileName(), "PNG"));
+            QSignalSpy up(&who, &Chats::pictureUploaded);
+            who.uploadPicture(QUrl::fromLocalFile(f.fileName()), file);
+            CHECK(until([&] { return up.count() == 1; }, 5000));
+            return up.count() ? up.at(0).at(1).toString() : QString();
+        };
+        const QString mine = picture(A, "me.png", 'a'), bobs = picture(B, "bob.png", 'b'), icon = picture(A, "icon.png", 'c');
+        A.saveProfile("pondface", { { "display_name", "Ann" }, { "blurb", "Here for the frogs" }, { "avatar", mine } }, true);
+        B.saveProfile("main", { { "display_name", "Bob" }, { "avatar", bobs } }, false);
+        QSignalSpy joinedA(&P, &Ponds::joined), joinedB(&PB, &Ponds::joined), failedA(&P, &Ponds::failed);
+        settle(500);
+        PB.join(invite, "main");
+        CHECK(until([&] { return joinedB.count() == 1; }, 15000));
+        P.join(invite, "pondface");
+        CHECK(until([&] { return joinedA.count() == 1; }, 15000));
+        if (failedA.count())
+            fprintf(stderr, "joining: %s\n", failedA.at(0).at(0).toString().toUtf8().constData());
+        const QString pondId = joinedA.count() ? joinedA.at(0).at(0).toString() : QString();
+        CHECK(until([&] { return find("pondPage") != nullptr && P.current() == pondId; }, 5000)); /* joining opens it */
+        auto *members = static_cast<JsonListModel *>(P.members());
+        CHECK(until([&] { return row(members, "name", "Bob").value("avatar").toString() == bobs; }, 15000));
+        /* Bob's picture reached our Puddle through the Pond, and shows in the member list */
+        CHECK(until([&] {
+            for (QQuickItem *i : all("pondMemberAvatar"))
+                if (i->property("hash").toString() == bobs && i->property("ready").toBool())
+                    return true;
+            return false;
+        }, 20000));
+
+        /* the owner is made an operator, from pondctl: Server Settings, where the icon is set */
+        if (!ctl.isEmpty()) {
+            CHECK(system((ctl + " member offer " + backend.myId() + " operator --yes > /dev/null").toUtf8().constData()) == 0);
+            CHECK(until([&] { return P.currentOffer() == "operator"; }, 10000));
+            P.answerOffer(true);
+            CHECK(until([&] { return P.canAdmin(); }, 10000));
+            CHECK(P.canIcon());
+            P.setIcon(icon);
+            CHECK(until([&] { return row(static_cast<JsonListModel *>(PB.list()), "id", pondId).value("icon").toString() == icon; }, 15000));
+            CHECK(until([&] { QQuickItem *i = find("pondIcon_" + P.currentName()); return i && i->property("ready").toBool(); }, 15000));
+            if (!shot.isEmpty())
+                win->grabWindow().save(shot + "-pond.png");
+            CHECK(clickName("pondHeader"));
+            CHECK(clickName("serverSettings"));
+            CHECK(until([&] { QQuickItem *i = find("pondSettingsIcon"); return i && i->property("ready").toBool(); }, 5000));
+            CHECK(find("changePondIcon") && find("removePondIcon") && find("removePondIcon")->isEnabled());
+            settle(300);
+            if (!shot.isEmpty())
+                win->grabWindow().save(shot + "-pond-settings.png");
+            CHECK(click(find("removePondIcon")));
+            CHECK(until([&] { return P.currentIcon().isEmpty(); }, 10000));
+            CHECK(until([&] { return find("pondIcon_" + P.currentName()) == nullptr; }, 5000)); /* its initials again */
+            key(Qt::Key_Escape);
+            settle(300);
+        }
+        P.leave(pondId);
+        PB.leave(pondId);
+        CHECK(until([&] { return static_cast<JsonListModel *>(P.list())->rowCount() == 0; }, 10000));
+    }
+
     /* ---- a phone, let in from the window (docs/identity.md, "Devices") ---- */
     {
         const QString shot = qEnvironmentVariable("PUDDLE_SHOT");

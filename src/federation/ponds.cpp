@@ -12,6 +12,7 @@
 #include "platform/clock.h"
 #include "platform/fsutil.h"
 #include "storage/files.h"
+#include "storage/media.h"
 
 #include <openssl/rand.h>
 
@@ -96,19 +97,29 @@ static std::string chain_json(puddle_ctx *ctx)
     return n ? buf.substr(0, n) : "";
 }
 
-/* {"profile": ...}: what the owner chose for "pond:<id>" (`place`), or null. Pictures stay out: a Pond has no way to fetch them. */
-static void write_profile(puddle_ctx *ctx, const char *place, const char *profile_id, puddle_jw *w)
+/* The profile the owner chose for "pond:<id>" (`place`), or `profile_id`: 0, or -1 for none. */
+static int profile_for(puddle_ctx *ctx, const char *place, const char *profile_id, puddle_profile *p)
+{
+    if (!ctx->profiles)
+        return -1;
+    return (profile_id ? puddle_profiles_get(ctx->profiles, profile_id, p) : puddle_profile_for_place(ctx->profiles, ctx->assignments, place, p)) == 0
+               ? 0
+               : -1;
+}
+
+/* {"profile": ...}: what the owner chose for "pond:<id>" (`place`), or null. Of its pictures, only those in `sent` go: the ones
+ * the Pond has been sent (docs/ponds.md, "Pictures"); the rest it could not show. */
+static void write_profile(puddle_ctx *ctx, const char *place, const char *profile_id, puddle_jw *w, const std::set<std::string> &sent = {})
 {
     puddle_profile p;
-    int have = !ctx->profiles ? 1
-               : profile_id   ? puddle_profiles_get(ctx->profiles, profile_id, &p)
-                              : puddle_profile_for_place(ctx->profiles, ctx->assignments, place, &p);
     puddle_jw_key(w, "profile");
-    if (have != 0) {
+    if (profile_for(ctx, place, profile_id, &p) != 0) {
         puddle_jw_null(w);
         return;
     }
-    p.avatar.hash[0] = p.banner.hash[0] = p.background.hash[0] = '\0';
+    for (puddle_media *m : {&p.avatar, &p.banner, &p.background})
+        if (!sent.count(m->hash))
+            m->hash[0] = '\0';
     puddle_jw_object(w);
     puddle_profile_write_fields(w, &p);
     puddle_jw_end_object(w);
@@ -262,6 +273,35 @@ static Outcome sync_pond(puddle_ctx *ctx, Follower *f, bool reset)
     return o == GOT ? fill(ctx, f) : o;
 }
 
+/* Send the Pond the pictures of the profile it is shown, so its members can fetch them (docs/ponds.md, "Pictures"): the hashes
+ * it has. A Pond without `pictures` gets none, and a picture over what a Pond keeps is left out. */
+static std::set<std::string> send_pictures(puddle_ctx *ctx, Follower *f, const char *place)
+{
+    std::set<std::string> sent;
+    puddle_profile p;
+    if (!ctx->ponds || !puddle_ponds_has_feature(ctx->ponds, f->id.c_str(), "pictures") || profile_for(ctx, place, NULL, &p) != 0)
+        return sent;
+    for (const puddle_media *m : {&p.avatar, &p.banner, &p.background}) {
+        if (!m->hash[0] || sent.count(m->hash))
+            continue;
+        unsigned char *bytes = NULL;
+        size_t len = 0;
+        char mime[40];
+        if (m->size > PUDDLE_POND_PICTURE_MAX || puddle_media_read(ctx->config->data_dir, m->hash, PUDDLE_POND_PICTURE_MAX, &bytes, &len, mime) != 0) {
+            puddle_log(PUDDLE_LOG_INFO, "pond %.12s…: picture %.12s… is over the %d KiB a Pond keeps (or not here); left out", f->id.c_str(),
+                       m->hash, PUDDLE_POND_PICTURE_MAX >> 10);
+            continue;
+        }
+        puddle_net_reply r;
+        if (follow_call(ctx, f, "POST", "/pond/v1/pictures", std::string((const char *)bytes, len), 4096, 30, &r) == GOT && r.status == 200)
+            sent.insert(m->hash);
+        puddle_net_reply_free(&r);
+        free(bytes);
+    }
+    puddle_profile_free(&p);
+    return sent;
+}
+
 /* What the owner asked to be said to this Pond meanwhile. */
 static void say_what_waits(puddle_ctx *ctx, Follower *f)
 {
@@ -281,12 +321,13 @@ static void say_what_waits(puddle_ctx *ctx, Follower *f)
     }
     if (profile) {
         char place[PUDDLE_PLACE_MAX];
+        puddle_place_pond(f->id.c_str(), place);
+        std::set<std::string> sent = send_pictures(ctx, f, place);
         std::string body(PUDDLE_PROFILE_JSON_MAX + 64, '\0');
         puddle_jw w;
         puddle_jw_init(&w, body.data(), body.size());
         puddle_jw_object(&w);
-        puddle_place_pond(f->id.c_str(), place);
-        write_profile(ctx, place, NULL, &w);
+        write_profile(ctx, place, NULL, &w, sent);
         puddle_jw_end_object(&w);
         size_t n = puddle_jw_finish(&w);
         if (n && follow_call(ctx, f, "POST", "/pond/v1/profile", body.substr(0, n), 4096, 20, &r) == GOT) {
@@ -494,9 +535,56 @@ static void fetch_round(puddle_ctx *ctx, Follower *f)
     }
 }
 
+/* The pictures the Pond shows us (its icon, its members' profile pictures) that are not here yet: fetched and kept with friends'
+ * pictures, checked against what named them (docs/ponds.md, "Pictures"). */
+static void fetch_pictures(puddle_ctx *ctx, Follower *f)
+{
+    struct Ref {
+        std::string hash, mime;
+        int64_t size;
+    };
+    std::vector<Ref> want;
+    if (!puddle_ponds_has_feature(ctx->ponds, f->id.c_str(), "pictures"))
+        return;
+    puddle_ponds_pictures(
+        ctx->ponds, f->id.c_str(),
+        [](void *u, const char *hash, const char *mime, int64_t size) {
+            auto *w = (std::vector<Ref> *)u;
+            w->push_back({hash, mime, size});
+            return 0;
+        },
+        &want);
+    bool got = false;
+    for (auto &p : want) {
+        if (puddle_media_have(ctx->config->data_dir, p.hash.c_str()))
+            continue;
+        {
+            std::lock_guard<std::mutex> g(f->mu);
+            if (f->stopping)
+                return;
+        }
+        puddle_net_reply r;
+        Outcome o = follow_call(ctx, f, "GET", "/pond/v1/pictures/" + p.hash, "", (size_t)p.size + 4096, 30, &r, true);
+        char err[200];
+        if (o == GOT && r.status == 200) {
+            if (puddle_media_store(ctx->config->data_dir, p.hash.c_str(), (const unsigned char *)r.body, r.body_len, (uint64_t)p.size,
+                                   p.mime.c_str(), err, sizeof err) == 0)
+                got = true;
+            else
+                puddle_log(PUDDLE_LOG_WARN, "pond %.12s…: picture %.12s… left out: %s", f->id.c_str(), p.hash.c_str(), err);
+        }
+        puddle_net_reply_free(&r);
+        if (o == AWAY || o == CERT)
+            break; /* the Pond is away: the next look tries again */
+    }
+    if (got)
+        puddle_ponds_touch(ctx->ponds, f->id.c_str()); /* the app looks again, and finds them */
+}
+
 static void fetch_loop(puddle_ctx *ctx, Follower *f)
 {
     while (true) {
+        fetch_pictures(ctx, f);
         if (ctx->files)
             fetch_round(ctx, f);
         std::unique_lock<std::mutex> lk(f->mu);
@@ -734,6 +822,9 @@ int puddle_pond_join(puddle_ctx *ctx, const puddle_link *link, const char *profi
     puddle_log(PUDDLE_LOG_INFO, "joined pond %.12s… at %s", out_id, link->address.address);
     if (ctx->pond_followers)
         start_one(ctx->pond_followers, out_id);
+    /* a member can send pictures only once it is one: the profile goes again, with them (docs/ponds.md, "Pictures") */
+    if (profile_id && puddle_ponds_has_feature(ctx->ponds, out_id, "pictures"))
+        ask_follower(ctx, out_id, true);
     return 0;
 }
 
@@ -936,7 +1027,7 @@ int puddle_pond_fetch(puddle_ctx *ctx, const char *pond, int64_t channel, int64_
 int puddle_pond_admin(puddle_ctx *ctx, const char *pond, const char *method, const char *target, const char *body, size_t len,
                       int *status, char **reply, size_t *reply_len, const char **code)
 {
-    if (strncmp(target, "/pond/v1/admin/", 15) != 0 && strcmp(target, "/pond/v1/roles/answer") != 0) {
+    if (strncmp(target, "/pond/v1/admin/", 15) != 0 && strcmp(target, "/pond/v1/roles/answer") != 0 && strcmp(target, "/pond/v1/pictures") != 0) {
         *code = "failed";
         return -1;
     }

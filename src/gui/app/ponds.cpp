@@ -9,10 +9,10 @@
 Ponds::Ponds(ApiClient *api, QObject *parent)
     : QObject(parent),
       api_(api),
-      list_({ "id", "name", "status", "address" }),
+      list_({ "id", "name", "status", "address", "icon" }),
       channels_({ "id", "name", "topic", "kind", "voice" }),
-      members_({ "id", "name", "color", "isMe", "role" }),
-      messages_({ "id", "author", "name", "tint", "text", "files", "ts", "mine", "grouped", "dayStart" }),
+      members_({ "id", "name", "color", "avatar", "isMe", "role" }),
+      messages_({ "id", "author", "name", "tint", "avatar", "text", "files", "ts", "mine", "grouped", "dayStart" }),
       bans_({ "member", "name", "by", "byName", "reason", "ts" }, nullptr, QStringLiteral("member"))
 {
     timer_.setInterval(1000);
@@ -81,6 +81,7 @@ QJsonObject Ponds::channelRow(const QJsonObject &c) const
         const QString mid = vo.value("member").toString();
         const QJsonObject who = people_.value(mid);
         in.append(QJsonObject{ { "id", mid }, { "name", who.value("name").toString(mid.left(8)) }, { "color", who.value("color") },
+                               { "avatar", who.value("avatar").toString() },
                                { "muted", vo.value("muted") }, { "deafened", vo.value("deafened") }, { "isMe", mid == me_ } });
     }
     return { { "id", QString::number(qint64(c.value("id").toDouble())) }, { "name", c.value("name") }, { "topic", c.value("topic") },
@@ -123,7 +124,8 @@ void Ponds::refresh()
             }
             voiceIn_.insert(po.value("id").toString(), in);
             pondNames_.insert(po.value("id").toString(), po.value("name").toString());
-            rows.append({ { "id", po.value("id") }, { "name", po.value("name") }, { "status", po.value("status") }, { "address", po.value("address") } });
+            rows.append({ { "id", po.value("id") }, { "name", po.value("name") }, { "status", po.value("status") }, { "address", po.value("address") },
+                          { "icon", po.value("icon").toObject().value("hash").toString() } });
             if (po.value("id").toString() == current_)
                 stillThere = true;
         }
@@ -158,8 +160,9 @@ void Ponds::refreshPond()
                 name = mid.left(8);
             const QJsonArray colors = prof.value("color").toObject().value("colors").toArray();
             const QString color = colors.isEmpty() ? QString() : colors.first().toString();
-            people_.insert(mid, { { "name", name }, { "color", color } });
-            members.append({ { "id", mid }, { "name", name }, { "color", color }, { "isMe", mid == me_ },
+            const QString avatar = prof.value("avatar").toObject().value("hash").toString();
+            people_.insert(mid, { { "name", name }, { "color", color }, { "avatar", avatar } });
+            members.append({ { "id", mid }, { "name", name }, { "color", color }, { "avatar", avatar }, { "isMe", mid == me_ },
                              { "role", mo.value("role").toString(QStringLiteral("member")) } });
         }
         // operators first, then administrators, then everyone else; by name within each
@@ -247,6 +250,7 @@ void Ponds::rebuildMessages()
                        { "author", author },
                        { "name", !who.value("name").toString().isEmpty() ? who.value("name").toString() : mine ? tr("You") : author.left(8) },
                        { "tint", who.value("color").toString() },
+                       { "avatar", who.value("avatar").toString() },
                        { "text", m.value("text") },
                        { "files", m.value("files") },
                        { "ts", double(ts) },
@@ -308,6 +312,8 @@ void Ponds::admin(const QString &path, const QJsonObject &body, const QString &d
                              : code == QLatin1String("no_role")       ? tr("You no longer have a role in this Pond.")
                              : code == QLatin1String("outranked")     ? tr("They are your rank or above.")
                              : code == QLatin1String("not_yourself")  ? tr("You can't do that to yourself.")
+                             : code == QLatin1String("too_large")     ? tr("That picture is too large for a Pond: the most is 1 MiB.")
+                             : code == QLatin1String("no_pictures")   ? tr("This Pond is too old to have an icon.")
                                                                       : why(status, json, doing));
             return;
         }
@@ -321,6 +327,13 @@ void Ponds::admin(const QString &path, const QJsonObject &body, const QString &d
 void Ponds::saveOverview(const QString &name, const QString &description)
 {
     admin(QStringLiteral("pond"), { { "name", name.trimmed() }, { "description", description.trimmed() } }, tr("Saved."), tr("save that"));
+}
+
+void Ponds::setIcon(const QString &hash)
+{
+    QJsonObject body;
+    body.insert("hash", hash.isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue(hash));
+    admin(QStringLiteral("icon"), body, hash.isEmpty() ? tr("Icon removed.") : tr("Icon changed."), tr("change the icon"));
 }
 
 void Ponds::createChannel(const QString &name, const QString &topic, const QString &kind)

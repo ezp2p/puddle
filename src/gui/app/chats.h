@@ -195,7 +195,8 @@ public:
     Q_INVOKABLE static QString sizeText(double bytes);   // "3.2 MB"
     void setFileCacheDir(const QString &dir) { fileCacheDir_ = dir; }
 
-    // The picture with this hash as a file: its URL, or "" while it is being fetched (then avatarReady is emitted).
+    // The picture with this hash as a file: its URL, or "" while it is being fetched (then avatarReady is emitted). One our
+    // Puddle does not hold yet (a friend's or a Pond member's, still on its way) is asked for again until it is there.
     Q_INVOKABLE QString avatarFor(const QString &hash);
     void setCacheDir(const QString &dir) { cacheDir_ = dir; }
 
@@ -281,6 +282,10 @@ private:
     QSet<QString> downloading_;
     QString cachedPath(const QString &id, const QString &name) const;
     QSet<QString> fetching_;
+    QHash<QString, qint64> missing_;   // pictures our Puddle did not have yet -> when first asked for (ms)
+    QTimer missingTimer_;              // asks for them again
+    qint64 missingSlow_ = 0;           // when the slow round last went
+    void askAgain();
     QString current_;
     QHash<QString, QString> names_, avatars_, colors_;
     QHash<QString, int> unread_;

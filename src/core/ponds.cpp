@@ -16,6 +16,7 @@
 #include <deque>
 #include <map>
 #include <mutex>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -66,6 +67,7 @@ struct Pond {
     int64_t files_max = -1;            /* the largest file it takes; 0 turned off, -1 it does not say (a Pond without files) */
     int64_t offer = 0;                 /* a role it offers us, waiting for the owner's answer; 0 for none */
     std::string offer_role;
+    std::string icon;                  /* its icon as {hash, mime, size}, cleaned; "" for none (protocol 6, feature `pictures`) */
     std::vector<std::string> features;
     std::string key;      /* the Pond's public key, hex, as its /info says; its id is base32(SHA-256(key)) */
     std::string seal_key; /* its sealing key, hex (spec/09): what every request to it is sealed to */
@@ -244,6 +246,30 @@ static void parse_files_max(puddle_span pond, Pond &pd)
         pd.files_max = -1;
 }
 
+/* A picture as a Pond names one, {hash, mime, size} (the Pond's docs/design.md, "Pictures"), rewritten cleaned into `out`; false
+ * if it is not one: a hash that is not 64 lower-case hex, a kind of image we do not take, or a size of nothing or over 1 MiB. */
+static bool clean_picture(puddle_span v, std::string &out)
+{
+    std::string hash, mime;
+    int64_t size;
+    if (!v.len || *v.p != '{' || !get_text(v, "hash", 64, 0, hash) || hash.size() != 64 ||
+        !std::all_of(hash.begin(), hash.end(), [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); }) ||
+        !get_text(v, "mime", 16, 0, mime) || !get_int(v, "size", &size) || size < 1 || size > PUDDLE_POND_PICTURE_MAX)
+        return false;
+    if (mime != "image/png" && mime != "image/jpeg" && mime != "image/gif" && mime != "image/webp")
+        return false;
+    out = "{\"hash\":\"" + hash + "\",\"mime\":\"" + mime + "\",\"size\":" + std::to_string(size) + "}";
+    return true;
+}
+
+/* The pond's "icon": a picture, or null or missing for none. */
+static void parse_icon(puddle_span pond, Pond &pd)
+{
+    puddle_span v;
+    if (!member(pond, "icon", &v) || !clean_picture(v, pd.icon))
+        pd.icon.clear();
+}
+
 /* {"id", "profile", "joined"}: the profile is cleaned, or dropped if it can't be. */
 static bool parse_member(puddle_ponds *p, puddle_span v, std::string &id, Member &m)
 {
@@ -317,6 +343,7 @@ static bool parse_info(puddle_ponds *p, const char *json, size_t len, Pond &pd, 
     }
     parse_protocol(all, pd);
     parse_files_max(pond, pd);
+    parse_icon(pond, pd);
     parse_offer(all, pd);
     pd.voice.clear();
     puddle_span voice;
@@ -520,6 +547,10 @@ static void save_pond(puddle_ponds *p, const Pond &pd)
         if (!pd.seal_key.empty())
             puddle_jw_str(w, "seal_key", pd.seal_key.c_str());
         write_files_max(w, pd);
+        if (!pd.icon.empty()) {
+            puddle_jw_key(w, "icon");
+            puddle_jw_raw(w, pd.icon.c_str(), pd.icon.size());
+        }
         puddle_jw_end_object(w);
         puddle_jw_key(w, "me");
         auto me = pd.members.find(pd.me);
@@ -760,6 +791,7 @@ int puddle_ponds_info(puddle_ponds *p, const char *id, const char *info, size_t 
     pd.protocol = fresh.protocol;
     pd.features = std::move(fresh.features);
     pd.files_max = fresh.files_max;
+    pd.icon = fresh.icon;
     pd.offer = fresh.offer, pd.offer_role = fresh.offer_role;
     pd.voice = std::move(fresh.voice); /* who is in voice now: /info always says it whole */
     if (reset) /* otherwise the events since our cursor are still to come, and say what changed */
@@ -965,6 +997,7 @@ int puddle_ponds_events(puddle_ponds *p, const char *id, const char *json, size_
             get_text(data, "name", NAME_MAX_CHARS, 0, pd.name);
             get_text(data, "description", DESCRIPTION_MAX_CHARS, 1, pd.description);
             parse_files_max(data, pd);
+            parse_icon(data, pd);
             pond_changed = true;
         }
     }
@@ -1051,6 +1084,11 @@ static void write_summary(puddle_jw *w, const Pond &pd)
     puddle_jw_str(w, "status", pd.status.c_str());
     write_protocol(w, pd);
     write_files_max(w, pd);
+    puddle_jw_key(w, "icon");
+    if (pd.icon.empty())
+        puddle_jw_null(w);
+    else
+        puddle_jw_raw(w, pd.icon.c_str(), pd.icon.size());
     auto me = pd.members.find(pd.me);
     puddle_jw_str(w, "role", me != pd.members.end() ? me->second.role.c_str() : "member");
     write_offer(w, pd);
@@ -1309,6 +1347,38 @@ int puddle_ponds_message_file(puddle_ponds *p, const char *id, int64_t channel, 
                     return get_int(item, "size", size) ? 0 : -1;
         }
     return 1;
+}
+
+int puddle_ponds_pictures(puddle_ponds *p, const char *id, puddle_pond_picture_fn fn, void *user)
+{
+    std::vector<std::string> refs; /* each a cleaned {hash, mime, size} */
+    {
+        std::lock_guard<std::mutex> g(p->mu);
+        auto it = p->ponds.find(id);
+        if (it == p->ponds.end())
+            return -1;
+        if (!it->second.icon.empty())
+            refs.push_back(it->second.icon);
+        for (auto &[mid, m] : it->second.members) {
+            puddle_span prof = {m.profile.data(), m.profile.size()}, v;
+            std::string ref;
+            for (const char *slot : {"avatar", "banner", "background"})
+                if (!m.profile.empty() && member(prof, slot, &v) && clean_picture(v, ref))
+                    refs.push_back(ref);
+        }
+    }
+    std::set<std::string> seen;
+    for (auto &r : refs) {
+        puddle_span v = {r.data(), r.size()};
+        std::string hash, mime;
+        int64_t size = 0;
+        get_text(v, "hash", 64, 0, hash);
+        get_text(v, "mime", 16, 0, mime);
+        get_int(v, "size", &size);
+        if (seen.insert(hash).second && fn(user, hash.c_str(), mime.c_str(), size) != 0)
+            break;
+    }
+    return 0;
 }
 
 void puddle_ponds_touch(puddle_ponds *p, const char *id)

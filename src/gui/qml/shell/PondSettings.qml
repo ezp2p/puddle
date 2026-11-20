@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Dialogs
 import "../components"
 import "../theme"
 
@@ -20,6 +21,26 @@ Popup {
     property bool statusBad: false
     function say(text, bad) { status = text; statusBad = bad; statusTimer.restart() }
     Timer { id: statusTimer; interval: 5000; onTriggered: settings.status = "" }
+    // the icon: a picture is sent to our Puddle first (as for a profile), then named as the Pond's
+    property bool iconBusy: false
+    FileDialog {
+        id: iconPicker
+        title: qsTr("Choose an icon")
+        nameFilters: [qsTr("Pictures (*.png *.jpg *.jpeg *.gif *.webp)")]
+        onAccepted: { settings.iconBusy = true; settings.chats.uploadPicture(selectedFile, "pond-icon") }
+    }
+    Connections {
+        target: settings.chats
+        function onPictureUploaded(slot, hash, error) {
+            if (slot !== "pond-icon")
+                return
+            settings.iconBusy = false
+            if (error !== "")
+                settings.say(error, true)
+            else
+                settings.ponds.setIcon(hash)
+        }
+    }
     Connections {
         target: settings.ponds
         function onAdminDone(what) { if (settings.opened) settings.say(what, false) }
@@ -176,6 +197,57 @@ Popup {
                         spacing: 16
                         function reset() { nameField.text = settings.ponds.currentName; descField.text = settings.ponds.currentDescription }
                         readonly property bool changed: nameField.text.trim() !== settings.ponds.currentName || descField.text.trim() !== settings.ponds.currentDescription
+                        SettingsGroup {
+                            title: qsTr("Icon")
+                            Layout.fillWidth: true
+                            visible: settings.ponds.canIcon
+                            RowLayout {
+                                spacing: 16
+                                Rectangle {
+                                    width: 64; height: 64; radius: 20
+                                    color: Theme.tint(Theme.text, Theme.selected)
+                                    Avatar {
+                                        id: iconNow
+                                        objectName: "pondSettingsIcon"
+                                        anchors.fill: parent
+                                        chats: settings.chats
+                                        name: settings.ponds.currentName
+                                        hash: settings.ponds.currentIcon
+                                        radius: parent.radius
+                                        visible: hash !== "" && ready
+                                    }
+                                    Label {
+                                        visible: !iconNow.visible
+                                        anchors.centerIn: parent
+                                        text: String(settings.ponds.currentName).split(/\s+/).filter(w => w.length).slice(0, 3).map(w => w.charAt(0)).join("")
+                                        font.bold: true; font.pixelSize: 20
+                                    }
+                                }
+                                ColumnLayout {
+                                    spacing: 6
+                                    Label {
+                                        text: qsTr("Shown on the Pond's button for every member. A PNG, JPEG, GIF or WebP of at most 1 MiB; square works best.")
+                                        wrapMode: Text.Wrap; opacity: 0.7; font.pixelSize: 12
+                                        Layout.fillWidth: true; Layout.maximumWidth: 360
+                                    }
+                                    RowLayout {
+                                        spacing: 8
+                                        PrimaryButton {
+                                            objectName: "changePondIcon"
+                                            text: settings.iconBusy ? qsTr("Sending…") : qsTr("Change icon")
+                                            enabled: !settings.iconBusy
+                                            onClicked: iconPicker.open()
+                                        }
+                                        Button {
+                                            objectName: "removePondIcon"
+                                            text: qsTr("Remove")
+                                            enabled: settings.ponds.currentIcon !== "" && !settings.iconBusy
+                                            onClicked: settings.ponds.setIcon("")
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         SettingsGroup {
                             title: qsTr("Pond")
                             Layout.fillWidth: true
@@ -344,7 +416,7 @@ Popup {
                                     RowLayout {
                                         Layout.fillWidth: true
                                         spacing: 10
-                                        Avatar { name: mRow.model.name; tint: mRow.model.color || ""; size: 32 }
+                                        Avatar { chats: settings.chats; name: mRow.model.name; hash: mRow.model.avatar || ""; tint: mRow.model.color || ""; size: 32 }
                                         ColumnLayout {
                                             spacing: 0
                                             Layout.fillWidth: true

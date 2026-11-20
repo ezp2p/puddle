@@ -52,7 +52,8 @@ Pond.
 
 What the owner changes is carried by the same thread, which is woken to say it:
 
-- a different profile for the Pond (`POST /pond/v1/profile`, without pictures, which a Pond has no way to fetch);
+- a different profile for the Pond (`POST /pond/v1/profile`), with its pictures sent first where the Pond takes them (see
+  "Pictures");
 - new keys after a roll (`POST /pond/v1/keys`).
 
 ## Proving who answers
@@ -128,6 +129,30 @@ the store. When a file arrives the Pond's `version` changes, so the app looks ag
 `files.auto_download` without being asked. A busy Pond can still mean many small files a day; this is the cost of
 not waiting on downloads, and why only the kept messages' files are fetched by themselves.
 
+## Pictures
+
+A Pond with the feature `pictures` (protocol 6; the Pond's design, "Pictures") keeps small pictures by their SHA-256: its
+icon, and the pictures in its members' profiles. That hash is the one a profile already names a picture by, so a Pond
+member's picture is kept and shown exactly as a friend's is (`docs/profiles.md`): in `<data_dir>/media/<hash>`, served to
+the app by `GET /api/v1/media?hash=`.
+
+- **Ours.** Whenever the follower shows the Pond our profile (after joining, when the owner chooses another profile, or edits
+  the one it shows), it first sends each of its pictures (`POST /pond/v1/pictures`, the bytes) and names only those the Pond
+  took. A picture over 1 MiB, what a Pond keeps, is left out with a line in the log; so is every picture for a Pond without
+  `pictures`. Joining sends the profile without pictures (we are not a member until it is answered), and the follower then
+  sends it again with them.
+- **Theirs, and the icon.** The fetcher (see "Files") first fetches every picture the Pond shows us that is not here: the
+  icon (`pond.icon` in `/info` and the `pond` event) and the avatar, banner and background of each member's profile, from
+  `GET /pond/v1/pictures/{hash}`. Each is checked against what named it (hash, size, the kind of image from its own first
+  bytes) before it is kept. Then the Pond's `version` moves on, so the app looks again.
+- **Setting the icon.** An operator or administrator chooses a picture in Server Settings, Overview. The app uploads it to
+  our Puddle (`POST /api/v1/media/upload`), then `POST /api/v1/ponds/{pond}/admin/icon {hash}`: the Puddle sends the
+  picture to the Pond and names it (`/pond/v1/admin/icon`). `{hash: null}` takes it away. The owner's Ponds carry it as
+  `icon` (`{hash, mime, size}` or null).
+
+In the window, the rail shows a Pond's icon in place of its initials once the picture is here, and members' pictures show in
+the member list, beside their messages and in voice channels.
+
 ## Roles
 
 A Pond has operators and administrators who run it from the app (the Pond's design, "Roles"). The Puddle's part:
@@ -182,6 +207,7 @@ Leaving deletes the folder.
 | `POST /api/v1/ponds/{pond}/leave` | Tells the Pond if it can be reached, and forgets it either way |
 | `POST /api/v1/ponds/{pond}/offer/accept`, `/offer/decline` | Answer the role the Pond offers (`404 no_offer` if none): `{role}` |
 | `POST /api/v1/ponds/{pond}/admin/pond` | `{name?, description?}` |
+| `POST /api/v1/ponds/{pond}/admin/icon` | `{hash}`: a picture this Puddle holds, sent to the Pond and made its icon; `null` for none |
 | `POST /api/v1/ponds/{pond}/admin/channels/create` | `{name, topic?}` |
 | `POST /api/v1/ponds/{pond}/admin/channels/{channel}/edit`, `/delete` | `{name?, topic?}` for edit |
 | `POST /api/v1/ponds/{pond}/admin/members/{member}/remove`, `/ban` | `{reason?}` for a ban |
@@ -189,7 +215,7 @@ Leaving deletes the folder.
 | `POST /api/v1/ponds/{pond}/admin/bans/{member}/unban` | |
 
 Errors: `no_pond`, `no_channel` and `no_profile` are `404`. `bad_text` is `400`. `slow_down` is `429`.
-`invite_refused`, `removed`, `no_file`, `files_off`, `too_large` and `no_role` are `409`. The admin routes pass on
+`invite_refused`, `removed`, `no_file`, `files_off`, `too_large`, `no_pictures` and `no_role` are `409`. `no_picture` is `404`. The admin routes pass on
 what the Pond says: `204` when done, `400` with a `message` to show, `404 no_channel`, `409 outranked` or `not_yourself`. `unreachable`, `not_a_pond`, `certificate_changed`, `not_proven` and `failed` are `502`.
 
 ## Voice channels
@@ -247,7 +273,8 @@ pond repository's `e2e_test` (two real Puddles in a real Pond's voice channel).
 
 ## In the app
 
-The rail at the left of the window shows a round icon for each Pond (its initials), then a **+** to join one. Opening a
+The rail at the left of the window shows a round button for each Pond (its icon, or its initials when it has none), then a
+**+** to join one. Opening a
 Pond replaces the conversation list with its channels. The name at the top has a menu to choose how you appear there,
 or to leave. The page is the open channel. The right-hand panel lists the members. A Pond that can't be reached or has
 removed us has a mark on its icon and a banner over its channel.
