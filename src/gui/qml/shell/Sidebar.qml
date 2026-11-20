@@ -29,7 +29,7 @@ Rectangle {
         const rows = []
         for (let k = 0; k < n; k++) {
             const kind = chats.sidebarKindAt(k)
-            if (kind === "dm" || kind === "group") {
+            if (kind === "dm" || kind === "group" || kind === "pond_dm") {
                 rows.push(k)
                 if (chats.sidebarIdAt(k) === selectedId) i = rows.length - 1
             }
@@ -89,9 +89,9 @@ Rectangle {
                     width: cell.width
                     model: cell.model
                     chats: bar.chats
-                    selected: (model.kind === "dm" || model.kind === "group") && bar.selectedId === model.id
+                    selected: (model.kind === "dm" || model.kind === "group" || model.kind === "pond_dm") && bar.selectedId === model.id
                     onClicked: {
-                        if (model.kind === "dm" || model.kind === "group")
+                        if (model.kind === "dm" || model.kind === "group" || model.kind === "pond_dm")
                             bar.openChat(model.id, model.kind)
                     }
                     onMenuRequested: (from, x, y) => convMenu.openFor(from, x, y, { id: model.id, kind: model.kind, name: model.name })

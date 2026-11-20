@@ -1,19 +1,26 @@
 $schema: https://json-schema.org/draft/2020-12/schema
 title: Conversation
 description: |
-  A DM or a group chat. GET /api/v1/conversations/{conversation}. The list (GET /api/v1/conversations) has every DM with
-  messages in it and every group the owner is in, newest activity first. One on its own can be asked for by id for any
+  A DM, a group chat, or a direct message through a Pond with one of its members (`pond_dm`, docs/pond-dms.md). GET
+  /api/v1/conversations/{conversation}. The list (GET /api/v1/conversations) has every DM with messages in it, every group
+  the owner is in, and every conversation through a Pond with messages or a friend offer, newest activity first. One on its own can be asked for by id for any
   friend, and for a group whatever the owner's standing in it.
 type: object
 required: [id, kind, name, unread, sort_ts]
 properties:
-  id: { type: string, description: "The other person's UserId for a DM, the ChatId for a group" }
-  kind: { type: string, enum: [dm, group] }
-  name: { type: string, description: "The other person's display name for a DM, the group's name for a group" }
+  id: { type: string, description: "The other person's UserId for a DM, the ChatId for a group or a pond_dm" }
+  kind: { type: string, enum: [dm, group, pond_dm] }
+  name: { type: string, description: "The other person's display name for a DM or a pond_dm (as they appear in that Pond), the group's name for a group" }
   unread: { type: integer, minimum: 0, description: Messages that arrived after the owner last read it }
   sort_ts: { $ref: "../wire/ids.yaml#/$defs/Timestamp", description: "What the list is ordered by: the last message, or when a group was made if nothing has been said" }
   last_message: { $ref: "message_preview.yaml" }
-  recipient: { $ref: "partial_user.yaml", description: "dm only: the other person" }
+  recipient: { $ref: "partial_user.yaml", description: "dm and pond_dm: the other person (for a pond_dm, as they appear in that Pond)" }
+  pond: { type: object, properties: { id: { type: string }, name: { type: string } }, description: "pond_dm only: the Pond it goes through (its name is kept after leaving)" }
+  closed: { type: [string, "null"], enum: [left, not_accepted, dms_off, null], description: "pond_dm only: why nothing can be sent now, or null" }
+  friend_offer: { type: [string, "null"], description: "pond_dm only: a puddle:// link they sent to become friends (POST /api/v1/streams/request with it)" }
+  offered: { type: boolean, description: "pond_dm only: we sent them one" }
+  blocked: { type: boolean, description: "pond_dm only: their direct messages are blocked (dropped unread)" }
+  friend: { type: boolean, description: "pond_dm only: they are a friend too (a stream is open)" }
   stream: { $ref: "stream.yaml#/$defs/StreamState", description: "dm only: whether a message can be sent now" }
   group: { $ref: "group.yaml#/$defs/GroupSummary", description: "group only: the group without its member list, so a page of conversations fits in one answer" }
 x-methods:
@@ -21,3 +28,4 @@ x-methods:
   send: POST /api/v1/conversations/{conversation}/messages/send
   mark_read: POST /api/v1/conversations/{conversation}/read
   retry: POST /api/v1/conversations/{conversation}/retry
+  befriend: POST /api/v1/conversations/{conversation}/befriend

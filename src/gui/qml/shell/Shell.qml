@@ -84,7 +84,8 @@ Pane {
         else if (contextDrawer.opened) contextDrawer.close()
         else contextDrawer.open()
     }
-    readonly property bool contextWanted: (page === "chat" && chats.current !== "") || (page === "pond" && ponds.current !== "")
+    // the side panel: a friend's profile or a group's members, or a Pond's members; none beside a conversation through a Pond (its banner says what there is to say)
+    readonly property bool contextWanted: (page === "chat" && chats.current !== "" && !chats.currentIsPondDm) || (page === "pond" && ponds.current !== "")
     // the conversations: beside the page when wide, a drawer over it when narrow
     readonly property bool sidebarOpen: wide ? showSidebar : sidebarDrawer.opened
     function toggleSidebar() {
@@ -158,6 +159,7 @@ Pane {
         function onCurrentChanged() { if (shell.page === "chat" && shell.chats.current === "") { shell.lastChat = ({}); shell.goHome() } }
         function onFailed(what) { toast.show(what) }
         function onGroupCreated(id) { shell.openChat(id, "group") }
+        function onPondDmOpened(id) { shell.openChat(id, "pond_dm") }
     }
     Connections {
         target: shell.ponds
@@ -558,7 +560,12 @@ Pane {
     JoinPondDialog { id: joinPondDialog; chats: shell.chats }
     PondSettings { id: pondSettings; chats: shell.chats }
 
-    ProfileCard { id: profileCard; chats: shell.chats; onMessageRequested: id => shell.openChat(id, "dm") }
+    ProfileCard {
+        id: profileCard
+        chats: shell.chats
+        onMessageRequested: id => shell.openChat(id, "dm")
+        onPondMessageRequested: (pond, id) => shell.chats.openPondDm(pond, id)
+    }
     PersonMenu {
         id: personMenu
         property Item anchor: null    // what was right-clicked: Profile opens the card under it
@@ -567,6 +574,7 @@ Pane {
         developer: shell.backend.developerMode
         onProfileRequested: info => { if (anchor) profileCard.showFor(anchor, info) }
         onMessageRequested: id => shell.openChat(id, "dm")
+        onPondMessageRequested: (pond, id) => shell.chats.openPondDm(pond, id)
     }
 
     NewConversationDialog {

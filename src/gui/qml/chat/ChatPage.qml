@@ -27,6 +27,7 @@ Pane {
 
     readonly property var messages: chats.messages
     readonly property bool canSend: chats.currentState === "active"
+    readonly property var pondDm: chats.currentPondDm   // through a Pond (docs/pond-dms.md); {} for any other
     property string replyId: ""
     property string replyName: ""
     property string replyText: ""
@@ -160,7 +161,7 @@ Pane {
                         target: page.chats
                         function onCurrentChanged() { callButton.update() }
                     }
-                    visible: page.chats.current !== "" && page.canSend
+                    visible: page.chats.current !== "" && page.canSend && !page.chats.currentIsPondDm
                     enabled: page.chats.calls.state === ""
                     icon.source: Theme.icon("phone")
                     icon.width: Theme.iconSize
@@ -176,11 +177,66 @@ Pane {
                 }
                 PanelToggle {
                     objectName: "contextButton"
-                    visible: page.chats.current !== ""
+                    visible: page.chats.current !== "" && !page.chats.currentIsPondDm
                     glyph: "layout-sidebar-right"
                     label: page.chats.currentIsGroup ? qsTr("Members") : qsTr("Profile")
                     active: page.contextShown
                     onClicked: page.toggleContext()
+                }
+            }
+            Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.hairline }
+        }
+
+        // through a Pond: what is true of it, and becoming friends or blocking from here
+        Rectangle {
+            objectName: "pondDmBanner"
+            visible: page.chats.currentIsPondDm
+            Layout.fillWidth: true
+            implicitHeight: bannerCol.implicitHeight + 20
+            color: Theme.tint(Theme.accent, 0.08)
+            ColumnLayout {
+                id: bannerCol
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: 16
+                anchors.rightMargin: 16
+                spacing: 6
+                Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.Wrap
+                    font.pixelSize: 12
+                    text: qsTr("Only you and %1 can read these. %2 passes them on and sees that you write to each other, not what you write. It keeps none of it.")
+                          .arg(page.pondDm.memberName || "").arg(page.pondDm.pondName || "")
+                }
+                Label {
+                    objectName: "pondDmOffer"
+                    visible: !!page.pondDm.offer && !page.pondDm.friend
+                    Layout.fillWidth: true
+                    wrapMode: Text.Wrap
+                    font.bold: true
+                    text: qsTr("%1 offers to be friends.").arg(page.pondDm.memberName || "")
+                }
+                RowLayout {
+                    spacing: 8
+                    Button {
+                        objectName: "pondDmAcceptOffer"
+                        visible: !!page.pondDm.offer && !page.pondDm.friend
+                        text: qsTr("Accept")
+                        onClicked: page.chats.acceptFriendOffer()
+                    }
+                    Button {
+                        objectName: "pondDmBefriend"
+                        visible: !page.pondDm.offer && !page.pondDm.friend && !page.pondDm.closed
+                        enabled: !page.pondDm.offered
+                        text: page.pondDm.offered ? qsTr("Friend offer sent") : qsTr("Add friend")
+                        onClicked: page.chats.befriend()
+                    }
+                    Button {
+                        objectName: "pondDmBlock"
+                        text: page.pondDm.blocked ? qsTr("Unblock messages") : qsTr("Block messages")
+                        onClicked: page.pondDm.blocked ? page.chats.dmUnblock(page.pondDm.member) : page.chats.dmBlock(page.pondDm.member)
+                    }
                 }
             }
             Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.hairline }
@@ -608,6 +664,9 @@ Pane {
                     objectName: "composer"
                     enabled: page.canSend
                     placeholderText: page.canSend ? qsTr("Message %1").arg(page.chats.currentName)
+                                     : page.pondDm.closed === "left" ? qsTr("You or they are no longer in %1. You can read the history.").arg(page.pondDm.pondName)
+                                     : page.pondDm.closed === "not_accepted" ? qsTr("They don't take direct messages in %1.").arg(page.pondDm.pondName)
+                                     : page.pondDm.closed === "dms_off" ? qsTr("%1 doesn't pass on direct messages.").arg(page.pondDm.pondName)
                                      : page.chats.currentState === "closed" ? qsTr("This stream is closed. You can read the history.")
                                      : qsTr("You can write once %1 has accepted.").arg(page.chats.currentName)
                     wrapMode: TextArea.Wrap

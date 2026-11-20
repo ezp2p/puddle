@@ -1348,6 +1348,35 @@ int main(int argc, char **argv)
             key(Qt::Key_Escape);
             settle(200);
         }
+        /* ---- a direct message through the Pond (docs/pond-dms.md): "Bob @ <Pond>", sealed from one Puddle to the other, with a
+         * banner saying so; Bob offers to be friends ---- */
+        {
+            const QString bobId = row(members, "name", "Bob").value("id").toString();
+            QSignalSpy opened(&A, &Chats::pondDmOpened);
+            A.openPondDm(pondId, bobId);
+            CHECK(until([&] { return opened.count() == 1; }, 10000));
+            const QString conv = opened.count() ? opened.at(0).at(0).toString() : QString();
+            CHECK(until([&] { return find("pondDmBanner") != nullptr && A.currentIsPondDm(); }, 5000));
+            CHECK(A.currentName() == "Bob @ " + A.currentPondDm().value("pondName").toString());
+            CHECK(!find("callButton") && !find("contextButton")); /* no calls through a Pond, nor a friend's side panel */
+            CHECK(A.currentPondDm().value("friend").toBool() == (A.person(bobId).value("state").toString() == "active"));
+            A.send("psst, bob");
+            auto *bobConvs = static_cast<JsonListModel *>(B.conversations());
+            CHECK(until([&] { return !row(bobConvs, "id", conv).isEmpty(); }, 20000));
+            CHECK(row(bobConvs, "id", conv).value("name").toString().startsWith("Ann @ "));
+            B.open(conv, "pond_dm");
+            CHECK(until([&] { return !row(static_cast<JsonListModel *>(B.messages()), "body", "psst, bob").isEmpty(); }, 10000));
+            CHECK(until([&] { return row(static_cast<JsonListModel *>(A.messages()), "body", "psst, bob").value("deliveryState").toString().isEmpty(); }, 15000));
+            B.send("hello ann");
+            CHECK(until([&] { return !row(static_cast<JsonListModel *>(A.messages()), "body", "hello ann").isEmpty(); }, 15000));
+            B.befriend();
+            CHECK(until([&] { return find("pondDmAcceptOffer") != nullptr; }, 15000));
+            settle(400);
+            if (!shot.isEmpty())
+                win->grabWindow().save(shot + "-pond-dm.png");
+            B.close();
+            A.close();
+        }
         P.leave(pondId);
         PB.leave(pondId);
         CHECK(until([&] { return static_cast<JsonListModel *>(P.list())->rowCount() == 0; }, 10000));

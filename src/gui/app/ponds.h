@@ -3,6 +3,7 @@
 #include <QHash>
 #include <QJsonArray>
 #include <QObject>
+#include <QSet>
 #include <QTimer>
 
 #include "apiclient.h"
@@ -34,7 +35,10 @@ class Ponds : public QObject {
     Q_PROPERTY(double mutedUntil READ mutedUntil NOTIFY currentInfoChanged)     // we are muted there: until when (ms), 0 until unmuted; -1 not
     Q_PROPERTY(QString currentOffer READ currentOffer NOTIFY currentInfoChanged) // a role it offers us ("operator", "administrator"), or ""
     Q_PROPERTY(QString myId READ myId NOTIFY currentInfoChanged)
-    Q_PROPERTY(bool canVoice READ canVoice NOTIFY currentInfoChanged)          // the open Pond has voice channels (its `features`)
+    Q_PROPERTY(bool canVoice READ canVoice NOTIFY currentInfoChanged)
+    // direct messages between members (docs/pond-dms.md): the open Pond passes them on; we take them there
+    Q_PROPERTY(bool dmsOn READ dmsOn NOTIFY currentInfoChanged)
+    Q_PROPERTY(bool acceptDms READ acceptDms NOTIFY currentInfoChanged)          // the open Pond has voice channels (its `features`)
     Q_PROPERTY(bool hasOlder READ hasOlder NOTIFY hasOlderChanged)
     Q_PROPERTY(bool joining READ joining NOTIFY joiningChanged)
     // The voice channel we are in (docs/ponds.md, "Voice channels"), in whichever Pond: "" for none
@@ -51,6 +55,10 @@ class Ponds : public QObject {
     Q_PROPERTY(QStringList voicePeople READ voicePeople NOTIFY voiceChanged) // who is in our voice channel, by id, in the order they came (us too)
 public:
     explicit Ponds(ApiClient *api, QObject *parent = nullptr);
+    bool dmsOn() const { return info_.value("dms").toObject().value("on").toBool(); }
+    bool acceptDms() const { return people_.value(me_).value("dms").toBool(true); }
+    // people the owner blocked (Chats): what they write in Ponds isn't shown
+    void setBlocked(const QSet<QString> &ids) { if (ids != blocked_) { blocked_ = ids; rebuildMessages(); } }
 
     QObject *list() { return &list_; }
     QObject *channels() { return &channels_; }
@@ -127,6 +135,7 @@ public:
     Q_INVOKABLE void deleteChannel(const QString &channelId);
     Q_INVOKABLE void kick(const QString &memberId);
     // `seconds` 0: until unmuted
+    Q_INVOKABLE void setAcceptDms(bool accept); // in the open Pond
     Q_INVOKABLE void mute(const QString &memberId, int seconds);
     Q_INVOKABLE void unmute(const QString &memberId);
     Q_INVOKABLE void ban(const QString &memberId, const QString &reason);
@@ -162,6 +171,7 @@ signals:
     void inviteMade(const QString &link);
 
 private:
+    QSet<QString> blocked_;
     void refreshPond();
     void refreshMessages();
     void rebuildMessages();

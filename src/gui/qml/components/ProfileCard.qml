@@ -14,6 +14,7 @@ Popup {
     property var chats
     property var info: ({})
     signal messageRequested(string userId)
+    signal pondMessageRequested(string pond, string userId) // not a friend: a direct message through the Pond (docs/pond-dms.md)
 
     readonly property var colors: info.colors || []
     readonly property color nameColor: colors.length ? colors[0] : palette.text
@@ -167,12 +168,18 @@ Popup {
             }
             Button {
                 objectName: "profileCardMessage"
-                visible: card.info.friend === true && card.info.isMe !== true
+                visible: (card.info.friend === true || card.info.dms === true) && card.info.isMe !== true
                 Layout.fillWidth: true
                 Layout.topMargin: 8
                 text: qsTr("Message")
                 icon.source: Theme.icon("message")
-                onClicked: { card.close(); card.messageRequested(card.info.id) }
+                onClicked: {
+                    card.close()
+                    if (card.info.friend === true)
+                        card.messageRequested(card.info.id)
+                    else
+                        card.pondMessageRequested(card.info.pond, card.info.id)
+                }
             }
         }
     }

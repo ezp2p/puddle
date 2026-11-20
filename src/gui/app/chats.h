@@ -2,6 +2,7 @@
 
 #include <QHash>
 #include <QObject>
+#include <QSet>
 #include <QThreadPool>
 #include <functional>
 #include <QTimer>
@@ -25,6 +26,10 @@ class Chats : public QObject {
     Q_PROPERTY(QObject *groupInvites READ groupInvites CONSTANT)    // invitations to groups waiting for an answer
     Q_PROPERTY(QObject *members READ members CONSTANT)              // the open group's members: id, name, avatar, color, state, isMe, friend
     Q_PROPERTY(bool currentIsGroup READ currentIsGroup NOTIFY currentChanged)
+    Q_PROPERTY(bool currentIsPondDm READ currentIsPondDm NOTIFY currentChanged)  // with a member of a Pond, through it (docs/pond-dms.md)
+    // the open conversation through a Pond: pond, pondName, member, closed ("left", "not_accepted", "dms_off" or ""), offer (their
+    // friend link, "" for none), offered, blocked (their direct messages), friend; {} for any other
+    Q_PROPERTY(QVariantMap currentPondDm READ currentPondDm NOTIFY currentInfoChanged)
     Q_PROPERTY(int incomingGroupInvites READ incomingGroupInvites NOTIFY groupInvitesChanged)
     Q_PROPERTY(QObject *profiles READ profiles CONSTANT)            // our own profiles: id, display_name, avatar, default
     Q_PROPERTY(QString myName READ myName NOTIFY profilesChanged)   // the default profile's display name
@@ -60,6 +65,8 @@ public:
     QObject *groupInvites() { return &invites_; }
     QObject *members() { return &members_; }
     bool currentIsGroup() const { return currentKind_ == QLatin1String("group"); }
+    bool currentIsPondDm() const { return currentKind_ == QLatin1String("pond_dm"); }
+    QVariantMap currentPondDm() const;
     int incomingGroupInvites() const { return groupInviteCount_; }
     void setSelf(const QString &id) { self_ = id; } // our own user id, so "you" can be said of what we did
     // The Puddle runs in this process: a picked file is handed to it open (puddle_server_take_file: cloned into its data
@@ -176,6 +183,14 @@ public:
     Q_INVOKABLE void accept(const QString &userId, const QString &profile = QString());
     Q_INVOKABLE void decline(const QString &userId);
     Q_INVOKABLE void cancel(const QString &userId);      // withdraw our own request, or end a stream we no longer want
+    // ---- direct messages through a Pond (docs/pond-dms.md) ----
+    Q_INVOKABLE void openPondDm(const QString &pond, const QString &member); // made if need be, then opened: pondDmOpened
+    Q_INVOKABLE void befriend();          // the open one: offer to be friends
+    Q_INVOKABLE void acceptFriendOffer(); // the open one: ask for a stream with the link they sent
+    Q_INVOKABLE void dmBlock(const QString &userId);
+    Q_INVOKABLE void dmUnblock(const QString &userId);
+    Q_INVOKABLE bool isBlocked(const QString &userId) const; // the Puddle's own block: their messages are hidden in Ponds too
+    Q_INVOKABLE bool isDmBlocked(const QString &userId) const { return dmBlocked_.contains(userId); }
     Q_INVOKABLE void block(const QString &userId);
     Q_INVOKABLE void unblock(const QString &userId);
     Q_INVOKABLE void request(const QString &link, const QString &note, const QString &profile = QString());
@@ -230,6 +245,8 @@ signals:
     void newGroupInvite(const QString &groupId);
     void newFileRequest(const QString &userId, const QString &conversationId); // for notifications: someone asked for a file again
     void groupCreated(const QString &groupId);
+    void pondDmOpened(const QString &conversationId);
+    void blockedChanged();
     void groupLeft();
     void avatarReady(const QString &hash);
     void cardLoaded(const QString &userId, const QVariantMap &card);
@@ -279,6 +296,8 @@ private:
     QHash<QString, QJsonObject> groups_;   // the groups we are in or invited to, by id
     QSet<QString> invitedTo_;
     QString currentKind_ = QStringLiteral("dm"), self_;
+    QSet<QString> dmBlocked_;              // whose direct messages through Ponds are dropped
+    QHash<QString, QJsonObject> pondDms_; // conversations through a Pond, by id, as the Puddle said them
     int groupInviteCount_ = 0;
     bool groupsLoaded_ = false;
     QString curName_, curAvatar_, curColor_, curState_;

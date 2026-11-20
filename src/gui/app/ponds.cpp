@@ -169,7 +169,7 @@ void Ponds::refreshPond()
             const double until = mu.isObject() ? mu.toObject().value("until").toDouble(0) : -1;
             const bool muted = mu.isObject() && (until == 0 || until > double(QDateTime::currentMSecsSinceEpoch()));
             people_.insert(mid, { { "name", name }, { "color", color }, { "avatar", avatar }, { "profile", prof }, { "role", mo.value("role").toString(QStringLiteral("member")) },
-                                  { "muted", muted }, { "mutedUntil", muted ? until : -1 } });
+                                  { "muted", muted }, { "mutedUntil", muted ? until : -1 }, { "dms", mo.value("dms").toBool(true) } });
             members.append({ { "id", mid }, { "name", name }, { "color", color }, { "avatar", avatar }, { "isMe", mid == me_ },
                              { "muted", muted }, { "mutedUntil", muted ? until : -1 },
                              { "role", mo.value("role").toString(QStringLiteral("member")) } });
@@ -251,6 +251,8 @@ void Ponds::rebuildMessages()
     for (const QJsonObject &m : loaded_) {
         const qint64 ts = qint64(m.value("ts").toDouble());
         const QString author = m.value("author").toString();
+        if (blocked_.contains(author))
+            continue; /* blocked: not shown here either (docs/pond-dms.md, "Blocks") */
         const QJsonObject who = people_.value(author);
         const bool first = prev.isEmpty();
         const bool newDay = first || QDateTime::fromMSecsSinceEpoch(ts).date() != QDateTime::fromMSecsSinceEpoch(qint64(prev.value("ts").toDouble())).date();
@@ -387,7 +389,21 @@ QVariantMap Ponds::card(const QString &memberId) const
     c.insert("muted", who.value("muted").toBool());
     c.insert("mutedUntil", who.value("mutedUntil").toDouble(-1));
     c.insert("place", currentName());
+    c.insert("pond", current_);
+    c.insert("dms", dmsOn() && who.value("dms").toBool(true)); /* a direct message through this Pond can be written to them */
     return c;
+}
+
+void Ponds::setAcceptDms(bool accept)
+{
+    const QString id = current_;
+    api_->post(QStringLiteral("/api/v1/ponds/%1/dms/settings").arg(id), QJsonObject{ { "accept", accept } }, [this, accept](int status, const QJsonDocument &) {
+        if (status != 200)
+            emit failed(tr("Could not change who may write to you here."));
+        else
+            emit adminDone(accept ? tr("Members can send you direct messages here.") : tr("Nobody can send you direct messages here."));
+        refreshPond();
+    });
 }
 
 void Ponds::mute(const QString &memberId, int seconds)

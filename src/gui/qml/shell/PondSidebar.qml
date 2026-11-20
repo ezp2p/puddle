@@ -91,6 +91,14 @@ Rectangle {
                         glyph: "users"
                         onActivated: { dropdown.close(); appearMenu.popup(header, 8, header.height + 4) }
                     }
+                    // direct messages (docs/pond-dms.md): whether members may write to us here, where the Pond passes them on
+                    PondMenuRow {
+                        objectName: "acceptDmsItem"
+                        visible: bar.ponds.dmsOn
+                        label: bar.ponds.acceptDms ? qsTr("Turn off direct messages") : qsTr("Allow direct messages")
+                        glyph: "message"
+                        onActivated: { dropdown.close(); bar.ponds.setAcceptDms(!bar.ponds.acceptDms) }
+                    }
                     PondMenuRow {
                         objectName: "copyMyId"
                         label: qsTr("Copy my id")

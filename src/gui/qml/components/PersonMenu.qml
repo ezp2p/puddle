@@ -3,7 +3,8 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import "../theme"
 
-// The menu a right-click on someone's name or picture opens, as Discord's does: Profile, Message (a friend), and in a Pond, for
+// The menu a right-click on someone's name or picture opens, as Discord's does: Profile, Message (a friend, or through the Pond
+// to a member who takes direct messages), Block their messages and Block (someone who isn't a friend), and in a Pond, for
 // an operator or administrator who outranks them, Mute or Unmute, Kick and Ban. Only what the viewer may do is shown; the Pond
 // decides in the end (the Pond's docs/design.md, "Roles"). popup(item, x, y, card): `card` is Ponds.card(id) or Chats.card(id),
 // with `friend` said.
@@ -16,16 +17,21 @@ Item {
     property var info: ({})
     signal profileRequested(var info)
     signal messageRequested(string userId)
+    signal pondMessageRequested(string pond, string userId) // not a friend: a direct message through the Pond (docs/pond-dms.md)
 
     readonly property string userId: info.id || ""
     readonly property string name: info.name || ""
     readonly property bool mine: info.isMe === true
     // may act on them: a Pond where we outrank them (never ourselves, never an operator). Asked as the menu opens: ranks change.
     property bool canMod: false
+    property bool dmBlocked: false // their direct messages through Ponds are dropped
+    property bool blocked: false   // the Puddle's block
 
     function popup(item, x, y, data) {
         info = data
         canMod = ponds !== null && !!data.id && ponds.canActOn(data.id)
+        dmBlocked = !!chats && !!data.id && chats.isDmBlocked(data.id)
+        blocked = !!chats && !!data.id && chats.isBlocked(data.id)
         menu.popup(item, x, y)
     }
 
@@ -35,13 +41,25 @@ Item {
         MenuItem { objectName: "personProfile"; text: qsTr("Profile"); onTriggered: pm.profileRequested(pm.info) }
         MenuItem {
             objectName: "personMessage"; text: qsTr("Message")
-            visible: pm.info.friend === true && !pm.mine; height: visible ? implicitHeight : 0
-            onTriggered: pm.messageRequested(pm.userId)
+            visible: (pm.info.friend === true || pm.info.dms === true) && !pm.mine; height: visible ? implicitHeight : 0
+            onTriggered: pm.info.friend === true ? pm.messageRequested(pm.userId) : pm.pondMessageRequested(pm.info.pond, pm.userId)
         }
         MenuItem {
             objectName: "personCopyId"; text: qsTr("Copy ID")
             visible: pm.developer; height: visible ? implicitHeight : 0
             onTriggered: pm.chats.copy(pm.userId)
+        }
+        MenuItem {
+            objectName: "personDmBlock"
+            text: pm.dmBlocked ? qsTr("Unblock their messages") : qsTr("Block their messages")
+            visible: pm.ponds !== null && !pm.mine && pm.info.friend !== true; height: visible ? implicitHeight : 0
+            onTriggered: pm.dmBlocked ? pm.chats.dmUnblock(pm.userId) : pm.chats.dmBlock(pm.userId)
+        }
+        MenuItem {
+            objectName: "personBlock"
+            text: pm.blocked ? qsTr("Unblock") : qsTr("Block")
+            visible: !pm.mine && pm.info.friend !== true; height: visible ? implicitHeight : 0
+            onTriggered: pm.blocked ? pm.chats.unblock(pm.userId) : pm.chats.block(pm.userId)
         }
         MenuSeparator { visible: pm.canMod; height: visible ? implicitHeight : 0 }
         MenuItem {

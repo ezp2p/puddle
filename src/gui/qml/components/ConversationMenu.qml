@@ -38,7 +38,7 @@ Item {
         id: menu
         MenuItem {
             objectName: "convOpen"; text: qsTr("Open")
-            visible: root.isDm || root.isGroup; height: visible ? implicitHeight : 0
+            visible: root.isDm || root.isGroup || root.convKind === "pond_dm"; height: visible ? implicitHeight : 0
             onTriggered: root.openRequested(root.convId, root.convKind)
         }
         MenuItem {
