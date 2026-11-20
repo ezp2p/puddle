@@ -171,8 +171,10 @@ A Pond has operators and administrators who run it from the app (the Pond's desi
 
 In the app, the Pond's name drops down its menu, as Discord's server menu does: **Server Settings** (for an operator
 or administrator), **Appear as…**, **Copy my id**, and **Leave Pond**. Server Settings opens over the window, with
-sections on the left (Overview, Channels, Members, Bans) and each section's settings in groups on the right
-(`shell/PondSettings.qml`).
+sections on the left (Overview, Channels, Members, Invites, Bans) and each section's settings in groups on the right
+(`shell/PondSettings.qml`). Invites makes one with an expiry (30 minutes to 7 days, or never) and a number of uses (or no
+limit), copies its link at once and shows it to copy again, and lists those that can still be used (made there or with
+`pondctl`), each with Copy link and Revoke.
 
 The Pond never calls the Puddle for any of this. A Puddle always opens the connection: the offer comes on the event
 stream it already follows.
@@ -213,6 +215,9 @@ Leaving deletes the folder.
 | `POST /api/v1/ponds/{pond}/admin/members/{member}/remove`, `/ban` | `{reason?}` for a ban |
 | `GET /api/v1/ponds/{pond}/admin/bans` | Who is banned, as the Pond says |
 | `POST /api/v1/ponds/{pond}/admin/bans/{member}/unban` | |
+| `GET /api/v1/ponds/{pond}/admin/invites` | The invites that can still be used, each with its `pond://` link |
+| `POST /api/v1/ponds/{pond}/admin/invites/create` | `{uses?, expires?}` (ms): the invite made, with its link |
+| `POST /api/v1/ponds/{pond}/admin/invites/{token}/revoke` | It stops working at once |
 
 Errors: `no_pond`, `no_channel` and `no_profile` are `404`. `bad_text` is `400`. `slow_down` is `429`.
 `invite_refused`, `removed`, `no_file`, `files_off`, `too_large`, `no_pictures` and `no_role` are `409`. `no_picture` is `404`. The admin routes pass on

@@ -13,7 +13,8 @@ Ponds::Ponds(ApiClient *api, QObject *parent)
       channels_({ "id", "name", "topic", "kind", "voice" }),
       members_({ "id", "name", "color", "avatar", "isMe", "role" }),
       messages_({ "id", "author", "name", "tint", "avatar", "text", "files", "ts", "mine", "grouped", "dayStart" }),
-      bans_({ "member", "name", "by", "byName", "reason", "ts" }, nullptr, QStringLiteral("member"))
+      bans_({ "member", "name", "by", "byName", "reason", "ts" }, nullptr, QStringLiteral("member")),
+      invites_({ "token", "link", "uses", "maxUses", "expires", "created" }, nullptr, QStringLiteral("token"))
 {
     timer_.setInterval(1000);
     connect(&timer_, &QTimer::timeout, this, &Ponds::refresh);
@@ -300,11 +301,11 @@ void Ponds::answerOffer(bool accept)
                });
 }
 
-void Ponds::admin(const QString &path, const QJsonObject &body, const QString &done, const QString &doing, bool reloadBans)
+void Ponds::admin(const QString &path, const QJsonObject &body, const QString &done, const QString &doing, bool reloadBans, bool reloadInvites)
 {
     if (current_.isEmpty())
         return;
-    api_->post(QStringLiteral("/api/v1/ponds/%1/admin/%2").arg(current_, path), body, [this, done, doing, reloadBans](int status, const QJsonDocument &json) {
+    api_->post(QStringLiteral("/api/v1/ponds/%1/admin/%2").arg(current_, path), body, [this, done, doing, reloadBans, reloadInvites](int status, const QJsonDocument &json) {
         if (status < 200 || status > 299) {
             const QJsonObject o = json.object();
             const QString code = o.value("error").toString();
@@ -320,6 +321,8 @@ void Ponds::admin(const QString &path, const QJsonObject &body, const QString &d
         emit adminDone(done);
         if (reloadBans)
             loadBans();
+        if (reloadInvites)
+            loadInvites();
         refresh();
     });
 }
@@ -392,6 +395,50 @@ void Ponds::loadBans()
     });
 }
 
+void Ponds::loadInvites()
+{
+    if (current_.isEmpty())
+        return;
+    const QString id = current_;
+    api_->get(QStringLiteral("/api/v1/ponds/%1/admin/invites").arg(id), [this, id](int status, const QJsonDocument &json) {
+        if (status != 200 || id != current_)
+            return;
+        QList<QJsonObject> rows;
+        for (const QJsonValue &v : json.object().value("invites").toArray()) {
+            const QJsonObject i = v.toObject();
+            rows.append({ { "token", i.value("token") }, { "link", i.value("link") }, { "uses", i.value("uses").toInt() },
+                          { "maxUses", i.value("max_uses").isNull() ? 0 : i.value("max_uses").toInt() },
+                          { "expires", i.value("expires").isNull() ? 0.0 : i.value("expires").toDouble() }, { "created", i.value("created").toDouble() } });
+        }
+        invites_.setItems(rows);
+    });
+}
+
+void Ponds::createInvite(int uses, int seconds)
+{
+    if (current_.isEmpty())
+        return;
+    QJsonObject body;
+    if (uses > 0)
+        body.insert("uses", uses);
+    if (seconds > 0)
+        body.insert("expires", double(QDateTime::currentMSecsSinceEpoch() + qint64(seconds) * 1000));
+    api_->post(QStringLiteral("/api/v1/ponds/%1/admin/invites/create").arg(current_), body, [this](int status, const QJsonDocument &json) {
+        if (status != 200) {
+            const QString code = json.object().value("error").toString();
+            emit adminFailed(code == QLatin1String("no_role") ? tr("You no longer have a role in this Pond.") : why(status, json, tr("make an invite")));
+            return;
+        }
+        emit inviteMade(json.object().value("link").toString());
+        loadInvites();
+    });
+}
+
+void Ponds::revokeInvite(const QString &token)
+{
+    admin(QStringLiteral("invites/%1/revoke").arg(token), {}, tr("Invite revoked. It no longer works."), tr("revoke that invite"), false, true);
+}
+
 bool Ponds::canActOn(const QString &memberId) const
 {
     auto rank = [](const QString &r) { return r == QLatin1String("operator") ? 2 : r == QLatin1String("administrator") ? 1 : 0; };
@@ -439,6 +486,7 @@ void Ponds::open(const QString &pondId)
     messages_.clear();
     channels_.clear();
     bans_.clear();
+    invites_.clear();
     members_.clear();
     generation_++;
     emit currentChanged();

@@ -17,6 +17,7 @@ class Ponds : public QObject {
     Q_PROPERTY(QObject *channels READ channels CONSTANT)   // of the open Pond: id, name, topic, kind (text, voice), voice (who is in it: id, name, color, avatar, muted, deafened, isMe)
     Q_PROPERTY(QObject *members READ members CONSTANT)     // of the open Pond: id, name, color, avatar, isMe, role
     Q_PROPERTY(QObject *bans READ bans CONSTANT)           // of the open Pond, once loadBans() has asked: member, name, by, byName, reason, ts
+    Q_PROPERTY(QObject *invites READ invites CONSTANT)     // of the open Pond, once loadInvites() has asked: token, link, uses, maxUses, expires, created
     Q_PROPERTY(QObject *messages READ messages CONSTANT)   // the open channel, oldest first: id, author, name, tint, avatar, text, files, ts, mine, grouped, dayStart
     Q_PROPERTY(QString current READ current NOTIFY currentChanged)            // the open Pond's id, "" for none
     Q_PROPERTY(QString currentName READ currentName NOTIFY currentInfoChanged)
@@ -53,6 +54,7 @@ public:
     QObject *channels() { return &channels_; }
     QObject *members() { return &members_; }
     QObject *bans() { return &bans_; }
+    QObject *invites() { return &invites_; }
     QString currentRole() const { return info_.value("role").toString(QStringLiteral("member")); }
     bool canAdmin() const { return currentRole() == QLatin1String("operator") || currentRole() == QLatin1String("administrator"); }
     QString currentOffer() const { return info_.value("offer").toObject().value("role").toString(); }
@@ -118,6 +120,10 @@ public:
     Q_INVOKABLE void ban(const QString &memberId, const QString &reason);
     Q_INVOKABLE void unban(const QString &memberId);
     Q_INVOKABLE void loadBans();
+    // Invites (the Pond's docs/design.md, "Invite links"). `uses` 0: no limit; `seconds` 0: never expires. inviteMade(link) says the new one's link.
+    Q_INVOKABLE void loadInvites();
+    Q_INVOKABLE void createInvite(int uses, int seconds);
+    Q_INVOKABLE void revokeInvite(const QString &token);
     // May we act on this member from the app? (Never ourselves or an operator, and only a lower rank.)
     Q_INVOKABLE bool canActOn(const QString &memberId) const;
 
@@ -141,6 +147,7 @@ signals:
     void failed(const QString &what);
     void adminDone(const QString &what);   // said in words, for a short notice
     void adminFailed(const QString &why);
+    void inviteMade(const QString &link);
 
 private:
     void refreshPond();
@@ -151,11 +158,12 @@ private:
     void takeVoice(const QJsonObject &voice);
     void setVoiceFlag(const QString &name, bool on);
     QJsonObject channelRow(const QJsonObject &c) const;
-    void admin(const QString &path, const QJsonObject &body, const QString &done, const QString &doing, bool reloadBans = false);
+    void admin(const QString &path, const QJsonObject &body, const QString &done, const QString &doing, bool reloadBans = false,
+               bool reloadInvites = false);
 
     ApiClient *api_;
     QTimer timer_;
-    JsonListModel list_, channels_, members_, messages_, bans_;
+    JsonListModel list_, channels_, members_, messages_, bans_, invites_;
     qint64 version_ = -1;
     QString current_, channel_, me_;
     QJsonObject info_;

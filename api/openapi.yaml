@@ -505,6 +505,23 @@ paths:
   /api/v1/ponds/{pond}/admin/bans/{member}/unban:
     parameters: [{ $ref: "#/components/parameters/Pond" }, { name: member, in: path, required: true, schema: { $ref: "wire/ids.yaml#/$defs/UserId" } }]
     post: { tags: [ponds], summary: Lift a ban, responses: { "204": { description: Lifted } } }
+  /api/v1/ponds/{pond}/admin/invites:
+    parameters: [{ $ref: "#/components/parameters/Pond" }]
+    get:
+      tags: [ponds]
+      summary: "The invites that can still be used, as the Pond says (its /pond/v1/admin/invites)"
+      responses: { "200": { description: "{invites: [{token, link, uses, max_uses, expires, created}]}: `max_uses` and `expires` (ms) null for none" } }
+  /api/v1/ponds/{pond}/admin/invites/create:
+    parameters: [{ $ref: "#/components/parameters/Pond" }]
+    post:
+      tags: [ponds]
+      summary: Make an invite
+      description: "`uses`: how many may join with it; `expires`: when it stops working (ms). Neither: it lasts until revoked."
+      requestBody: { content: { application/json: { schema: { type: object, properties: { uses: { type: integer, minimum: 1 }, expires: { type: integer } } } } } }
+      responses: { "200": { description: "The invite: {token, link, uses, max_uses, expires, created}. `link` is the pond:// link to give out." } }
+  /api/v1/ponds/{pond}/admin/invites/{token}/revoke:
+    parameters: [{ $ref: "#/components/parameters/Pond" }, { name: token, in: path, required: true, schema: { type: string, pattern: "^[a-z2-7]{26}$" } }]
+    post: { tags: [ponds], summary: Revoke an invite; it stops working at once, responses: { "204": { description: Revoked }, "404": { description: "`no_invite`" } } }
   /api/v1/ponds/{pond}/channels/{channel}/voice/join:
     parameters: [{ $ref: "#/components/parameters/Pond" }, { $ref: "#/components/parameters/Channel" }]
     post:

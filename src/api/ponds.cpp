@@ -319,6 +319,12 @@ static int admin_ban(const puddle_call *c, puddle_jw *)
     return relay(c, "POST", std::string("/pond/v1/admin/members/") + puddle_param(c, "member") + "/ban", objectBody(c));
 }
 static int admin_bans(const puddle_call *c, puddle_jw *) { return relay(c, "GET", "/pond/v1/admin/bans", ""); }
+static int admin_invites(const puddle_call *c, puddle_jw *) { return relay(c, "GET", "/pond/v1/admin/invites", ""); }
+static int admin_invite_create(const puddle_call *c, puddle_jw *) { return relay(c, "POST", "/pond/v1/admin/invites/create", objectBody(c)); }
+static int admin_invite_revoke(const puddle_call *c, puddle_jw *)
+{
+    return relay(c, "POST", std::string("/pond/v1/admin/invites/") + puddle_param(c, "token") + "/revoke", "");
+}
 static int admin_unban(const puddle_call *c, puddle_jw *)
 {
     return relay(c, "POST", std::string("/pond/v1/admin/bans/") + puddle_param(c, "member") + "/unban", "");
@@ -452,6 +458,9 @@ const puddle_route puddle_pond_api_routes[] = {
     { "POST", POND "/admin/members/{member:id}/ban",              PUDDLE_AUTH_OWNER, 2048,  admin_ban,        NULL },
     { "GET",  POND "/admin/bans",                                 PUDDLE_AUTH_OWNER, 0,     admin_bans,       NULL },
     { "POST", POND "/admin/bans/{member:id}/unban",               PUDDLE_AUTH_OWNER, 64,    admin_unban,      NULL },
+    { "GET",  POND "/admin/invites",                              PUDDLE_AUTH_OWNER, 0,     admin_invites,    NULL },
+    { "POST", POND "/admin/invites/create",                       PUDDLE_AUTH_OWNER, 256,   admin_invite_create, NULL },
+    { "POST", POND "/admin/invites/{token:token}/revoke",         PUDDLE_AUTH_OWNER, 64,    admin_invite_revoke, NULL },
     { "POST", POND "/channels/{channel:num}/voice/join",          PUDDLE_AUTH_OWNER, 64,    join_voice,       NULL },
     { "GET",  "/api/v1/voice",                                    PUDDLE_AUTH_OWNER, 0,     get_voice,        NULL },
     { "POST", "/api/v1/voice/leave",                              PUDDLE_AUTH_OWNER, 64,    leave_voice,      NULL },

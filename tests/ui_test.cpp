@@ -1,6 +1,7 @@
 // The app's window, driven like a person would: real mouse and key events on the real QML, against a real Puddle (the
 // app's Backend) and a second real Puddle that plays the friend. Offscreen.
 #include <QClipboard>
+#include <QDateTime>
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -1247,6 +1248,30 @@ int main(int argc, char **argv)
             CHECK(click(find("removePondIcon")));
             CHECK(until([&] { return P.currentIcon().isEmpty(); }, 10000));
             CHECK(until([&] { return find("pondIcon_" + P.currentName()) == nullptr; }, 5000)); /* its initials again */
+
+            /* invites: made with an expiry and a number of uses, its link copied; listed; revoked, asking first */
+            CHECK(clickName("settingsSection_invites"));
+            auto *invites = static_cast<JsonListModel *>(P.invites());
+            CHECK(until([&] { return invites->rowCount() >= 1; }, 10000)); /* the one we joined with, from pondctl */
+            const int before = invites->rowCount();
+            QGuiApplication::clipboard()->setText("nothing yet");
+            CHECK(clickName("createInvite"));
+            CHECK(until([&] { return invites->rowCount() == before + 1; }, 10000));
+            CHECK(until([&] { return QGuiApplication::clipboard()->text().startsWith("pond://127.0.0.1:"); }, 5000));
+            const QString made = QGuiApplication::clipboard()->text();
+            CHECK(find("madeInviteLink") && find("madeInviteLink")->property("text").toString() == made);
+            const QJsonObject inv = invites->rowCount() ? invites->at(0) : QJsonObject();
+            CHECK(inv.value("link").toString() == made && inv.value("maxUses").toInt() == 0 && inv.value("expires").toDouble() > QDateTime::currentMSecsSinceEpoch() + 6.9 * 86400 * 1000);
+            settle(300);
+            if (!shot.isEmpty())
+                win->grabWindow().save(shot + "-pond-invites.png");
+            QQuickItem *revoke = nullptr;
+            for (QQuickItem *r : all("revokeInvite"))
+                revoke = revoke ? revoke : r;
+            CHECK(revoke && click(revoke));
+            CHECK(until([&] { return find("confirmOk") != nullptr; }, 3000));
+            CHECK(click(find("confirmOk")));
+            CHECK(until([&] { return invites->rowCount() == before; }, 10000));
             key(Qt::Key_Escape);
             settle(300);
         }
