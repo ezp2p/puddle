@@ -561,6 +561,50 @@ QVariantMap Chats::person(const QString &userId) const
     return {};
 }
 
+QVariantMap Chats::card(const QString &userId) const
+{
+    const bool me = !self_.isEmpty() && userId == self_;
+    bool isFriend = false;
+    for (const QJsonObject &p : people_.items())
+        if (p.value("id").toString() == userId)
+            isFriend = p.value("state").toString() == QLatin1String("active");
+    QVariantMap c;
+    for (const QJsonObject &m : members_.items()) /* as they are in the open group */
+        if (m.value("id").toString() == userId)
+            c = { { "name", m.value("name").toString() }, { "avatar", m.value("avatar").toString() } };
+    if (c.isEmpty())
+        c = { { "name", me ? myName_ : nameOf(userId) }, { "avatar", me ? myAvatar_ : avatars_.value(userId) } };
+    const QString color = me ? QString() : colors_.value(userId);
+    c.insert("colors", color.isEmpty() ? QVariantList() : QVariantList{ color });
+    c.insert("id", userId);
+    c.insert("isMe", me);
+    c.insert("friend", isFriend);
+    c.insert("place", currentIsGroup() ? currentName() : QString());
+    return c;
+}
+
+void Chats::loadCard(const QString &userId)
+{
+    if (userId.isEmpty() || (!self_.isEmpty() && userId == self_))
+        return;
+    const QString place = currentIsGroup() ? QStringLiteral("group:") + current_ : QStringLiteral("dm");
+    api_.get(QStringLiteral("/api/v1/users/%1/profiles").arg(userId), [this, userId, place](int status, const QJsonDocument &doc) {
+        if (status != 200)
+            return;
+        QJsonObject chosen;
+        for (const QJsonValue &v : doc.object().value("items").toArray()) {
+            const QJsonObject p = v.toObject();
+            if (p.value("place").toString() == place || (chosen.isEmpty() && p.value("place").toString() == QLatin1String("dm")))
+                chosen = p;
+        }
+        if (chosen.isEmpty())
+            return; /* they show us nothing here: the card keeps what it has */
+        QVariantMap c = Ponds::cardOf(chosen);
+        c.insert("id", userId);
+        emit cardLoaded(userId, c);
+    });
+}
+
 int Chats::friendMatches(const QString &filter) const
 {
     int n = 0;

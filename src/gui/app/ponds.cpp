@@ -11,7 +11,7 @@ Ponds::Ponds(ApiClient *api, QObject *parent)
       api_(api),
       list_({ "id", "name", "status", "address", "icon" }),
       channels_({ "id", "name", "topic", "kind", "voice" }),
-      members_({ "id", "name", "color", "avatar", "isMe", "role" }),
+      members_({ "id", "name", "color", "avatar", "isMe", "role", "muted", "mutedUntil" }),
       messages_({ "id", "author", "name", "tint", "avatar", "text", "files", "ts", "mine", "grouped", "dayStart" }),
       bans_({ "member", "name", "by", "byName", "reason", "ts" }, nullptr, QStringLiteral("member")),
       invites_({ "token", "link", "uses", "maxUses", "expires", "created" }, nullptr, QStringLiteral("token"))
@@ -57,6 +57,8 @@ QString Ponds::why(int status, const QJsonDocument &json, const QString &doing) 
         return tr("Something answered at that address, but it isn't a Pond.");
     if (code == QLatin1String("removed"))
         return tr("You are no longer a member of this Pond.");
+    if (code == QLatin1String("muted"))
+        return tr("You're muted in this Pond, so you can't write here for now.");
     if (code == QLatin1String("slow_down"))
         return tr("You're sending messages too quickly. Wait a moment.");
     if (code == QLatin1String("not_proven"))
@@ -162,8 +164,14 @@ void Ponds::refreshPond()
             const QJsonArray colors = prof.value("color").toObject().value("colors").toArray();
             const QString color = colors.isEmpty() ? QString() : colors.first().toString();
             const QString avatar = prof.value("avatar").toObject().value("hash").toString();
-            people_.insert(mid, { { "name", name }, { "color", color }, { "avatar", avatar } });
+            // muted by an operator or administrator, and not run out: until when (0: until unmuted)
+            const QJsonValue mu = mo.value("muted");
+            const double until = mu.isObject() ? mu.toObject().value("until").toDouble(0) : -1;
+            const bool muted = mu.isObject() && (until == 0 || until > double(QDateTime::currentMSecsSinceEpoch()));
+            people_.insert(mid, { { "name", name }, { "color", color }, { "avatar", avatar }, { "profile", prof }, { "role", mo.value("role").toString(QStringLiteral("member")) },
+                                  { "muted", muted }, { "mutedUntil", muted ? until : -1 } });
             members.append({ { "id", mid }, { "name", name }, { "color", color }, { "avatar", avatar }, { "isMe", mid == me_ },
+                             { "muted", muted }, { "mutedUntil", muted ? until : -1 },
                              { "role", mo.value("role").toString(QStringLiteral("member")) } });
         }
         // operators first, then administrators, then everyone else; by name within each
@@ -356,6 +364,43 @@ void Ponds::editChannel(const QString &channelId, const QString &name, const QSt
 void Ponds::deleteChannel(const QString &channelId)
 {
     admin(QStringLiteral("channels/%1/delete").arg(channelId), {}, tr("Channel deleted."), tr("delete that channel"));
+}
+
+QVariantMap Ponds::cardOf(const QJsonObject &profile)
+{
+    QVariantList colors;
+    for (const QJsonValue &c : profile.value("color").toObject().value("colors").toArray())
+        colors << c.toString();
+    return { { "name", profile.value("display_name").toString() }, { "avatar", profile.value("avatar").toObject().value("hash").toString() },
+             { "blurb", profile.value("blurb").toString() }, { "pronouns", profile.value("pronouns").toString() }, { "colors", colors },
+             { "angle", profile.value("color").toObject().value("angle").toInt(180) } };
+}
+
+QVariantMap Ponds::card(const QString &memberId) const
+{
+    const QJsonObject who = people_.value(memberId);
+    QVariantMap c = cardOf(who.value("profile").toObject());
+    c.insert("id", memberId);
+    c.insert("name", nameOf(memberId));
+    c.insert("role", who.value("role").toString(QStringLiteral("member")));
+    c.insert("isMe", memberId == me_);
+    c.insert("muted", who.value("muted").toBool());
+    c.insert("mutedUntil", who.value("mutedUntil").toDouble(-1));
+    c.insert("place", currentName());
+    return c;
+}
+
+void Ponds::mute(const QString &memberId, int seconds)
+{
+    QJsonObject body;
+    if (seconds > 0)
+        body.insert("until", double(QDateTime::currentMSecsSinceEpoch() + qint64(seconds) * 1000));
+    admin(QStringLiteral("members/%1/mute").arg(memberId), body, tr("%1 is muted.").arg(nameOf(memberId)), tr("mute them"));
+}
+
+void Ponds::unmute(const QString &memberId)
+{
+    admin(QStringLiteral("members/%1/unmute").arg(memberId), {}, tr("%1 can talk again.").arg(nameOf(memberId)), tr("unmute them"));
 }
 
 void Ponds::kick(const QString &memberId)

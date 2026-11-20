@@ -50,6 +50,7 @@ struct Member {
     std::string profile; /* cleaned JSON, or "" for none */
     int64_t joined = 0;
     std::string role = "member"; /* operator, administrator or member (the Pond's docs/design.md, "Roles") */
+    int64_t muted = -1;          /* muted by an operator or administrator: -1 not, 0 until unmuted, else until then (ms; protocol 7) */
 };
 
 /* Someone in one of the Pond's voice channels now (the Pond's docs/voice.md, "Who is in it"): only in memory, as the Pond says
@@ -278,6 +279,10 @@ static bool parse_member(puddle_ponds *p, puddle_span v, std::string &id, Member
         return false;
     std::string role;
     m.role = get_text(v, "role", 16, 0, role) && (role == "operator" || role == "administrator") ? role : "member";
+    puddle_span mu, until;
+    m.muted = -1;
+    if (member(v, "muted", &mu) && mu.len && *mu.p == '{') /* {"until": ms or null} */
+        m.muted = member(mu, "until", &until) && get_int(mu, "until", &m.muted) && m.muted > 0 ? m.muted : 0;
     m.profile.clear();
     if (p->clean && member(v, "profile", &prof) && *prof.p == '{') {
         std::string out(PUDDLE_PROFILE_JSON_MAX, '\0');
@@ -412,6 +417,18 @@ static void write_member(puddle_jw *w, const std::string &id, const Member &m)
     write_profile(w, m.profile);
     puddle_jw_num(w, "joined", m.joined);
     puddle_jw_str(w, "role", m.role.c_str());
+    puddle_jw_key(w, "muted");
+    if (m.muted < 0) {
+        puddle_jw_null(w);
+    } else {
+        puddle_jw_object(w);
+        puddle_jw_key(w, "until");
+        if (m.muted == 0)
+            puddle_jw_null(w);
+        else
+            puddle_jw_int(w, m.muted);
+        puddle_jw_end_object(w);
+    }
     puddle_jw_end_object(w);
 }
 

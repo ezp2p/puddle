@@ -759,6 +759,41 @@ int main(int argc, char **argv)
         B.close();
         D.close();
 
+        /* ---- someone's card: a click on their name in the chat opens it under the name, with their profile in this group;
+         * a right-click opens what can be done about them (a friend: Profile and Message, nothing a Pond's admin does) ---- */
+        {
+            QQuickItem *bobName = nullptr;
+            CHECK(until([&] {
+                for (QQuickItem *i : all("messageSenderName"))
+                    if (i->property("text").toString() == "Bob")
+                        bobName = i;
+                return bobName != nullptr;
+            }, 5000));
+            CHECK(bobName && click(bobName));
+            CHECK(until([&] { QQuickItem *n = find("profileCardName"); return n && n->property("text").toString() == "Bob"; }, 5000));
+            QQuickItem *card = find("profileCard");
+            {   /* under the name, or over it where there is no room below (the newest messages are at the foot of the window) */
+                QQuickItem *band = find("profileCardBand"); /* the card's top; its content is the card, less its padding (none) */
+                card = band;
+                const double top = band ? band->mapToScene(QPointF(0, 0)).y() : 0, bottom = band ? top + band->parentItem()->height() : 0;
+                const double nameTop = bobName->mapToScene(QPointF(0, 0)).y(), nameBottom = nameTop + bobName->height();
+                CHECK(card && (top >= nameBottom || bottom <= nameTop));
+            }
+            CHECK(find("profileCardMessage") != nullptr); /* a friend: Message */
+            settle(300);
+            if (const QString shot = qEnvironmentVariable("PUDDLE_SHOT"); !shot.isEmpty())
+                win->grabWindow().save(shot + "-chat-card.png");
+            key(Qt::Key_Escape);
+            CHECK(until([&] { return find("profileCardName") == nullptr; }, 3000));
+            CHECK(rightClick(bobName));
+            CHECK(until([&] { return find("personProfile") != nullptr; }, 3000));
+            CHECK(find("personMessage") && !find("personKick") && !find("personMute") && !find("personBan"));
+            CHECK(click(find("personProfile")));
+            CHECK(until([&] { QQuickItem *n = find("profileCardName"); return n && n->property("text").toString() == "Bob"; }, 5000));
+            key(Qt::Key_Escape);
+            settle(200);
+        }
+
         /* ---- a call in the group (docs/calls.md, "Group calls"): started from the header, Bob and Dana join; the bar says how
          * many are in it; leaving leaves it to them, and the header offers to join again; the chat notes it ---- */
         {
@@ -1206,7 +1241,7 @@ int main(int argc, char **argv)
         const QString mine = picture(A, "me.png", 'a'), bobs = picture(B, "bob.png", 'b'), icon = picture(A, "icon.png", 'c');
         A.saveProfile("pondface", { { "display_name", "Ann" }, { "blurb", "Here for the frogs" }, { "avatar", mine } }, true);
         B.saveProfile("main", { { "display_name", "Bob" }, { "avatar", bobs } }, false);
-        QSignalSpy joinedA(&P, &Ponds::joined), joinedB(&PB, &Ponds::joined), failedA(&P, &Ponds::failed);
+        QSignalSpy joinedA(&P, &Ponds::joined), joinedB(&PB, &Ponds::joined), failedA(&P, &Ponds::failed), failedB(&PB, &Ponds::failed);
         settle(500);
         PB.join(invite, "main");
         CHECK(until([&] { return joinedB.count() == 1; }, 15000));
@@ -1274,6 +1309,44 @@ int main(int argc, char **argv)
             CHECK(until([&] { return invites->rowCount() == before; }, 10000));
             key(Qt::Key_Escape);
             settle(300);
+
+            /* someone's card in the Pond: a click on their name in the member list; their picture, blurb and role */
+            CHECK(clickName("pondMember_Ann"));
+            CHECK(until([&] { QQuickItem *n = find("profileCardName"); return n && n->property("text").toString() == "Ann"; }, 5000));
+            CHECK(find("profileCardBlurb") && find("profileCardBlurb")->property("text").toString() == "Here for the frogs");
+            CHECK(until([&] { QQuickItem *a = find("profileCardAvatar"); return a && a->property("ready").toBool(); }, 5000));
+            settle(300);
+            if (!shot.isEmpty())
+                win->grabWindow().save(shot + "-pond-card.png");
+            key(Qt::Key_Escape);
+            settle(200);
+
+            /* the menu on someone, for an operator: Mute, Kick, Ban; muting asks how long, and Unmute takes it back */
+            CHECK(until([&] { return find("pondMember_Bob") != nullptr; }, 3000));
+            CHECK(rightClick(find("pondMember_Bob")));
+            CHECK(until([&] { return find("personMute") != nullptr; }, 3000));
+            CHECK(find("personProfile") && find("personKick") && find("personBan") && !find("personUnmute"));
+            settle(200);
+            if (!shot.isEmpty())
+                win->grabWindow().save(shot + "-pond-menu.png");
+            CHECK(click(find("personMute")));
+            CHECK(until([&] { return find("confirmMute") != nullptr; }, 3000));
+            CHECK(click(find("confirmMute")));
+            CHECK(until([&] { return row(members, "name", "Bob").value("muted").toBool(); }, 10000));
+            CHECK(until([&] { return find("pondMemberMuted") != nullptr; }, 3000));
+            PB.send("can anyone hear me");
+            CHECK(until([&] { return failedB.count() >= 1 && failedB.last().value(0).toString().contains("muted"); }, 5000)); /* Bob is told why */
+            CHECK(rightClick(find("pondMember_Bob")));
+            CHECK(until([&] { return find("personUnmute") != nullptr; }, 3000));
+            CHECK(!find("personMute"));
+            CHECK(click(find("personUnmute")));
+            CHECK(until([&] { return !row(members, "name", "Bob").value("muted").toBool(); }, 10000));
+            /* our own row: nothing to do to ourselves */
+            CHECK(rightClick(find("pondMember_Ann")));
+            CHECK(until([&] { return find("personProfile") != nullptr; }, 3000));
+            CHECK(!find("personKick") && !find("personMute"));
+            key(Qt::Key_Escape);
+            settle(200);
         }
         P.leave(pondId);
         PB.leave(pondId);

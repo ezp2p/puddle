@@ -158,6 +158,10 @@ public:
     // What we know of a person we have a stream with, for their profile in the side panel: { name, blurb, about, pronouns, state, since, address }.
     // Empty if there is no such stream.
     Q_INVOKABLE QVariantMap person(const QString &userId) const; // how many friends have `filter` (any case) in their name; all of them if empty
+    // Someone's card (a click on their name or picture): what is known at once (id, name, avatar, colors, isMe, friend), then
+    // loadCard() asks their Puddle's profile for the place on screen (the open group, else directly) and says it with cardLoaded.
+    Q_INVOKABLE QVariantMap card(const QString &userId) const;
+    Q_INVOKABLE void loadCard(const QString &userId);
     Q_INVOKABLE bool isGroupMember(const QString &userId) const { for (const QJsonObject &m : members_.items()) if (m.value("id").toString() == userId) return true; return false; }
     // `profile`, in these four, is which of the owner's profiles they will see; empty: none (they see only the id)
     Q_INVOKABLE void createGroup(const QString &name, const QStringList &friends, const QString &profile = QString());
@@ -228,6 +232,7 @@ signals:
     void groupCreated(const QString &groupId);
     void groupLeft();
     void avatarReady(const QString &hash);
+    void cardLoaded(const QString &userId, const QVariantMap &card);
     void uploadProgress(const QString &key, double fraction);
     void fileProgress(const QString &id, double fraction);
     void fileReady(const QString &id);

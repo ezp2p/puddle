@@ -38,6 +38,7 @@ src/gui/
     dialogs/          JoinPondDialog: the + under the Ponds on the rail. NewConversationDialog: the "+": message one friend or start a group, or add a friend by address; also asks more friends into a group
     settings/         the settings page (activity log, developer mode, phones, who is blocked) and PersonRow, the blocked-person row
     components/       small things used everywhere: Card (a floating panel), PanelToggle (the fold-away circle), Avatar, Icon, ContextTrigger (right-click), FieldMenu (text box menu),
+                      ProfileCard (someone's card, under their name) and PersonMenu (the right-click menu on someone: Profile, Message, and a Pond's Mute, Kick, Ban),
                       ConfirmDialog, ConversationMenu, ScrollList and ScrollArea (see below)
     theme/            Theme: every colour, size and gap, in one file
   assets/           images, and the icons (icons/tabler: see icons/README.md)

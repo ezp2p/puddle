@@ -74,6 +74,11 @@ $defs:
       id: { $ref: "../wire/ids.yaml#/$defs/UserId" }
       profile: { oneOf: [{ $ref: "../wire/profile.yaml" }, { type: "null" }], description: "What they chose to show in this Pond, cleaned. Its pictures are fetched from the Pond by themselves (docs/ponds.md, \"Pictures\")" }
       joined: { type: integer, description: ms }
+      muted:
+        description: "Muted by an operator or administrator (a Pond of protocol 7): until when (ms), or null until unmuted. null when not muted."
+        oneOf:
+          - { type: object, properties: { until: { oneOf: [{ type: integer }, { type: "null" }] } } }
+          - type: "null"
       role: { enum: [operator, administrator, member] }
   Message:
     type: object

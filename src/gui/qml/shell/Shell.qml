@@ -94,6 +94,17 @@ Pane {
     }
     // Alt+Up / Alt+Down walk through the conversations, whichever of the two holds the list
     function step(delta) { const l = wide ? sidebarInline : sidebarInDrawer; if (l.item) l.item.step(delta) }
+    // ---- someone's card and menu (a click, or a right-click, on their name or picture), wherever they are shown ----
+    function cardFor(id) {
+        if (page === "pond") {
+            const c = ponds.card(id)
+            c.friend = chats.person(id).state === "active"
+            return c
+        }
+        return chats.card(id)
+    }
+    function showCard(item, id) { profileCard.showFor(item, cardFor(id)) }
+    function personMenuAt(item, x, y, id) { personMenu.anchor = item; personMenu.popup(item, x, y, cardFor(id)) }
     function openPond(id) { sidebarDrawer.close(); chats.close(); ponds.open(id); page = "pond" }
     function joinPond() { sidebarDrawer.close(); joinPondDialog.show() }
 
@@ -233,6 +244,7 @@ Pane {
                 backend: shell.backend
                 view: videoView
                 objectName: "pondPage"
+                people: shell
                 anchors.fill: parent
                 visible: shell.page === "pond"
                 chats: shell.chats
@@ -243,6 +255,7 @@ Pane {
                 onToggleContext: shell.toggleContext()
             }
             ChatPage {
+                people: shell
                 video: shell.backend.video
                 backend: shell.backend
                 view: videoView
@@ -503,6 +516,7 @@ Pane {
         ContextBar {
             chats: shell.chats
             developer: shell.backend.developerMode
+            people: shell
             closable: !shell.contextInline
             onCloseRequested: contextDrawer.close()
             onOpenChat: id => { contextDrawer.close(); shell.openChat(id, "dm") }
@@ -515,6 +529,7 @@ Pane {
         PondMembers {
             ponds: shell.ponds
             chats: shell.chats
+            people: shell
             closable: !shell.contextInline
             onCloseRequested: contextDrawer.close()
         }
@@ -542,6 +557,17 @@ Pane {
     ConfirmDialog { id: leaveConfirm }
     JoinPondDialog { id: joinPondDialog; chats: shell.chats }
     PondSettings { id: pondSettings; chats: shell.chats }
+
+    ProfileCard { id: profileCard; chats: shell.chats; onMessageRequested: id => shell.openChat(id, "dm") }
+    PersonMenu {
+        id: personMenu
+        property Item anchor: null    // what was right-clicked: Profile opens the card under it
+        chats: shell.chats
+        ponds: shell.page === "pond" ? shell.ponds : null
+        developer: shell.backend.developerMode
+        onProfileRequested: info => { if (anchor) profileCard.showFor(anchor, info) }
+        onMessageRequested: id => shell.openChat(id, "dm")
+    }
 
     NewConversationDialog {
         id: newConv

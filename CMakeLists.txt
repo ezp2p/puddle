@@ -338,6 +338,8 @@ if(PUDDLE_BUILD_GUI)
         src/gui/qml/settings/PersonRow.qml
         src/gui/qml/settings/LogPage.qml
         src/gui/qml/components/Avatar.qml
+        src/gui/qml/components/ProfileCard.qml
+        src/gui/qml/components/PersonMenu.qml
         src/gui/qml/components/Button.qml
         src/gui/qml/components/Card.qml
         src/gui/qml/components/SettingsGroup.qml

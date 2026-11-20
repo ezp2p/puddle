@@ -17,6 +17,7 @@ Pane {
     property var view: null       // the shell's video pane state
     property bool narrow: false
     property bool sidebarShown: true    // the conversations card is open
+    property var people: null     // the Shell: someone's card and menu (showCard, personMenuAt)
     signal toggleSidebar()
     property bool contextShown: false   // the side panel is open
     signal toggleContext()
@@ -283,7 +284,18 @@ Pane {
                 implicitHeight: col.implicitHeight
 
                 HoverHandler { id: hover }
-                ContextTrigger { active: !msg.notice; onRequested: (x, y) => ctx.popup(msg, x, y) }
+                // on their name or picture, the menu about them; anywhere else, the message's
+                ContextTrigger {
+                    active: !msg.notice
+                    onRequested: (x, y) => {
+                        for (const it of [msgAvatar, msgName]) {
+                            const p = msg.mapToItem(it, x, y)
+                            if (it.visible && it.contains(p) && page.people)
+                                return page.people.personMenuAt(it, p.x, p.y, msg.model.sender)
+                        }
+                        ctx.popup(msg, x, y)
+                    }
+                }
 
                 Menu {
                     id: ctx
@@ -372,8 +384,12 @@ Pane {
                             Layout.preferredHeight: msg.grouped ? 1 : 40
                             Layout.alignment: Qt.AlignTop
                             Avatar {
+                                id: msgAvatar
+                                objectName: "messageAvatar"
                                 visible: !msg.grouped
                                 chats: page.chats; name: msg.model.senderName || ""; hash: msg.model.avatar || ""; tint: msg.model.tint || ""; size: 40
+                                HoverHandler { cursorShape: Qt.PointingHandCursor }
+                                TapHandler { onTapped: if (page.people) page.people.showCard(msgName, msg.model.sender) }
                             }
                             Label {
                                 visible: msg.grouped && hover.hovered
@@ -390,7 +406,14 @@ Pane {
                             RowLayout {
                                 visible: !msg.grouped
                                 spacing: 8
-                                Label { text: msg.model.senderName || ""; font.bold: true }
+                                Label {
+                                    id: msgName
+                                    objectName: "messageSenderName"
+                                    text: msg.model.senderName || ""; font.bold: true
+                                    font.underline: senderHover.hovered
+                                    HoverHandler { id: senderHover; cursorShape: Qt.PointingHandCursor }
+                                    TapHandler { onTapped: if (page.people) page.people.showCard(msgName, msg.model.sender) }
+                                }
                                 Label { text: page.dayLabel(msg.model.ts); font.pixelSize: 11; opacity: 0.55 }
                             }
                             TextEdit {

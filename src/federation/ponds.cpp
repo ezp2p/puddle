@@ -130,7 +130,7 @@ static void write_profile(puddle_ctx *ctx, const char *place, const char *profil
 static const char *pond_error(const puddle_net_reply *r, const char *fallback)
 {
     static const char *const KNOWN[] = {"no_channel", "bad_text", "slow_down", "bad_query", "files_off", "too_large", "no_file", "no_chunk",
-                                         "no_session", "full", "bad_sdp"};
+                                         "no_session", "full", "bad_sdp", "muted"};
     puddle_span v;
     char e[32];
     if (r->body && puddle_json_member(r->body, r->body_len, "error", &v) == 0 && puddle_json_string(v, e, sizeof e) == 0)

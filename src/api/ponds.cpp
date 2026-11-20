@@ -36,7 +36,7 @@ static Error failure(const char *code)
         return Error(409, code); /* the Pond takes no files, or not one this large; or it is not here whole */
     if (!strcmp(code, "slow_down"))
         return Error(429, code);
-    if (!strcmp(code, "invite_refused") || !strcmp(code, "removed"))
+    if (!strcmp(code, "invite_refused") || !strcmp(code, "removed") || !strcmp(code, "muted"))
         return Error(409, code);
     return Error(502, code); /* unreachable, not_a_pond, not_proven, failed */
 }
@@ -318,6 +318,14 @@ static int admin_ban(const puddle_call *c, puddle_jw *)
 {
     return relay(c, "POST", std::string("/pond/v1/admin/members/") + puddle_param(c, "member") + "/ban", objectBody(c));
 }
+static int admin_mute(const puddle_call *c, puddle_jw *)
+{
+    return relay(c, "POST", std::string("/pond/v1/admin/members/") + puddle_param(c, "member") + "/mute", objectBody(c));
+}
+static int admin_unmute(const puddle_call *c, puddle_jw *)
+{
+    return relay(c, "POST", std::string("/pond/v1/admin/members/") + puddle_param(c, "member") + "/unmute", "");
+}
 static int admin_bans(const puddle_call *c, puddle_jw *) { return relay(c, "GET", "/pond/v1/admin/bans", ""); }
 static int admin_invites(const puddle_call *c, puddle_jw *) { return relay(c, "GET", "/pond/v1/admin/invites", ""); }
 static int admin_invite_create(const puddle_call *c, puddle_jw *) { return relay(c, "POST", "/pond/v1/admin/invites/create", objectBody(c)); }
@@ -456,6 +464,8 @@ const puddle_route puddle_pond_api_routes[] = {
     { "POST", POND "/admin/channels/{channel:num}/delete",        PUDDLE_AUTH_OWNER, 64,    admin_channel_delete, NULL },
     { "POST", POND "/admin/members/{member:id}/remove",           PUDDLE_AUTH_OWNER, 64,    admin_remove,     NULL },
     { "POST", POND "/admin/members/{member:id}/ban",              PUDDLE_AUTH_OWNER, 2048,  admin_ban,        NULL },
+    { "POST", POND "/admin/members/{member:id}/mute",             PUDDLE_AUTH_OWNER, 256,   admin_mute,       NULL },
+    { "POST", POND "/admin/members/{member:id}/unmute",           PUDDLE_AUTH_OWNER, 64,    admin_unmute,     NULL },
     { "GET",  POND "/admin/bans",                                 PUDDLE_AUTH_OWNER, 0,     admin_bans,       NULL },
     { "POST", POND "/admin/bans/{member:id}/unban",               PUDDLE_AUTH_OWNER, 64,    admin_unban,      NULL },
     { "GET",  POND "/admin/invites",                              PUDDLE_AUTH_OWNER, 0,     admin_invites,    NULL },

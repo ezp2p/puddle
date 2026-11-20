@@ -15,7 +15,7 @@ class Ponds : public QObject {
     Q_OBJECT
     Q_PROPERTY(QObject *list READ list CONSTANT)           // the rail: id, name, status, address, icon (a picture's hash, "" for none)
     Q_PROPERTY(QObject *channels READ channels CONSTANT)   // of the open Pond: id, name, topic, kind (text, voice), voice (who is in it: id, name, color, avatar, muted, deafened, isMe)
-    Q_PROPERTY(QObject *members READ members CONSTANT)     // of the open Pond: id, name, color, avatar, isMe, role
+    Q_PROPERTY(QObject *members READ members CONSTANT)     // of the open Pond: id, name, color, avatar, isMe, role, muted, mutedUntil
     Q_PROPERTY(QObject *bans READ bans CONSTANT)           // of the open Pond, once loadBans() has asked: member, name, by, byName, reason, ts
     Q_PROPERTY(QObject *invites READ invites CONSTANT)     // of the open Pond, once loadInvites() has asked: token, link, uses, maxUses, expires, created
     Q_PROPERTY(QObject *messages READ messages CONSTANT)   // the open channel, oldest first: id, author, name, tint, avatar, text, files, ts, mine, grouped, dayStart
@@ -30,6 +30,8 @@ class Ponds : public QObject {
     Q_PROPERTY(QString channelTopic READ channelTopic NOTIFY channelChanged)
     Q_PROPERTY(QString currentRole READ currentRole NOTIFY currentInfoChanged)   // ours there: operator, administrator or member
     Q_PROPERTY(bool canAdmin READ canAdmin NOTIFY currentInfoChanged)           // operator or administrator: Server Settings
+    Q_PROPERTY(bool canMute READ canMute NOTIFY currentInfoChanged)             // ...and the Pond can mute (protocol 7)
+    Q_PROPERTY(double mutedUntil READ mutedUntil NOTIFY currentInfoChanged)     // we are muted there: until when (ms), 0 until unmuted; -1 not
     Q_PROPERTY(QString currentOffer READ currentOffer NOTIFY currentInfoChanged) // a role it offers us ("operator", "administrator"), or ""
     Q_PROPERTY(QString myId READ myId NOTIFY currentInfoChanged)
     Q_PROPERTY(bool canVoice READ canVoice NOTIFY currentInfoChanged)          // the open Pond has voice channels (its `features`)
@@ -57,6 +59,8 @@ public:
     QObject *invites() { return &invites_; }
     QString currentRole() const { return info_.value("role").toString(QStringLiteral("member")); }
     bool canAdmin() const { return currentRole() == QLatin1String("operator") || currentRole() == QLatin1String("administrator"); }
+    bool canMute() const { return canAdmin() && info_.value("protocol").toInt() >= 7; }
+    double mutedUntil() const { return people_.value(me_).value("mutedUntil").toDouble(-1); }
     QString currentOffer() const { return info_.value("offer").toObject().value("role").toString(); }
     QString myId() const { return me_; }
     bool canVoice() const { return info_.value("features").toArray().contains(QStringLiteral("voice")); }
@@ -103,6 +107,11 @@ public:
     Q_INVOKABLE QString nameAt(int row) const { return list_.at(row).value("name").toString(); }
     // A member of the open Pond's name, as they chose to appear there (their id's start if they show nothing)
     Q_INVOKABLE QString nameOf(const QString &memberId) const { return people_.value(memberId).value("name").toString(memberId.left(8)); }
+    // A member's card (a click on their name or picture): id, name, avatar, blurb, pronouns, colors, angle, role, isMe, muted,
+    // mutedUntil (ms; 0 until unmuted)
+    Q_INVOKABLE QVariantMap card(const QString &memberId) const;
+    // The parts of a profile a card shows: name, avatar, blurb, pronouns, colors (its name colour, or the stops of its gradient), angle
+    static QVariantMap cardOf(const QJsonObject &profile);
     // ...and their picture's hash there ("" for none)
     Q_INVOKABLE QString avatarOf(const QString &memberId) const { return people_.value(memberId).value("avatar").toString(); }
 
@@ -117,6 +126,9 @@ public:
     Q_INVOKABLE void editChannel(const QString &channelId, const QString &name, const QString &topic);
     Q_INVOKABLE void deleteChannel(const QString &channelId);
     Q_INVOKABLE void kick(const QString &memberId);
+    // `seconds` 0: until unmuted
+    Q_INVOKABLE void mute(const QString &memberId, int seconds);
+    Q_INVOKABLE void unmute(const QString &memberId);
     Q_INVOKABLE void ban(const QString &memberId, const QString &reason);
     Q_INVOKABLE void unban(const QString &memberId);
     Q_INVOKABLE void loadBans();

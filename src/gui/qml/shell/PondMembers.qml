@@ -10,6 +10,7 @@ Pane {
 
     required property var ponds
     property var chats: null       // for the members' pictures (Chats.avatarFor)
+    property var people: null      // the Shell: someone's card and menu (showCard, personMenuAt)
     property bool closable: false
     signal closeRequested()
 
@@ -44,20 +45,32 @@ Pane {
             Layout.fillHeight: true
             Layout.margins: 8
             model: panel.ponds.members
-            delegate: RowLayout {
+            delegate: Item {
+                id: pRow
                 required property var model
+                objectName: "pondMember_" + model.name
                 width: ListView.view.width
                 height: 44
-                spacing: 10
-                Avatar { objectName: "pondMemberAvatar"; Layout.leftMargin: 8; chats: panel.chats; name: parent.model.name; hash: parent.model.avatar || ""; tint: parent.model.color || ""; size: 32 }
-                Label {
-                    Layout.fillWidth: !badge.visible
-                    elide: Text.ElideRight
-                    text: parent.model.isMe ? qsTr("%1 (you)").arg(parent.model.name) : parent.model.name
-                    color: parent.model.color ? parent.model.color : palette.text
+                // a click shows their card under their name; a right-click, what can be done about them
+                HoverHandler { cursorShape: Qt.PointingHandCursor }
+                TapHandler { onTapped: if (panel.people) panel.people.showCard(pName, pRow.model.id) }
+                ContextTrigger { onRequested: (x, y) => { if (panel.people) panel.people.personMenuAt(pRow, x, y, pRow.model.id) } }
+                RowLayout {
+                    anchors.fill: parent
+                    spacing: 10
+                    Avatar { objectName: "pondMemberAvatar"; Layout.leftMargin: 8; chats: panel.chats; name: pRow.model.name; hash: pRow.model.avatar || ""; tint: pRow.model.color || ""; size: 32 }
+                    Label {
+                        id: pName
+                        Layout.fillWidth: !badge.visible && !mutedMark.visible
+                        elide: Text.ElideRight
+                        text: pRow.model.isMe ? qsTr("%1 (you)").arg(pRow.model.name) : pRow.model.name
+                        color: pRow.model.color ? pRow.model.color : palette.text
+                    }
+                    RoleBadge { id: badge; role: pRow.model.role || ""; Layout.rightMargin: mutedMark.visible ? 0 : 8 }
+                    // muted by an operator or administrator
+                    Icon { id: mutedMark; objectName: "pondMemberMuted"; visible: pRow.model.muted === true; glyph: "microphone-off"; size: 14; color: Theme.danger; Layout.rightMargin: 8 }
+                    Item { visible: badge.visible || mutedMark.visible; Layout.fillWidth: true }
                 }
-                RoleBadge { id: badge; role: parent.model.role || ""; Layout.rightMargin: 8 }
-                Item { visible: badge.visible; Layout.fillWidth: true }
             }
         }
     }
