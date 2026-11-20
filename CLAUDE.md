@@ -55,6 +55,7 @@ or looks like it conflicts with this list, ask rather than guess.
 - `docs/storage.md`, `docs/identity.md`, `docs/profiles.md`, `docs/streams.md`, `docs/calls.md`: design drafts the code follows
 - `docs/backup.md`: backups (`src/core/backup.*`), recovering, and moving a Puddle to a server
 - `docs/ponds.md`: being a member of Ponds (joining, following one's events, what is kept, the owner routes)
+- `docs/pond-dms.md`: direct messages between members of a Pond, the Puddle's side (a proposal waiting on the owner's choices; the design is the Pond's `docs/dms.md`)
 - `docs/levee.md`: the design draft for Levee (not built; open questions at its end)
 - `docs/roadmap.md`: the step-by-step plan for keys and streams; work through it in order, one step at a time
 - `docs/discuss-later.md`: open questions parked on purpose; don't raise them unprompted
