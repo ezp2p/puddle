@@ -3,7 +3,9 @@
 #include "core/link.h"
 #include "core/ponds.h"
 #include "core/profile.h"
+#include "objects/conversation.hpp"
 #include "objects/file.hpp"
+#include "objects/user.hpp"
 #include "storage/files.h"
 #include "storage/media.h"
 
@@ -444,6 +446,36 @@ static int voice_state(const puddle_call *c, puddle_jw *w)
     return writeVoice(c, w);
 }
 
+/* ---- direct messages through the Pond (docs/pond-dms.md) ---- */
+
+/* The conversation with a member through this Pond, made if there is none yet: then its messages, sending and reading are the
+ * conversation routes'. */
+static int open_dm(const puddle_call *c, puddle_jw *w)
+{
+    Conversation conv = Conversation::withMember(c->ctx, puddle_param(c, "pond"), puddle_param(c, "member"));
+    PartialUsers people(c->ctx);
+    conv.write(w, people);
+    return 200;
+}
+
+/* {"accept": bool}: whether the owner takes direct messages in this Pond. */
+static int dm_settings(const puddle_call *c, puddle_jw *w)
+{
+    Body b(c);
+    puddle_span v = b.raw("accept");
+    bool yes = v.len == 4 && !memcmp(v.p, "true", 4), no = v.len == 5 && !memcmp(v.p, "false", 5);
+    if (!yes && !no)
+        throw Error::badRequest("bad_accept");
+    pondsOf(c);
+    const char *code = "failed";
+    if (c->ctx->courier->pdm_accept(c->ctx, puddle_param(c, "pond"), yes, &code) != 0)
+        throw !strcmp(code, "dms_off") ? Error::conflict(code) : failure(code);
+    puddle_jw_object(w);
+    puddle_jw_flag(w, "accept", yes);
+    puddle_jw_end_object(w);
+    return 200;
+}
+
 #define POND "/api/v1/ponds/{pond:id}"
 
 const puddle_route puddle_pond_api_routes[] = {
@@ -472,6 +504,8 @@ const puddle_route puddle_pond_api_routes[] = {
     { "POST", POND "/admin/invites/create",                       PUDDLE_AUTH_OWNER, 256,   admin_invite_create, NULL },
     { "POST", POND "/admin/invites/{token:token}/revoke",         PUDDLE_AUTH_OWNER, 64,    admin_invite_revoke, NULL },
     { "POST", POND "/channels/{channel:num}/voice/join",          PUDDLE_AUTH_OWNER, 64,    join_voice,       NULL },
+    { "POST", POND "/dms/{member:id}/open",                        PUDDLE_AUTH_OWNER, 64,    open_dm,          NULL },
+    { "POST", POND "/dms/settings",                               PUDDLE_AUTH_OWNER, 64,    dm_settings,      NULL },
     { "GET",  "/api/v1/voice",                                    PUDDLE_AUTH_OWNER, 0,     get_voice,        NULL },
     { "POST", "/api/v1/voice/leave",                              PUDDLE_AUTH_OWNER, 64,    leave_voice,      NULL },
     { "POST", "/api/v1/voice/state",                              PUDDLE_AUTH_OWNER, 256,   voice_state,      NULL },

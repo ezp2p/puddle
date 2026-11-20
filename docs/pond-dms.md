@@ -77,7 +77,3 @@ member learns the address.
   says it is waiting to be fetched.
 - In the Pond's menu, **Direct messages…**: take direct messages here, on or off.
 - Settings, **Blocked**: both lists, each with Unblock.
-
-## Still open
-
-- Where the letter format goes in the protocol (part 05 or a part of its own); see the Pond's `docs/dms.md`, decision 9.

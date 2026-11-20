@@ -94,6 +94,7 @@ add_library(puddle_core STATIC
   src/core/people.cpp
   src/core/phrase.cpp
   src/core/ponds.cpp
+  src/core/pond_dms.cpp
   src/core/profile.cpp
   src/core/ratelimit.cpp
   src/core/streams.cpp
@@ -170,6 +171,7 @@ add_library(puddle_federation STATIC
   src/federation/keysync.cpp
   src/federation/messages.cpp
   src/federation/ponds.cpp
+  src/federation/pond_dms.cpp
   src/federation/profiles_api.cpp
   src/federation/sender.cpp)
 target_link_libraries(puddle_federation PUBLIC puddle_wire puddle_events puddle_http)

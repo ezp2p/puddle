@@ -1,4 +1,5 @@
 #include "federation/ponds.h"
+#include "federation/pond_dms.h"
 
 #include "base/encoding.h"
 #include "base/hash.h"
@@ -130,7 +131,8 @@ static void write_profile(puddle_ctx *ctx, const char *place, const char *profil
 static const char *pond_error(const puddle_net_reply *r, const char *fallback)
 {
     static const char *const KNOWN[] = {"no_channel", "bad_text", "slow_down", "bad_query", "files_off", "too_large", "no_file", "no_chunk",
-                                         "no_session", "full", "bad_sdp", "muted"};
+                                         "no_session", "full", "bad_sdp", "muted", "no_member", "not_accepted", "dms_off", "away",
+                                         "not_asked", "bad_part", "too_many_new"};
     puddle_span v;
     char e[32];
     if (r->body && puddle_json_member(r->body, r->body_len, "error", &v) == 0 && puddle_json_string(v, e, sizeof e) == 0)
@@ -148,7 +150,7 @@ static bool refused(const puddle_net_reply *r)
     const char *e = pond_error(r, "");
     bool answered = r->result == PUDDLE_NET_OK || (r->result == PUDDLE_NET_NOT_PROVEN && r->proof == PUDDLE_RECEIPT_MISSING && r->opened);
     return answered && r->status == 404 && strcmp(e, "no_channel") != 0 && strcmp(e, "no_file") != 0 && strcmp(e, "no_chunk") != 0 &&
-           strcmp(e, "no_session") != 0; /* a voice session it no longer has (the Pond's docs/voice.md) */
+           strcmp(e, "no_session") != 0 && strcmp(e, "no_member") != 0 && strcmp(e, "not_asked") != 0; /* a member gone; a piece not asked for */ /* a voice session it no longer has (the Pond's docs/voice.md) */
 }
 
 /* A call to a Pond we are in (the protocol's spec/05 and spec/09): sealed to its sealing key, and believed only with its receipt.
@@ -632,6 +634,8 @@ static void follow(puddle_ctx *ctx, Follower *f)
             puddle_ponds_set_status(ctx->ponds, id, "connected");
             o = follow_call(ctx, f, "GET", "/pond/v1/events?after=" + std::to_string(conn.cursor), "", EVENTS_MAX_BODY, 40, &r);
             if (o == GOT) {
+                if (r.status == 200 && r.body)
+                    puddle_pdm_events(ctx, id, r.body, r.body_len); /* direct messages, for us alone (docs/pond-dms.md) */
                 int e = r.status == 200 ? puddle_ponds_events(ctx->ponds, id, r.body, r.body_len) : -1;
                 if (e == 1)
                     synced = false, reset = true;
@@ -846,6 +850,23 @@ static bool owner_call(puddle_ctx *ctx, const char *pond, const char *method, co
             : r->result == PUDDLE_NET_NOT_PROVEN                                                       ? "not_proven"
                                                                                                        : "failed";
     return false;
+}
+
+bool puddle_pond_call(puddle_ctx *ctx, const char *pond, const char *method, const std::string &target, const std::string &body,
+                      size_t max_body, int total_s, int *status, std::string *reply, const char **code)
+{
+    puddle_net_reply r;
+    bool ok = owner_call(ctx, pond, method, target, body, max_body, &r, code, total_s);
+    if (ok && refused(&r)) {
+        *code = "removed";
+        ok = false;
+    }
+    if (ok) {
+        *status = r.status;
+        reply->assign(r.body ? r.body : "", r.body ? r.body_len : 0);
+    }
+    puddle_net_reply_free(&r);
+    return ok;
 }
 
 /* Make sure the Pond has file `ref` whole: begin it there with its chunk hashes, and send each chunk it is missing. */

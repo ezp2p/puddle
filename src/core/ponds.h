@@ -128,6 +128,18 @@ int64_t puddle_ponds_offer(puddle_ponds *p, const char *id);
 /* The owner answered it: the offer is gone, and our role is `role` (NULL: unchanged). */
 void puddle_ponds_answered(puddle_ponds *p, const char *id, const char *role);
 
+/* ---- direct messages (docs/pond-dms.md) ---- */
+
+/* Does the Pond relay direct messages between members (its "dms", protocol 8)? 1 yes, 0 its admin turned them off, -1 it says
+ * nothing of them (or no such Pond). `files_max` (may be NULL): the largest file one may carry, 0 none. */
+int puddle_ponds_dms(puddle_ponds *p, const char *id, int64_t *files_max);
+/* A member of the Pond, as it last said: their profile there (malloc'd, cleaned JSON, "" for none; `profile` may be NULL) and
+ * whether they take direct messages. 0, 1 not a member (now), -1 no such Pond. */
+int puddle_ponds_member(puddle_ponds *p, const char *id, const char *member, char **profile, size_t *len, int *dms);
+/* The Pond's name, and our own id in it (the owner's). 0, or -1 no such Pond. */
+int puddle_ponds_name(puddle_ponds *p, const char *id, char *out, size_t cap);
+int puddle_ponds_me(puddle_ponds *p, const char *id, char out[PUDDLE_USER_ID_LEN + 1]);
+
 /* ---- for the owner's routes (openapi.yaml, "ponds") ---- */
 
 /* [{id, name, description, icon, address, status, channels: [...]}]: `icon` {hash, mime, size} or null; each channel with its `kind`, and a voice channel with who is

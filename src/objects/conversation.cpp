@@ -1,6 +1,8 @@
 #include "objects/conversation.hpp"
 
 #include "core/conversations.h"
+#include "core/pond_dms.hpp"
+#include "core/ponds.h"
 #include "storage/files.h"
 #include "core/error.hpp"
 #include "core/identity.h"
@@ -79,6 +81,16 @@ struct ChatTail {
 
 std::optional<Conversation> Conversation::get(puddle_ctx *ctx, const std::string &id)
 {
+    if (pdm::Store *st = pdm::of(ctx)) {
+        if (auto pc = st->conv(id)) {
+            Conversation c(ctx, id, Kind::PondDm);
+            c.chat_ = id;
+            c.pond_ = pc->pond, c.member_ = pc->member, c.pondName_ = pc->pondName, c.offer_ = pc->offer, c.offered_ = pc->offered;
+            c.sortTs_ = pc->created;
+            c.summarise();
+            return c;
+        }
+    }
     if (auto g = Group::get(ctx, id)) {
         Conversation c(ctx, id, Kind::Group);
         c.chat_ = id;
@@ -117,6 +129,16 @@ std::vector<Conversation> Conversation::all(puddle_ctx *ctx)
         if (c.last_) // a friend we have never talked to is not a conversation yet
             out.push_back(std::move(c));
     }
+    if (pdm::Store *st = pdm::of(ctx))
+        for (const pdm::Conv &pc : st->convs()) {
+            Conversation c(ctx, pc.chat, Kind::PondDm);
+            c.chat_ = pc.chat;
+            c.pond_ = pc.pond, c.member_ = pc.member, c.pondName_ = pc.pondName, c.offer_ = pc.offer, c.offered_ = pc.offered;
+            c.sortTs_ = pc.created;
+            c.summarise();
+            if (c.last_ || !c.offer_.empty())
+                out.push_back(std::move(c));
+        }
     for (Group &g : Group::all(ctx)) {
         if (g.mine() != PUDDLE_GROUP_IN)
             continue;
@@ -134,6 +156,49 @@ std::vector<Conversation> Conversation::all(puddle_ctx *ctx)
         return a.id_ < b.id_;
     });
     return out;
+}
+
+Conversation Conversation::withMember(puddle_ctx *ctx, const std::string &pond, const std::string &member)
+{
+    pdm::Store *st = pdm::of(ctx);
+    if (!st || !ctx->ponds || puddle_ponds_conn(ctx->ponds, pond.c_str(), NULL) != 0)
+        throw Error::notFound();
+    std::string me = ownId(ctx), chat = pdm::chatId(pond, me, member);
+    if (chat.empty() || member == me)
+        throw Error::notFound();
+    if (auto c = get(ctx, chat))
+        return std::move(*c);
+    int dms = 1;
+    if (puddle_ponds_member(ctx->ponds, pond.c_str(), member.c_str(), nullptr, nullptr, &dms) != 0)
+        throw Error::notFound();
+    if (puddle_ponds_dms(ctx->ponds, pond.c_str(), nullptr) != 1)
+        throw Error::conflict("dms_off");
+    if (!dms)
+        throw Error::conflict("not_accepted");
+    pdm::Conv pc;
+    pc.chat = chat, pc.pond = pond, pc.member = member, pc.created = puddle_ctx_now_ms(ctx);
+    char name[512] = "";
+    puddle_ponds_name(ctx->ponds, pond.c_str(), name, sizeof name);
+    pc.pondName = name;
+    if (!st->put(pc))
+        throw Error::internal();
+    auto c = get(ctx, chat);
+    if (!c)
+        throw Error::internal();
+    return std::move(*c);
+}
+
+Conversation Conversation::befriend()
+{
+    if (kind_ != Kind::PondDm)
+        throw Error::notFound();
+    const char *code = nullptr;
+    if (ctx_->courier->pdm_befriend(ctx_, chat_.c_str(), &code) != 0)
+        throw Error::conflict(code ? code : "failed");
+    auto c = get(ctx_, id_);
+    if (!c)
+        throw Error::notFound();
+    return std::move(*c);
 }
 
 void Conversation::summarise()
@@ -187,7 +252,9 @@ void Conversation::summarise()
 Message Conversation::send(const std::string &text, const std::string &replyTo, const std::vector<puddle_file_ref> &files)
 {
     std::string me = ownId(ctx_);
-    if (kind_ == Kind::Dm) {
+    if (kind_ == Kind::PondDm) {
+        // checked as the letter is queued (federation/pond_dms.h)
+    } else if (kind_ == Kind::Dm) {
         if (id_ == me)
             throw Error::badRequest("cannot_message_yourself");
         if (*stream_ != PUDDLE_STREAM_ACTIVE || puddle_streams_is_blocked(ctx_->streams, id_.c_str()))
@@ -214,7 +281,11 @@ Message Conversation::send(const std::string &text, const std::string &replyTo, 
                                            refs.data(), refs.size(), event, sizeof event);
     if (!el)
         throw Error::badRequest(); // a reply reference that is not an id, or a message too large to send
-    if (kind_ == Kind::Dm) {
+    if (kind_ == Kind::PondDm) {
+        const char *code = nullptr;
+        if (ctx_->courier->pdm_send_event(ctx_, chat_.c_str(), event, el, id, &code) != 0)
+            throw Error::conflict(code ? code : "failed");
+    } else if (kind_ == Kind::Dm) {
         commitDirectEvent(ctx_, id_, chat_, event, el, id);
     } else {
         const char *code = nullptr;
@@ -245,6 +316,11 @@ Message Conversation::send(const std::string &text, const std::string &replyTo, 
     return Message::fromView(v, id_, chat_);
 }
 
+std::string Conversation::placeOf() const
+{
+    return kind_ == Kind::Group ? "group:" + id_ : kind_ == Kind::PondDm ? "pond:" + pond_ : std::string("dm");
+}
+
 Conversation Conversation::markRead()
 {
     char err[200] = "";
@@ -262,6 +338,13 @@ Conversation Conversation::markRead()
 
 Conversation Conversation::retry()
 {
+    if (kind_ == Kind::PondDm) {
+        ctx_->courier->pdm_retry(ctx_, chat_.c_str());
+        auto c = get(ctx_, id_);
+        if (!c)
+            throw Error::notFound();
+        return std::move(*c);
+    }
     if (!ctx_->outbox)
         throw Error::notFound();
     std::vector<std::string> peers;
@@ -297,11 +380,11 @@ Conversation Conversation::retry()
 void Conversation::write(puddle_jw *w, PartialUsers &people) const
 {
     std::string me = ownId(ctx_);
-    PartialUsers::In here(people, kind_ == Kind::Group ? "group:" + id_ : std::string("dm"));
+    PartialUsers::In here(people, placeOf());
     puddle_jw_object(w);
     puddle_jw_str(w, "id", id_.c_str());
-    puddle_jw_str(w, "kind", kind_ == Kind::Dm ? "dm" : "group");
-    puddle_jw_str(w, "name", kind_ == Kind::Dm ? people.name(id_).c_str() : name_.c_str());
+    puddle_jw_str(w, "kind", kind_ == Kind::Dm ? "dm" : kind_ == Kind::PondDm ? "pond_dm" : "group");
+    puddle_jw_str(w, "name", kind_ == Kind::Dm ? people.name(id_).c_str() : kind_ == Kind::PondDm ? people.name(member_).c_str() : name_.c_str());
     puddle_jw_num(w, "unread", unread_);
     puddle_jw_num(w, "sort_ts", sortTs_);
     if (last_) {
@@ -318,7 +401,42 @@ void Conversation::write(puddle_jw *w, PartialUsers &people) const
             puddle_jw_str(w, "preview", last_->preview.c_str());
         puddle_jw_end_object(w);
     }
-    if (kind_ == Kind::Dm) {
+    if (kind_ == Kind::PondDm) {
+        puddle_jw_key(w, "recipient");
+        people.write(w, member_);
+        puddle_jw_key(w, "pond");
+        puddle_jw_object(w);
+        puddle_jw_str(w, "id", pond_.c_str());
+        char name[512];
+        bool in = ctx_->ponds && puddle_ponds_name(ctx_->ponds, pond_.c_str(), name, sizeof name) == 0;
+        puddle_jw_str(w, "name", in ? name : pondName_.c_str());
+        puddle_jw_end_object(w);
+        // what stops writing to them, if anything: "left", "not_accepted" or "dms_off"; else null
+        int dms = 1, theirs = in ? puddle_ponds_member(ctx_->ponds, pond_.c_str(), member_.c_str(), nullptr, nullptr, &dms) : -1;
+        int pondDms = in ? puddle_ponds_dms(ctx_->ponds, pond_.c_str(), nullptr) : -1;
+        const char *closed = !in || theirs != 0 ? "left" : pondDms != 1 ? "dms_off" : !dms ? "not_accepted" : nullptr;
+        puddle_jw_key(w, "closed");
+        if (closed)
+            puddle_jw_string(w, closed);
+        else
+            puddle_jw_null(w);
+        puddle_jw_key(w, "friend_offer");
+        if (offer_.empty())
+            puddle_jw_null(w);
+        else
+            puddle_jw_string(w, offer_.c_str());
+        puddle_jw_flag(w, "offered", offered_);
+        pdm::Store *st = pdm::of(ctx_);
+        puddle_jw_flag(w, "blocked", st && st->blocked(member_));
+        puddle_jw_flag(w, "friend", ctx_->streams && [&] {
+            puddle_stream s;
+            if (puddle_streams_get(ctx_->streams, member_.c_str(), &s) != 0)
+                return false;
+            bool active = s.state == PUDDLE_STREAM_ACTIVE;
+            puddle_stream_free(&s);
+            return active;
+        }());
+    } else if (kind_ == Kind::Dm) {
         puddle_jw_key(w, "recipient");
         people.write(w, id_);
         puddle_jw_str(w, "stream", puddle_stream_state_name(*stream_));
@@ -345,8 +463,8 @@ void Conversation::writeMessages(puddle_jw *w, PartialUsers &people, size_t limi
     }
     // newest first, up to the limit and what fits; then written oldest first. What fits is measured, each message written once on its own,
     // so a page never stops short of what its `next` says it holds.
-    Deliveries deliveries(ctx_, kind_ == Kind::Dm ? id_ : std::string());
-    PartialUsers::In here(people, kind_ == Kind::Group ? "group:" + id_ : std::string("dm")); // authors as they are here
+    Deliveries deliveries(ctx_, kind_ == Kind::Group ? std::string() : id_);
+    PartialUsers::In here(people, placeOf()); // authors as they are here
     const size_t room = w->cap > w->len + 3000 ? w->cap - w->len - 3000 : 0; // what is left once the notices and the page's own text are allowed for
     std::vector<char> scratch(kPageBudget);
     size_t end = t.m > offset ? t.m - offset : 0, start = end, used = 0;

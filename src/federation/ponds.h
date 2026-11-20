@@ -66,5 +66,13 @@ void puddle_pond_followers_stop(puddle_pond_followers *f);
 
 #ifdef __cplusplus
 }
+
+#include <string>
+
+/* A call to a Pond we are in, as the owner's are (sealed to it, believed only with its receipt): its status and answer. false with
+ * `code` if no answer came that counts: "no_pond", "unreachable", "not_proven", "removed" (it no longer has us), "failed".
+ * Direct messages (federation/pond_dms.cpp) make theirs with this. */
+bool puddle_pond_call(puddle_ctx *ctx, const char *pond, const char *method, const std::string &target, const std::string &body,
+                      size_t max_body, int total_s, int *status, std::string *reply, const char **code);
 #endif
 #endif

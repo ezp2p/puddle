@@ -1,4 +1,5 @@
 #include "federation/courier.h"
+#include "federation/pond_dms.h"
 
 #include "federation/calls.h"
 #include "federation/files.h"
@@ -50,4 +51,8 @@ const puddle_courier puddle_federation_courier = {
     puddle_voice_leave,
     puddle_voice_state,
     puddle_voice_write,
+    puddle_pdm_send_event,
+    puddle_pdm_befriend,
+    puddle_pdm_retry,
+    puddle_pdm_accept,
 };

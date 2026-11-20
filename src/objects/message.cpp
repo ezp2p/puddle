@@ -9,6 +9,7 @@
 #include "storage/files.h"
 #include "core/streams.h"
 #include "core/group.h"
+#include "core/pond_dms.hpp"
 #include "events/group_events.h"
 
 #include <cstdio>
@@ -77,10 +78,23 @@ const char *typeName(Message::Type t)
     }
 }
 
-// send an event of ours into a conversation: a DM's goes to the other person, a group's to its members
+// a conversation through a Pond (docs/pond-dms.md): its id is its chat's
+bool isPondDm(puddle_ctx *ctx, const std::string &id)
+{
+    pdm::Store *st = pdm::of(ctx);
+    return st && st->conv(id).has_value();
+}
+
+// send an event of ours into a conversation: a DM's goes to the other person, a group's to its members, one through a Pond as a letter
 void sendEvent(puddle_ctx *ctx, bool group, const std::string &conversation, const std::string &chat, const char *event, size_t len,
                char id[PUDDLE_ID_HEX + 1])
 {
+    if (isPondDm(ctx, conversation)) {
+        const char *code = nullptr;
+        if (ctx->courier->pdm_send_event(ctx, chat.c_str(), event, len, id, &code) != 0)
+            throw Error::conflict(code ? code : "failed");
+        return;
+    }
     if (!group) {
         commitDirectEvent(ctx, conversation, chat, event, len, id);
         return;
@@ -101,6 +115,36 @@ void sendEvent(puddle_ctx *ctx, bool group, const std::string &conversation, con
 
 Deliveries::Deliveries(puddle_ctx *ctx, const std::string &peer) : peer_(peer)
 {
+    if (pdm::Store *st = pdm::of(ctx); st && !peer.empty() && st->conv(peer)) {
+        // through a Pond: the letters of ours that wait (none: delivered), as the outbox's items say them
+        std::vector<pdm::Letter> waiting;
+        for (pdm::Letter &l : st->letters())
+            if (l.chat == peer && l.kind == "message" && l.state != pdm::Letter::Delivered)
+                waiting.push_back(std::move(l));
+        items_ = (puddle_ob_item *)calloc(waiting.size() + 1, sizeof *items_);
+        if (!items_)
+            return;
+        for (const pdm::Letter &l : waiting) {
+            puddle_ob_item &it = items_[n_++];
+            snprintf(it.peer, sizeof it.peer, "%s", peer.c_str());
+            snprintf(it.kind, sizeof it.kind, "events");
+            std::string body = "{\"id\":\"" + l.id + "\"}";
+            it.body = strdup(body.c_str());
+            it.body_len = body.size();
+            it.state = l.state == pdm::Letter::Failed ? PUDDLE_OB_FAILED : PUDDLE_OB_QUEUED;
+            it.attempts = l.attempts;
+            it.next_ms = l.next;
+            it.created_ms = l.created;
+            const char *why = l.reason == "away" ? "their Puddle isn't connected to the Pond; it goes when it is"
+                            : l.reason == "not_delivered" ? "not delivered in 30 days"
+                            : l.reason == "left" ? "they are no longer in the Pond"
+                            : l.reason == "not_accepted" ? "they don't take direct messages there"
+                            : l.reason == "dms_off" ? "the Pond doesn't pass on direct messages"
+                            : l.reason.c_str();
+            snprintf(it.reason, sizeof it.reason, "%s", why);
+        }
+        return;
+    }
     if (ctx->outbox && puddle_outbox_list(ctx->outbox, &items_, &n_) != 0) {
         items_ = nullptr;
         n_ = 0;
@@ -250,7 +294,7 @@ std::optional<Message> Message::fromNotice(const puddle_event &ev, const std::st
 std::optional<Message> Message::get(puddle_ctx *ctx, const std::string &conversation, const std::string &id)
 {
     std::string chat = conversation;
-    if (!isGroup(ctx, conversation)) {
+    if (!isGroup(ctx, conversation) && !isPondDm(ctx, conversation)) {
         char dm[PUDDLE_USER_ID_LEN + 1];
         if (puddle_dm_chat_id(ownId(ctx).c_str(), conversation.c_str(), dm) != 0)
             return std::nullopt;
@@ -268,10 +312,10 @@ std::optional<Message> Message::get(puddle_ctx *ctx, const std::string &conversa
 Message Message::edit(puddle_ctx *ctx, const std::string &text) const
 {
     std::string me = ownId(ctx);
-    bool group = chat_ == conversation_;
+    bool pondDm = isPondDm(ctx, conversation_), group = !pondDm && chat_ == conversation_;
     if (group)
         requireMember(ctx, chat_);
-    else
+    else if (!pondDm)
         requireOpen(ctx, conversation_);
     if (sender_ != me || type_ != Type::Default)
         throw Error::notFound(); // someone else's is not ours to touch
@@ -293,10 +337,10 @@ Message Message::edit(puddle_ctx *ctx, const std::string &text) const
 Message Message::remove(puddle_ctx *ctx) const
 {
     std::string me = ownId(ctx);
-    bool group = chat_ == conversation_;
+    bool pondDm = isPondDm(ctx, conversation_), group = !pondDm && chat_ == conversation_;
     if (group)
         requireMember(ctx, chat_);
-    else
+    else if (!pondDm)
         requireOpen(ctx, conversation_);
     if (sender_ != me || type_ != Type::Default)
         throw Error::notFound();

@@ -1,5 +1,7 @@
 #include "objects/user.hpp"
 
+#include "core/ponds.h"
+
 #include "core/error.hpp"
 #include "core/group.h"
 #include "core/identity.h"
@@ -207,6 +209,12 @@ const PartialUsers::Entry &PartialUsers::lookup(const std::string &id)
     std::string profile;
     if (id == ownId(ctx_)) {
         profile = ownProfileJson(ctx_, place_);
+    } else if (place_.rfind("pond:", 0) == 0) { // as they show themselves in that Pond (a direct message through it)
+        char *json = nullptr;
+        size_t len = 0;
+        if (ctx_->ponds && puddle_ponds_member(ctx_->ponds, place_.c_str() + 5, id.c_str(), &json, &len, nullptr) == 0)
+            profile.assign(json, len);
+        free(json);
     } else {
         profile = peerProfile(ctx_, id.c_str(), place_.c_str());
     }
