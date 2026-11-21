@@ -49,7 +49,7 @@ static void usage(FILE *out)
 {
     fprintf(out,
             "usage: puddled [-c|--config FILE] [--wait | --init | --roll | --pair | --accept DIGITS | --backup FILE |\n"
-            "                --restore --from FILE]\n"
+            "                --restore --from FILE | --levee | --join-levee LINK | --leave-levee]\n"
             "\n"
             "  -c FILE  the config file (default: $PUDDLE_CONFIG, or ~/.config/puddle/puddle.yaml)\n"
             "  --wait   with no identity yet and no terminal, wait for `puddled --init` to be run (in a\n"
@@ -70,7 +70,14 @@ static void usage(FILE *out)
             "           bring your Puddle back here, asking for your recovery phrase. FILE is a backup (from\n"
             "           --backup, or Puddle's Settings), which brings back everything; or a copy of your chain\n"
             "           (identity/chain.jsonl, not secret), which brings back only your identity, and needs your\n"
-            "           LATEST phrase. (--chain FILE is the same as --from FILE.)\n");
+            "           LATEST phrase. (--chain FILE is the same as --from FILE.)\n"
+            "  --levee  whether this Puddle is behind a Levee (docs/levee.md): its address, and whether it is\n"
+            "           connected to it now\n"
+            "  --join-levee LINK\n"
+            "           put this Puddle behind the Levee a levee:// link names (from `leveectl join` on the\n"
+            "           Levee): friends reach it there from then on, and it needs no open ports. Quote the link.\n"
+            "  --leave-levee\n"
+            "           take it out again: friends are told its own address, and the Levee deletes what it kept\n");
 }
 
 /* The phrase goes to the terminal and nowhere else: never to the log, which a service manager keeps. */
@@ -329,6 +336,136 @@ static int accept_by_check(const puddle_config *cfg, const char *digits)
     return 1;
 }
 
+/* ---- the Levee, through the running Puddle's owner API (api/openapi.yaml, "Levee") ---- */
+
+/* GET /api/v1/levee's answer, said for a person. 0, or 1 with why on stderr. */
+static int say_levee(const char *json, size_t len)
+{
+    puddle_span v;
+    char address[300] = "", id[64] = "";
+    auto flag = [&](const char *key) {
+        return puddle_json_member(json, len, key, &v) == 0 && v.len == 4 && !memcmp(v.p, "true", 4);
+    };
+    if (!puddle_json_valid_object(json, len)) {
+        fprintf(stderr, "puddled: the Puddle's answer can't be read\n");
+        return 1;
+    }
+    if (!flag("joined")) {
+        printf("This Puddle is not behind a Levee: friends reach it at its own address.\n"
+               "On your Levee, run `leveectl join`, then here: puddled --join-levee 'levee://…'\n");
+        return 0;
+    }
+    if (puddle_json_member(json, len, "address", &v) == 0)
+        puddle_json_string(v, address, sizeof address);
+    if (puddle_json_member(json, len, "id", &v) == 0)
+        puddle_json_string(v, id, sizeof id);
+    printf("Behind the Levee at %s (id %.12s…).\n", address, id);
+    printf("  Connected:  %s\n", flag("attached") ? "yes" : "not now (trying again; what friends send waits there)");
+    printf("  Calls:      %s\n", !flag("calls") ? "no relay on this Levee" : "through its relay");
+    if (flag("calls"))
+        printf("  Pond voice: %s\n", flag("pond_voice_direct") ? "straight to the Pond (Ponds see this Puddle's address)" : "through the relay");
+    return 0;
+}
+
+static int levee_show(const puddle_config *cfg)
+{
+    puddle_net_reply r;
+    puddle_owner_request(cfg, "GET", "/api/v1/levee", NULL, &r);
+    int rc;
+    if (r.result != PUDDLE_NET_OK) {
+        fprintf(stderr, "puddled: %s\n", r.reason);
+        rc = 1;
+    } else if (r.status == 404) {
+        fprintf(stderr, "puddled: this Puddle doesn't know about Levees: it is older than this puddled. Update it and restart it.\n");
+        rc = 1;
+    } else if (r.status != 200 || !r.body) {
+        fprintf(stderr, "puddled: the Puddle answered %d\n", r.status);
+        rc = 1;
+    } else {
+        rc = say_levee(r.body, r.body_len);
+    }
+    puddle_net_reply_free(&r);
+    return rc;
+}
+
+static int levee_join(const puddle_config *cfg, const char *link)
+{
+    while (*link == ' ' || *link == '\t')
+        link++;
+    if (strncmp(link, "levee://", 8) != 0) {
+        fprintf(stderr, "puddled: that isn't a Levee's join link (levee://…). On the Levee, run: leveectl join\n");
+        return 2;
+    }
+    char body[1200];
+    puddle_jw w;
+    puddle_jw_init(&w, body, sizeof body);
+    puddle_jw_object(&w);
+    puddle_jw_str(&w, "link", link);
+    puddle_jw_end_object(&w);
+    if (!puddle_jw_finish(&w)) {
+        fprintf(stderr, "puddled: that link is too long to be a Levee's\n");
+        return 2;
+    }
+    printf("Joining the Levee...\n");
+    fflush(stdout);
+    puddle_net_reply r;
+    puddle_owner_request(cfg, "POST", "/api/v1/levee/join", body, &r);
+    int rc = 1;
+    puddle_span v;
+    char message[300] = "";
+    if (r.result != PUDDLE_NET_OK) {
+        fprintf(stderr, "puddled: %s\n", r.reason);
+    } else if (r.status == 200 && r.body) {
+        printf("Joined. Friends are told your new address now.\n\n");
+        puddle_net_reply_free(&r);
+        /* the Puddle connects to it by itself, in a moment: wait for that, so what we say is how it is */
+        for (int i = 0; i < 20; i++) {
+            puddle_owner_request(cfg, "GET", "/api/v1/levee", NULL, &r);
+            puddle_span a;
+            bool attached = r.result == PUDDLE_NET_OK && r.status == 200 && r.body &&
+                            puddle_json_member(r.body, r.body_len, "attached", &a) == 0 && a.len == 4 && !memcmp(a.p, "true", 4);
+            if (attached || i == 19)
+                break;
+            puddle_net_reply_free(&r);
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        }
+        rc = r.result == PUDDLE_NET_OK && r.status == 200 && r.body ? say_levee(r.body, r.body_len) : 0;
+    } else if (r.status == 404) {
+        fprintf(stderr, "puddled: this Puddle doesn't know about Levees: it is older than this puddled. Update it and restart it.\n");
+    } else {
+        if (r.body && puddle_json_member(r.body, r.body_len, "message", &v) == 0)
+            puddle_json_string(v, message, sizeof message);
+        fprintf(stderr, "puddled: the Levee couldn't be joined%s%s\n", message[0] ? ": " : "", message);
+    }
+    puddle_net_reply_free(&r);
+    return rc;
+}
+
+static int levee_leave(const puddle_config *cfg)
+{
+    if (puddle_console_interactive()) {
+        printf("Leave the Levee? Friends are told this Puddle's own address instead, and it needs an open port again to be\n"
+               "reached. What the Levee was keeping for you is deleted there. [y/N] ");
+        fflush(stdout);
+        char answer[16] = "";
+        if (!fgets(answer, sizeof answer, stdin) || (answer[0] != 'y' && answer[0] != 'Y')) {
+            printf("Still behind the Levee.\n");
+            return 1;
+        }
+    }
+    puddle_net_reply r;
+    puddle_owner_request(cfg, "POST", "/api/v1/levee/leave", "{}", &r);
+    int rc = 1;
+    if (r.result != PUDDLE_NET_OK)
+        fprintf(stderr, "puddled: %s\n", r.reason);
+    else if (r.status == 204)
+        printf("Left the Levee. Friends are told this Puddle's own address.\n"), rc = 0;
+    else
+        fprintf(stderr, "puddled: the Puddle answered %d\n", r.status);
+    puddle_net_reply_free(&r);
+    return rc;
+}
+
 /* Write the whole Puddle to `path`, sealed to its own key (core/backup.h). */
 static int write_backup(const puddle_config *cfg, const char *path)
 {
@@ -444,8 +581,8 @@ int main(int argc, char **argv)
 {
     const char *path = NULL;
     int init = 0, roll = 0, restore = 0, wait = 0;
-    const char *chain_path = NULL, *backup_path = NULL, *accept_digits = NULL;
-    int pair = 0;
+    const char *chain_path = NULL, *backup_path = NULL, *accept_digits = NULL, *levee_link = NULL;
+    int pair = 0, levee = 0, leave_levee = 0;
     for (int i = 1; i < argc; i++) {
         if ((!strcmp(argv[i], "-c") || !strcmp(argv[i], "--config")) && i + 1 < argc) {
             path = argv[++i];
@@ -463,6 +600,12 @@ int main(int argc, char **argv)
             pair = 1;
         } else if (!strcmp(argv[i], "--accept") && i + 1 < argc) {
             accept_digits = argv[++i];
+        } else if (!strcmp(argv[i], "--levee")) {
+            levee = 1;
+        } else if (!strcmp(argv[i], "--join-levee") && i + 1 < argc) {
+            levee_link = argv[++i];
+        } else if (!strcmp(argv[i], "--leave-levee")) {
+            leave_levee = 1;
         } else if (!strcmp(argv[i], "--backup") && i + 1 < argc) {
             backup_path = argv[++i];
         } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
@@ -482,7 +625,7 @@ int main(int argc, char **argv)
     }
     puddle_log_set_level((puddle_log_level)puddle_config_log_level(&cfg));
 
-    if (init + roll + restore + wait + pair + (backup_path != NULL) + (accept_digits != NULL) > 1) {
+    if (init + roll + restore + wait + pair + levee + leave_levee + (levee_link != NULL) + (backup_path != NULL) + (accept_digits != NULL) > 1) {
         usage(stderr);
         return 2;
     }
@@ -496,6 +639,12 @@ int main(int argc, char **argv)
         return pair_device(&cfg);
     if (accept_digits)
         return accept_by_check(&cfg, accept_digits);
+    if (levee)
+        return levee_show(&cfg);
+    if (levee_link)
+        return levee_join(&cfg, levee_link);
+    if (leave_levee)
+        return levee_leave(&cfg);
 
     int unfinished = puddle_identity_unconfirmed(cfg.data_dir);
     if (!puddle_identity_exists(cfg.data_dir) || unfinished) {
