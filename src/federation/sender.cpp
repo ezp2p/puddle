@@ -27,6 +27,9 @@ static int telling(const puddle_net_reply *r)
 static void attempt_at(const puddle_outbox_hooks *hooks, const puddle_ob_item *it, const puddle_address *addr, const char *recipient,
                        const unsigned char *pub, const unsigned char *seal, puddle_net_reply *reply)
 {
+    char levee_id[53];
+    unsigned char levee_key[32];
+    int levee = pub && hooks->peer_levee && hooks->peer_levee(hooks->user, it->peer, levee_id, levee_key);
     puddle_net_opts opts;
     memset(&opts, 0, sizeof opts);
     opts.connect_timeout_s = hooks->net.connect_timeout_s;
@@ -34,6 +37,8 @@ static void attempt_at(const puddle_outbox_hooks *hooks, const puddle_ob_item *i
     opts.total_timeout_s = hooks->net.total_timeout_s;
     opts.peer_pub = pub;
     opts.seal_pub = seal;
+    opts.peer_levee_id = levee ? levee_id : NULL;
+    opts.peer_levee_key = levee ? levee_key : NULL;
     opts.max_body = it->max_reply ? it->max_reply : 0;
     puddle_net_request(addr, it->method, it->path, it->body_len ? it->body : NULL, it->body_len, hooks->identity, recipient, &opts, reply);
 }

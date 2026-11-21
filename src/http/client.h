@@ -39,6 +39,17 @@ typedef struct {
      * that is waiting (puddle_sock_cut): a Pond holds a request for events open for up to 25 seconds. NULL = not told. */
     void (*on_socket)(void *user, puddle_sock s);
     void *user;
+    /* Their Levee (spec/06), as their address record named it: a custody receipt it signs for this request counts as delivered
+     * (`custody` in the reply). NULL = none. */
+    const char *peer_levee_id;
+    const unsigned char *peer_levee_key;
+    /* This Puddle's own requests to its Levee: never sent through it, signed in this header ("X-Levee-Signature") instead of
+     * X-Puddle-Signature, with `extra_headers` ("" or lines each ending \r\n). Everything else goes through the Levee while
+     * this Puddle is joined to one (core/levee.h), unless `direct`. */
+    int direct;
+    const char *sig_header;
+    const char *extra_headers;
+    const char *content_type; /* the body's, when it is not JSON (or sealed); NULL = as usual */
 } puddle_net_opts;
 
 #define PUDDLE_NET_BODY_MAX (64u * 1024)

@@ -32,6 +32,7 @@ typedef struct {
     puddle_receipt_check proof; /* with a peer key and an answer: what the receipt said */
     int checked;              /* the answer was checked against a key we hold for them, so only their signature counts */
     int opened;               /* it came sealed to our request, and opened: only the holder of the key we sealed to could make it */
+    int custody;              /* their Levee took it for them while they are away (spec/06): delivered, though not yet read */
     char content_type[48];    /* of the answer, as it said (lower case, without parameters); "" if it did not */
     char *body;               /* the response body, NUL-terminated, or NULL. Free with puddle_net_reply_free. */
     size_t body_len;

@@ -56,6 +56,8 @@ typedef struct {
     char addresses[PUDDLE_STREAM_MAX_ADDRS][PUDDLE_ADDR_MAX]; /* where to reach them, best first */
     int naddr;
     int64_t addr_seq;  /* of the signed address record these came from; the highest wins */
+    char levee_id[53];     /* the Levee their address record names (spec/06): its custody receipts count as delivered; "" for none */
+    char levee_key[65];    /* that Levee's signing key, hex */
     int64_t chain_sent;    /* the highest seq of OUR key chain this peer is known to hold; -1 = not known */
     int64_t addr_sent;     /* the highest seq of OUR address record this peer is known to hold; -1 = not known */
     char ticket[33];       /* 32 hex characters: a request we sent to an address, until its answer names who they are (and the
@@ -160,6 +162,9 @@ int puddle_streams_current_key(void *streams, const char *id, unsigned char sign
 
 /* Their current sealing key (X25519, from their chain), to seal what we send them to (spec/09): 1, or 0 as above. */
 int puddle_streams_seal_key(void *streams, const char *id, unsigned char enc_pub[32]);
+
+/* The Levee `id`'s address record names (spec/06): 1 with its id and signing key, 0 if none. */
+int puddle_streams_levee(void *streams, const char *id, char levee_id[53], unsigned char key[32]);
 
 /* Do we hold any record of `id` (in any state, with or without their chain; blocked or not)? Whether to sign for an answer to
  * them: a stranger, who could have proven a request with a chain of their own, is told nothing, and a blocked peer is told

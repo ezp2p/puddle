@@ -18,6 +18,9 @@ typedef struct {
     size_t content_length;     /* 0 if absent */
     int expect_continue;       /* the client asked "100-continue" before sending its body */
     char range[64];            /* Range, "" if absent */
+    char content_type[80];     /* Content-Type, "" if absent (only a request handed over by a Levee says it here) */
+    int64_t received_ms;       /* handed over by our Levee from its spool (spec/06): when it came, which its clock is checked
+                                * against instead of now; 0 for a request that came straight here */
 } puddle_request;
 
 /* Parse the request line and the headers we use of a (complete) header block. Anything that could make two

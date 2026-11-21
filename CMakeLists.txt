@@ -93,6 +93,7 @@ add_library(puddle_core STATIC
   src/core/delivery.cpp
   src/core/group.cpp
   src/core/identity.cpp
+  src/core/levee.cpp
   src/core/link.cpp
   src/core/outbox.cpp
   src/core/people.cpp
@@ -150,6 +151,7 @@ add_library(puddle_api STATIC
   src/api/calls.cpp
   src/api/conversations.cpp
   src/api/devices.cpp
+  src/api/levee.cpp
   src/api/files.cpp
   src/api/groups.cpp
   src/api/ponds.cpp
@@ -194,6 +196,7 @@ endif()
 
 # service: the assembled Puddle (server.cpp) and every route together
 add_library(puddle_service STATIC
+  src/service/levee.cpp
   src/service/main.cpp
   src/service/routes.cpp
   src/service/server.cpp)

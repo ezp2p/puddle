@@ -1,5 +1,8 @@
 #include "federation/flow.h"
 
+#include "core/levee.h"
+#include "base/encoding.h"
+
 #include "base/hash.h"
 #include "base/text.h"
 #include "federation/access.h"
@@ -31,6 +34,16 @@ int puddle_flow_write_self(puddle_ctx *ctx, const char *peer, puddle_jw *w)
     puddle_jw_object(w);
     puddle_jw_str(w, "id", me);
     puddle_jw_str(w, "address", addr);
+    puddle_levee_state lv;
+    if (puddle_levee_current(&lv)) { /* the Levee that answers for us while we are away (spec/06) */
+        char key[64];
+        puddle_base64_encode(lv.key, 32, key, sizeof key);
+        puddle_jw_key(w, "levee");
+        puddle_jw_object(w);
+        puddle_jw_str(w, "id", lv.id);
+        puddle_jw_str(w, "key", key);
+        puddle_jw_end_object(w);
+    }
     if (shown) {
         puddle_jw_key(w, "profile");
         puddle_jw_object(w);

@@ -58,6 +58,8 @@ static int apply_answer(void *user, puddle_stream *st, int exists)
     }
     st->scoped_req = 0;
     puddle_stream_add_address(st, a->peer->address); /* the one from the link stays first */
+    snprintf(st->levee_id, sizeof st->levee_id, "%s", a->peer->levee_id);
+    snprintf(st->levee_key, sizeof st->levee_key, "%s", a->peer->levee_key);
     if (puddle_stream_set_chain(st, a->peer->chain, a->peer->chain_len) != 0)
         return -1;
     return 0;

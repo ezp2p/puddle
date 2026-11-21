@@ -114,6 +114,11 @@ struct puddle_ctx {
     puddle_pond_followers *pond_followers; /* a thread following each (federation/ponds.h); NULL = none are followed */
     puddle_calls *calls;                   /* calls with friends (federation/calls.h); NULL = none (off, not built, or not started) */
     void *pond_dms;                        /* direct messages through Ponds: a puddle::pdm::Store (core/pond_dms.hpp); NULL = none */
+    /* this Puddle's Levee (docs/levee.md): what keeps it attached (service/levee.h), and the owner's say over it; NULL = none */
+    void *levee_worker;
+    int (*levee_join)(struct puddle_ctx *ctx, const char *link, char *err, size_t errlen);
+    int (*levee_leave)(struct puddle_ctx *ctx, char *err, size_t errlen);
+    int (*levee_attached)(struct puddle_ctx *ctx);
     void *pond_dms_worker;                 /* what sends and fetches them (federation/pond_dms.h); NULL = none */
     puddle_replay *replay;                 /* one nonce memory for the whole Puddle */
     puddle_bucket *anon_bucket;            /* work done for strangers before they are authenticated; NULL = unlimited */

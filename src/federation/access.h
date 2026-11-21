@@ -25,7 +25,7 @@ extern "C" {
 #define PUDDLE_MAX_PENDING_IN 200               /* requests waiting on the owner */
 #define PUDDLE_MAX_PEERS 5000                   /* records of any kind */
 
-/* One side's account of itself to the other: {"id","address","profile","chain"}. The address must parse, and the chain
+/* One side's account of itself to the other: {"id","address","profile","chain"}, and "levee" {id, key} behind a Levee. The address must parse, and the chain
  * is kept as text (verified by puddle_peer_key). The profile is there only if they chose to show us one; it is rebuilt from
  * the fields we use, leaving out what is wrong with a note (wire/wireprofile.h). */
 typedef struct {
@@ -35,6 +35,7 @@ typedef struct {
     char profile_notes[PUDDLE_WIRE_NOTES_MAX];
     char *chain;
     size_t chain_len;
+    char levee_id[53], levee_key[65]; /* the Levee that answers for them while they are away (spec/06), key in hex; "" for none */
 } puddle_peer_info;
 int puddle_peer_parse(const char *obj, size_t len, puddle_peer_info *p);
 void puddle_peer_info_free(puddle_peer_info *p);

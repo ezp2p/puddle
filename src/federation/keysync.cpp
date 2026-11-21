@@ -1,5 +1,7 @@
 #include "federation/keysync.h"
 
+#include "core/levee.h"
+
 #include "federation/access.h"
 #include "http/client.h"
 #include "base/encoding.h"
@@ -90,6 +92,7 @@ static int extends(const char *shorter, size_t sl, const char *longer, size_t ll
 typedef struct {
     int64_t seq;
     char address[PUDDLE_ADDR_MAX];
+    char levee[53]; /* the Levee the record names (spec/06), "" for none */
 } address_state;
 
 static void state_path(const puddle_ctx *ctx, char *out, size_t cap)
@@ -113,6 +116,8 @@ static int load_state(const puddle_ctx *ctx, address_state *st)
     if (!puddle_json_valid_object(text, n) || puddle_json_member(text, n, "seq", &v) != 0 || puddle_json_int64(v, &st->seq) != 0 ||
         st->seq < 0 || puddle_json_member(text, n, "address", &v) != 0 || puddle_json_string(v, st->address, sizeof st->address) != 0)
         return 1; /* damaged: start again from what is true now */
+    if (puddle_json_member(text, n, "levee", &v) == 0)
+        puddle_json_string(v, st->levee, sizeof st->levee);
     return 0;
 }
 
@@ -124,6 +129,8 @@ static int save_state(const puddle_ctx *ctx, const address_state *st, int64_t no
     puddle_jw_object(&w);
     puddle_jw_num(&w, "seq", st->seq);
     puddle_jw_str(&w, "address", st->address);
+    if (st->levee[0])
+        puddle_jw_str(&w, "levee", st->levee);
     puddle_jw_num(&w, "ts", now);
     puddle_jw_end_object(&w);
     size_t n = puddle_jw_finish(&w);
@@ -149,6 +156,17 @@ static char *address_body(puddle_ctx *ctx, const address_state *st, int64_t now,
     puddle_jw_end_array(&w);
     puddle_jw_num(&w, "seq", st->seq);
     puddle_jw_num(&w, "ts", now);
+    /* behind a Levee: which one answers for us while we are away, so its custody receipts count (spec/06) */
+    puddle_levee_state lv;
+    if (st->levee[0] && puddle_levee_current(&lv) && !strcmp(lv.id, st->levee)) {
+        char key[64];
+        puddle_base64_encode(lv.key, 32, key, sizeof key);
+        puddle_jw_key(&w, "levee");
+        puddle_jw_object(&w);
+        puddle_jw_str(&w, "id", lv.id);
+        puddle_jw_str(&w, "key", key);
+        puddle_jw_end_object(&w);
+    }
     puddle_jw_end_object(&w);
     size_t rl = puddle_jw_finish(&w);
     if (!rl || puddle_text_sign(ctx->identity, PUDDLE_ADDRESS_DOMAIN, rec, rl, sig) != 0)
@@ -369,12 +387,15 @@ int puddle_sync_resume(puddle_ctx *ctx)
     puddle_my_address(ctx->config, addr, sizeof addr);
     memset(&now_state, 0, sizeof now_state);
     snprintf(now_state.address, sizeof now_state.address, "%s", addr);
+    puddle_levee_state lv;
+    if (puddle_levee_current(&lv))
+        snprintf(now_state.levee, sizeof now_state.levee, "%s", lv.id);
     int have = load_state(ctx, &saved) == 0;
     int64_t now = puddle_ctx_now_ms(ctx);
     if (!have) {
         now_state.seq = 0; /* the first record: people were told where we are when the stream began */
         save_state(ctx, &now_state, now);
-    } else if (strcmp(saved.address, now_state.address) != 0) { /* a new certificate needs no news: it proves itself (streams.md) */
+    } else if (strcmp(saved.address, now_state.address) != 0 || strcmp(saved.levee, now_state.levee) != 0) {
         now_state.seq = saved.seq + 1;
         if (save_state(ctx, &now_state, now) != 0)
             puddle_log(PUDDLE_LOG_WARN, "cannot save our address record; friends will not be told it changed");
@@ -547,6 +568,7 @@ typedef struct {
     int64_t seq;
     char addrs[PUDDLE_STREAM_MAX_ADDRS][PUDDLE_ADDR_MAX];
     int naddr;
+    char levee_id[53], levee_key[65]; /* the Levee they named, "" for none */
     int newer;
 } moved;
 
@@ -561,6 +583,8 @@ static int apply_moved(void *user, puddle_stream *st, int exists)
         for (int i = 0; i < m->naddr; i++)
             puddle_stream_add_address(st, m->addrs[i]);
     }
+    snprintf(st->levee_id, sizeof st->levee_id, "%s", m->levee_id);
+    snprintf(st->levee_key, sizeof st->levee_key, "%s", m->levee_key);
     m->newer = 1;
     return 0;
 }
@@ -608,6 +632,23 @@ static int address_post(const puddle_call *c, puddle_jw *w)
         if (r < 0)
             ok = 0;
         /* a `tls_fp`, which older Puddles send, is left unread: certificates prove nothing here (streams.md) */
+        /* behind a Levee: its id and key, the id the hash of the key (spec/06) */
+        puddle_span lvv;
+        if (ok && puddle_json_member(rec, rl, "levee", &lvv) == 0) {
+            puddle_span iv, kv;
+            char key64[64];
+            unsigned char key[40];
+            size_t kl = 0;
+            char want[PP_ID_LEN + 1];
+            ok = puddle_json_member(lvv.p, lvv.len, "id", &iv) == 0 && puddle_json_string(iv, m.levee_id, sizeof m.levee_id) == 0 &&
+                 puddle_json_member(lvv.p, lvv.len, "key", &kv) == 0 && puddle_json_string(kv, key64, sizeof key64) == 0 &&
+                 puddle_base64_decode(key64, key, sizeof key, &kl) == 0 && kl == 32;
+            if (ok) {
+                pp_key_id_b32(PP_LABEL_LEVEE, key, want);
+                ok = !strcmp(want, m.levee_id);
+                puddle_hex_encode(key, 32, m.levee_key);
+            }
+        }
     }
     /* it must be signed by their key as we hold it now: the request already was, and the record has to agree */
     if (ok) {
