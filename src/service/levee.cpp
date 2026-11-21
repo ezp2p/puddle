@@ -8,12 +8,17 @@
 #include "core/identity.h"
 #include "core/levee.h"
 #include "core/streams.h"
+#include "federation/files.h"
 #include "federation/keysync.h"
+#include "storage/files.h"
 #include "http/client.h"
 #include "http/http.h"
 #include "platform/fsutil.h"
 
+#include <array>
 #include <atomic>
+#include <deque>
+#include <vector>
 #include <chrono>
 #include <condition_variable>
 #include <mutex>
@@ -35,6 +40,12 @@ struct Worker {
     std::atomic<bool> attached{ false };
     puddle_sock sock = PUDDLE_SOCK_NONE; /* the request waiting on the Levee now, cut to stop */
     std::string peers_sent;              /* what the Levee was last told */
+    struct FileJob {
+        std::string file;
+        std::array<unsigned char, 32> key;
+        std::vector<std::string> for_whom;
+    };
+    std::deque<FileJob> files; /* to leave at the Levee (spec/06, "Files") */
 };
 
 constexpr size_t INBOX_MAX = 16u << 20;
@@ -281,7 +292,9 @@ void handle_item(Worker *w, const puddle_levee_state &lv, const char *j, size_t 
     if (puddle_json_member(j, n, "n", &v) != 0 || puddle_json_int64(v, &num) != 0)
         return;
     if (puddle_json_member(j, n, "file_done", &hv) == 0) {
-        puddle_log(PUDDLE_LOG_INFO, "levee: %.12s… has fetched a file we left there", json_str(hv.p, hv.len, "by").c_str());
+        std::string file = json_str(hv.p, hv.len, "file"), by = json_str(hv.p, hv.len, "by");
+        puddle_log(PUDDLE_LOG_DEBUG, "levee: %.12s… has fetched a file we left there", by.c_str());
+        puddle_file_note_delivered(w->ctx, file.c_str(), by.c_str()); /* as if from us: asking again needs the owner's yes */
         return;
     }
     bool live = puddle_json_member(j, n, "live", &v) == 0 && v.len == 4 && !memcmp(v.p, "true", 4);
@@ -357,6 +370,55 @@ void handle_item(Worker *w, const puddle_levee_state &lv, const char *j, size_t 
     puddle_net_reply_free(&r);
 }
 
+/* Leave a file at the Levee: its hashes and each chunk, sealed under its key, then who may fetch it. true when it is there. */
+bool upload_file(Worker *w, const puddle_levee_state &lv, const Worker::FileJob &job)
+{
+    puddle_files *files = (puddle_files *)w->ctx->files;
+    int64_t size = 0;
+    unsigned char *hashes = nullptr;
+    uint32_t count = 0;
+    if (!files || puddle_files_chunk_list(files, job.file.c_str(), &size, &hashes, &count) != 0)
+        return false;
+    std::string plain(8, '\0');
+    for (int i = 0; i < 8; i++)
+        plain[i] = (char)((uint64_t)size >> (56 - 8 * i));
+    plain.append((const char *)hashes, (size_t)count * 32);
+    free(hashes);
+    auto put = [&](const std::string &piece, uint64_t index, const unsigned char *data, size_t len) {
+        std::string sealed(pp_seal_answer_len(len), '\0');
+        if (pp_seal_piece(job.key.data(), index, 0, data, len, (unsigned char *)sealed.data()) != 0)
+            return false;
+        puddle_net_reply r;
+        levee_call(w, lv, "POST", "/levee/v1/files/" + job.file + "/" + piece, sealed, false, "", "application/octet-stream", 120, 1024, &r);
+        bool ok = r.result == PUDDLE_NET_OK && r.status == 204;
+        if (!ok)
+            puddle_log(PUDDLE_LOG_WARN, "levee: cannot leave a file there: %s", r.result == PUDDLE_NET_OK ? ("HTTP " + std::to_string(r.status)).c_str() : r.reason);
+        puddle_net_reply_free(&r);
+        return ok;
+    };
+    if (!put("hashes", PP_PIECE_HASHES, (const unsigned char *)plain.data(), plain.size()))
+        return false;
+    for (uint32_t n = 0; n < count; n++) {
+        unsigned char *data = nullptr;
+        size_t len = 0;
+        if (puddle_files_read_chunk(files, job.file.c_str(), n, &data, &len) != 0)
+            return false;
+        bool ok = put(std::to_string(n), n, data, len);
+        free(data);
+        if (!ok)
+            return false;
+    }
+    std::string ready = "{\"for\":[";
+    for (size_t i = 0; i < job.for_whom.size(); i++)
+        ready += (i ? ",\"" : "\"") + job.for_whom[i] + "\"";
+    ready += "]}";
+    puddle_net_reply r;
+    levee_call(w, lv, "POST", "/levee/v1/files/" + job.file + "/ready", ready, true, "", nullptr, 30, 1024, &r);
+    bool ok = r.result == PUDDLE_NET_OK && r.status == 204;
+    puddle_net_reply_free(&r);
+    return ok;
+}
+
 void wait_for(Worker *w, int ms)
 {
     std::unique_lock<std::mutex> lk(w->mu);
@@ -414,6 +476,18 @@ void run(Worker *w)
             else if (r.result == PUDDLE_NET_OK && r.status == 404)
                 w->attached = false;
             puddle_net_reply_free(&r);
+        }
+        for (;;) { /* files to leave there, before waiting on the inbox */
+            Worker::FileJob job;
+            {
+                std::lock_guard<std::mutex> g(w->mu);
+                if (w->files.empty() || w->stop)
+                    break;
+                job = w->files.front();
+                w->files.pop_front();
+            }
+            if (!upload_file(w, lv, job))
+                puddle_log(PUDDLE_LOG_INFO, "levee: a file wasn't left there; friends fetch it from here instead");
         }
         puddle_net_reply r;
         levee_call(w, lv, "GET", "/levee/v1/inbox?after=" + std::to_string(lv.after), "", false, "", nullptr, 40, INBOX_MAX, &r);
@@ -513,6 +587,55 @@ int leave(puddle_ctx *ctx, char *err, size_t errlen)
     return 0;
 }
 
+void offer_file(puddle_ctx *ctx, const char *file, const unsigned char key[32], const char *const *for_ids, size_t n)
+{
+    Worker *w = (Worker *)ctx->levee_worker;
+    if (!w || !file || !n)
+        return;
+    Worker::FileJob job;
+    job.file = file;
+    memcpy(job.key.data(), key, 32);
+    for (size_t i = 0; i < n; i++)
+        job.for_whom.push_back(for_ids[i]);
+    std::lock_guard<std::mutex> g(w->mu);
+    w->files.push_back(std::move(job));
+    w->kick = true;
+    w->cv.notify_all();
+    if (w->sock != PUDDLE_SOCK_NONE)
+        puddle_sock_cut(w->sock); /* stop waiting on the inbox: it goes now, and the inbox is asked again after */
+}
+
+/* A request of ours to `peer`'s Levee (at their address), signed for them; neither sealed nor signed for in return: what it
+ * carries is sealed under the file's key, and checked against the file's id. */
+void at_their_levee(puddle_ctx *ctx, const puddle_address &addr, const char *peer, const char *method, const std::string &target,
+                    size_t max, puddle_net_reply *r)
+{
+    puddle_net_opts o;
+    memset(&o, 0, sizeof o);
+    o.total_timeout_s = 60;
+    o.io_timeout_s = 30;
+    o.max_body = max;
+    puddle_net_request(&addr, method, target.c_str(), nullptr, 0, ctx->identity, peer, &o, r);
+}
+
+void file_fetched(puddle_ctx *ctx, const char *sender, const char *file)
+{
+    char lid[53];
+    unsigned char lkey[32];
+    puddle_stream st;
+    if (!ctx->streams || !puddle_streams_levee(ctx->streams, sender, lid, lkey) ||
+        puddle_streams_get((puddle_streams *)ctx->streams, sender, &st) != 0)
+        return;
+    puddle_address addr;
+    bool have = st.naddr > 0 && puddle_address_parse(st.addresses[0], &addr) == 0;
+    puddle_stream_free(&st);
+    if (!have)
+        return;
+    puddle_net_reply r;
+    at_their_levee(ctx, addr, sender, "POST", std::string("/levee/v1/files/") + file + "/done", 1024, &r);
+    puddle_net_reply_free(&r);
+}
+
 int attached(puddle_ctx *ctx)
 {
     Worker *w = (Worker *)ctx->levee_worker;
@@ -532,6 +655,8 @@ void puddle_levee_worker_start(puddle_ctx *ctx, const puddle_router *router)
     ctx->levee_join = join;
     ctx->levee_leave = leave;
     ctx->levee_attached = attached;
+    ctx->levee_offer_file = offer_file;
+    ctx->levee_file_fetched = file_fetched;
     w->thread = std::thread(run, w);
 }
 
@@ -553,5 +678,69 @@ void puddle_levee_worker_stop(puddle_ctx *ctx)
     ctx->levee_join = nullptr;
     ctx->levee_leave = nullptr;
     ctx->levee_attached = nullptr;
+    ctx->levee_offer_file = nullptr;
     delete w;
+}
+
+/* ---- fetching a file that waits at its sender's Levee ---- */
+
+void puddle_levee_fetch(void *user, const char *peer, const char *path, size_t max, puddle_net_reply *reply)
+{
+    puddle_levee_fetcher *f = (puddle_levee_fetcher *)user;
+    puddle_ctx *ctx = f->ctx;
+    /* /stream/v1/files/<file>/chunks[/<n>]?chat=<chat>&message=<message> */
+    static const char pre[] = "/stream/v1/files/";
+    std::string p = path, file, rest, chat, message;
+    char lid[53];
+    unsigned char lkey[32], key[32];
+    if (p.compare(0, sizeof pre - 1, pre) == 0 && p.size() > sizeof pre - 1 + 64) {
+        file = p.substr(sizeof pre - 1, 64);
+        size_t q = p.find('?');
+        rest = p.substr(sizeof pre - 1 + 64, q == std::string::npos ? std::string::npos : q - (sizeof pre - 1 + 64));
+        if (q != std::string::npos) {
+            char vals[2][PUDDLE_QUERY_VALUE_MAX];
+            static const char *const keys[] = { "chat", "message" };
+            if (puddle_query_parse(p.c_str(), keys, 2, vals) == 0)
+                chat = vals[0], message = vals[1];
+        }
+    }
+    bool hashes = rest == "/chunks", chunk = rest.compare(0, 8, "/chunks/") == 0 && rest.size() > 8;
+    puddle_stream st;
+    puddle_address addr;
+    bool have_addr = false;
+    if ((hashes || chunk) && !chat.empty() && ctx->streams && puddle_streams_levee(ctx->streams, peer, lid, lkey) &&
+        puddle_file_key(ctx, chat.c_str(), message.c_str(), file.c_str(), key) &&
+        puddle_streams_get((puddle_streams *)ctx->streams, peer, &st) == 0) {
+        have_addr = st.naddr > 0 && puddle_address_parse(st.addresses[0], &addr) == 0;
+        puddle_stream_free(&st);
+    }
+    if (have_addr) {
+        std::string piece = hashes ? "hashes" : rest.substr(8);
+        uint64_t index = hashes ? PP_PIECE_HASHES : strtoull(piece.c_str(), nullptr, 10);
+        puddle_net_reply r;
+        at_their_levee(ctx, addr, peer, "GET", "/levee/v1/files/" + file + "/" + piece, pp_seal_answer_len(max + 8) + 64, &r);
+        if (r.result == PUDDLE_NET_OK && r.status == 200 && r.body) {
+            std::string plain(r.body_len, '\0');
+            size_t pl = 0;
+            if (pp_open_piece(key, index, 0, (const unsigned char *)r.body, r.body_len, (unsigned char *)plain.data(), &pl) == 0 &&
+                (!hashes || pl >= 8)) {
+                plain.resize(pl);
+                if (hashes)
+                    plain = plain.substr(8); /* what the route answers: the chunk hashes alone (the size is the message's) */
+                memset(reply, 0, sizeof *reply);
+                reply->result = PUDDLE_NET_OK;
+                reply->status = 200;
+                reply->body = (char *)malloc(plain.size() + 1);
+                if (reply->body) {
+                    memcpy(reply->body, plain.data(), plain.size());
+                    reply->body[plain.size()] = '\0';
+                    reply->body_len = plain.size();
+                }
+                puddle_net_reply_free(&r);
+                return;
+            }
+        }
+        puddle_net_reply_free(&r);
+    }
+    puddle_federation_fetch((void *)f->hooks, peer, path, max, reply); /* not there: from them, as always */
 }

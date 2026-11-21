@@ -1,4 +1,8 @@
 #include "objects/conversation.hpp"
+#include <array>
+#include <openssl/rand.h>
+#include "base/encoding.h"
+#include "core/levee.h"
 
 #include "core/conversations.h"
 #include "core/pond_dms.hpp"
@@ -267,11 +271,18 @@ Message Conversation::send(const std::string &text, const std::string &replyTo, 
     if (files.empty() && text.empty())
         throw Error::badRequest("bad_body");
     std::vector<puddle_file_ref> refs = files;
-    for (auto &f : refs) {
+    /* behind a Levee, each file waits there for the others, sealed under a key of its own that only the message carries (spec/06) */
+    bool viaLevee = kind_ != Kind::PondDm && ctx_->levee_offer_file && puddle_levee_current(nullptr);
+    std::vector<std::array<unsigned char, 32>> keys(refs.size());
+    for (size_t i = 0; i < refs.size(); i++) {
+        auto &f = refs[i];
         int64_t size = 0;
         if (!ctx_->files || puddle_files_state(ctx_->files, f.id, &size, nullptr) != PUDDLE_FILE_WHOLE)
             throw Error::badRequest("no_such_file", std::string("file ") + f.id + " has not been uploaded");
         f.size = size;
+        f.key[0] = '\0';
+        if (viaLevee && RAND_bytes(keys[i].data(), 32) == 1)
+            puddle_base64_encode(keys[i].data(), 32, f.key, sizeof f.key);
         if (!puddle_file_ref_ok(&f))
             throw Error::badRequest("bad_file", std::string("file ") + f.id + ": a name (no folders), a type such as image/jpeg, and a small preview");
     }
@@ -298,6 +309,23 @@ Message Conversation::send(const std::string &text, const std::string &replyTo, 
     }
     for (const auto &f : refs) // the file stays as long as a message carries it
         puddle_files_ref(ctx_->files, f.id, chat_.c_str(), id, puddle_ctx_now_ms(ctx_));
+    if (viaLevee && !refs.empty()) {
+        std::vector<std::string> forWhom;
+        if (kind_ == Kind::Dm) {
+            forWhom.push_back(id_);
+        } else if (group_) {
+            const puddle_group &g = group_->record();
+            for (size_t k = 0; k < g.nmembers; k++)
+                if (g.members[k].state != PUDDLE_GM_LEFT && me != g.members[k].id)
+                    forWhom.push_back(g.members[k].id);
+        }
+        std::vector<const char *> ids;
+        for (const auto &w : forWhom)
+            ids.push_back(w.c_str());
+        for (size_t i = 0; i < refs.size(); i++)
+            if (refs[i].key[0])
+                ctx_->levee_offer_file(ctx_, refs[i].id, keys[i].data(), ids.data(), ids.size());
+    }
     puddle_view_msg v;
     memset(&v, 0, sizeof v);
     snprintf(v.id, sizeof v.id, "%s", id);

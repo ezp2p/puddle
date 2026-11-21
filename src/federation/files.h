@@ -44,8 +44,15 @@ int puddle_file_request(puddle_ctx *ctx, const char *chat, const char *message, 
  * once, no forgets the request without telling them. 0, or 404 `not_found` (no such request). */
 int puddle_file_answer(puddle_ctx *ctx, const char *chat, const char *message, const char *file, const char *peer, int yes, const char **code);
 
-/* The `finished` hook of core/transfers.h (`user` is the context): a file we asked for again is here. */
+/* The `finished` hook of core/transfers.h (`user` is the context): a file we asked for again is here. One that waited at its
+ * sender's Levee is said to be fetched there (ctx->levee_file_fetched). */
 void puddle_file_finished(void *user, const char *file, const char *chat, const char *message);
+
+/* The key `file` of `message` in `chat` waits at its sender's Levee under (spec/06, "Files"): 1 and `key`, or 0 if it has none. */
+int puddle_file_key(puddle_ctx *ctx, const char *chat, const char *message, const char *file, unsigned char key[32]);
+
+/* `peer` has had `file` whole (from our Levee): asking again needs the owner's yes, as after a fetch from us. */
+void puddle_file_note_delivered(puddle_ctx *ctx, const char *file, const char *peer);
 
 #ifdef __cplusplus
 }

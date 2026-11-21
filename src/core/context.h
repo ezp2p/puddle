@@ -119,6 +119,10 @@ struct puddle_ctx {
     int (*levee_join)(struct puddle_ctx *ctx, const char *link, char *err, size_t errlen);
     int (*levee_leave)(struct puddle_ctx *ctx, char *err, size_t errlen);
     int (*levee_attached)(struct puddle_ctx *ctx);
+    /* behind a Levee: leave a file there, sealed under `key`, for the people in `for_ids` to fetch (spec/06, "Files"); queued */
+    void (*levee_offer_file)(struct puddle_ctx *ctx, const char *file, const unsigned char key[32], const char *const *for_ids, size_t n);
+    /* a file sent from behind a Levee has been fetched whole from `sender`'s Levee: tell it (spec/06) */
+    void (*levee_file_fetched)(struct puddle_ctx *ctx, const char *sender, const char *file);
     void *pond_dms_worker;                 /* what sends and fetches them (federation/pond_dms.h); NULL = none */
     puddle_replay *replay;                 /* one nonce memory for the whole Puddle */
     puddle_bucket *anon_bucket;            /* work done for strangers before they are authenticated; NULL = unlimited */

@@ -83,6 +83,7 @@ struct puddle_server {
     puddle_ponds *ponds;
     std::unique_ptr<puddle::pdm::Store> pond_dms; /* direct messages through Ponds (core/pond_dms.hpp) */
     puddle_outbox_hooks fetch_hooks; /* how downloads reach other Puddles: as the outbox does */
+    puddle_levee_fetcher levee_fetcher; /* and from a sender's Levee, when a file waits there (service/levee.h) */
     puddle_bucket *anon_bucket;
     puddle_keyed *access_limit;
     puddle_replay *replay;
@@ -269,7 +270,9 @@ puddle_server *puddle_server_create(const puddle_config *cfg, char *err, size_t 
             goto fail;
         s->fetch_hooks = hooks;
         s->fetch_hooks.done = NULL;
-        puddle_transfer_hooks th = { .get = puddle_federation_fetch, .user = &s->fetch_hooks, .now_ms = NULL,
+        s->levee_fetcher.ctx = &s->ctx;
+        s->levee_fetcher.hooks = &s->fetch_hooks;
+        puddle_transfer_hooks th = { .get = puddle_levee_fetch, .user = &s->levee_fetcher, .now_ms = NULL,
                                      .finished = puddle_file_finished, .finished_user = &s->ctx };
         s->transfers = puddle_transfers_open(cfg->data_dir, s->files, &th, err, errlen);
         if (!s->transfers)
