@@ -200,6 +200,8 @@ bool gathered(const std::shared_ptr<rtc::PeerConnection> &pc, puddle_calls *cs, 
 std::string answer_when_ready(const std::shared_ptr<rtc::PeerConnection> &pc, puddle_calls *cs, const std::string &offer,
                               const std::shared_ptr<std::atomic<int>> &seen);
 void add_their_addresses(puddle_calls *cs, const std::shared_ptr<rtc::PeerConnection> &pc, const std::string &peer, int udp);
+/* The UDP port our offers and answers name: ours, or 0 behind a Levee, whose relay our candidates are at (spec/08) */
+int our_udp(puddle_calls *cs);
 bool phone_gone(puddle_calls *cs, const std::string &device, int64_t now);
 void close_leg(puddle_calls *cs, const LegPtr &leg); /* lock held: closed by the worker */
 /* A phone's leg for a call: `mine` (lock held) says whether it is still the call's leg; `fail` ends what it is for; `frame`

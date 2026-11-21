@@ -331,7 +331,7 @@ void offer_to(puddle_calls *cs, std::weak_ptr<GroupCall> wg, PairPtr pair, std::
         puddle_log(PUDDLE_LOG_WARN, "calls: cannot set up a connection with %.12s…: %s", pair->peer.c_str(), e.what());
     }
     int status = 0;
-    if (sdp.empty() || !tell(cs, pair->peer, "/stream/v1/call/group/offer", gbody(id, gid, &sdp, cs->port), &status) || status != 204) {
+    if (sdp.empty() || !tell(cs, pair->peer, "/stream/v1/call/group/offer", gbody(id, gid, &sdp, our_udp(cs)), &status) || status != 204) {
         std::lock_guard<std::mutex> g(cs->mu);
         if (GroupPtr call = wg.lock())
             drop_pair(cs, *call, pair->peer, pair);
@@ -360,7 +360,7 @@ void answer_to(puddle_calls *cs, std::weak_ptr<GroupCall> wg, PairPtr pair, std:
         puddle_log(PUDDLE_LOG_INFO, "calls: %.12s…'s offer can't be used: %s", pair->peer.c_str(), e.what());
     }
     int status = 0;
-    if (sdp.empty() || !tell(cs, pair->peer, "/stream/v1/call/group/answer", gbody(id, gid, &sdp, cs->port), &status) || status != 204) {
+    if (sdp.empty() || !tell(cs, pair->peer, "/stream/v1/call/group/answer", gbody(id, gid, &sdp, our_udp(cs)), &status) || status != 204) {
         std::lock_guard<std::mutex> g(cs->mu);
         if (GroupPtr call = wg.lock())
             drop_pair(cs, *call, pair->peer, pair);
@@ -563,7 +563,7 @@ bool read_req(const puddle_call *c, Req &r, bool sdp)
         return true;
     std::string buf(PUDDLE_CALL_SDP_MAX + 1, '\0');
     if (puddle_json_member(b, c->body_len, "sdp", &v) != 0 || puddle_json_string(v, buf.data(), buf.size()) != 0 ||
-        puddle_json_member(b, c->body_len, "udp", &v) != 0 || puddle_json_int64(v, &p) != 0 || p < 1 || p > 65535)
+        puddle_json_member(b, c->body_len, "udp", &v) != 0 || puddle_json_int64(v, &p) != 0 || p < 0 || p > 65535)
         return false;
     r.sdp = buf.c_str();
     r.udp = (int)p;
@@ -905,7 +905,7 @@ int callsx::group_media(puddle_ctx *ctx, const char *id, const char *device, con
         cs->version++;
     }
     *answer_out = strdup(sdp.c_str());
-    *udp_out = cs->port;
+    *udp_out = our_udp(cs);
     if (!*answer_out)
         return *code = "internal", -1;
     return 0;
