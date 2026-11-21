@@ -469,23 +469,80 @@ Pane {
                     }
                 }
                 Rectangle { Layout.fillWidth: true; height: 1; color: Theme.hairline }
-                // people you blocked, and a way to let them back
-                Label { visible: page.chats.blocked.count > 0; Layout.margins: 16; Layout.bottomMargin: 4; text: qsTr("Blocked"); font.bold: true }
-                Repeater {
-                    model: page.chats.blocked
-                    delegate: PersonRow {
-                        required property var model
+                // people you blocked, both kinds, and a way to let them back
+                ColumnLayout {
+                    objectName: "blocksSection"
+                    Layout.fillWidth: true
+                    Layout.margins: 8
+                    spacing: 2
+                    Label { Layout.margins: 8; Layout.bottomMargin: 0; text: qsTr("Blocks"); font.bold: true }
+                    Label {
                         Layout.fillWidth: true
                         Layout.leftMargin: 8
                         Layout.rightMargin: 8
-                        chats: page.chats
-                        mode: "blocked"
-                        developer: page.backend.developerMode
-                        userId: model.user
-                        name: model.name
+                        wrapMode: Text.Wrap
+                        opacity: 0.65
+                        font.pixelSize: 12
+                        text: qsTr("Nobody is told they are blocked: their messages look delivered to them. Blocks are kept by your Puddle, never by a Pond.")
+                    }
+
+                    Label { Layout.margins: 8; Layout.bottomMargin: 0; text: qsTr("Blocked"); opacity: 0.8 }
+                    Label {
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 8
+                        Layout.rightMargin: 8
+                        wrapMode: Text.Wrap
+                        opacity: 0.65
+                        font.pixelSize: 12
+                        text: page.chats.blocked.count > 0
+                              ? qsTr("Cut off: no stream, no messages anywhere, and what they write in Ponds is hidden.")
+                              : qsTr("Nobody. Block someone from their name or picture.")
+                    }
+                    Repeater {
+                        model: page.chats.blocked
+                        delegate: PersonRow {
+                            required property var model
+                            objectName: "blockedRow"
+                            Layout.fillWidth: true
+                            chats: page.chats
+                            mode: "blocked"
+                            developer: page.backend.developerMode
+                            userId: model.user
+                            name: model.name
+                            avatar: model.avatar || ""
+                            since: model.created_at || 0
+                        }
+                    }
+
+                    Label { Layout.margins: 8; Layout.bottomMargin: 0; Layout.topMargin: 12; text: qsTr("Messages blocked"); opacity: 0.8 }
+                    Label {
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 8
+                        Layout.rightMargin: 8
+                        wrapMode: Text.Wrap
+                        opacity: 0.65
+                        font.pixelSize: 12
+                        text: page.chats.dmBlocks.count > 0
+                              ? qsTr("Their direct messages through any Pond are dropped unread. You still see them in Ponds.")
+                              : qsTr("Nobody. Block someone's messages from a direct message through a Pond, or from their card.")
+                    }
+                    Repeater {
+                        model: page.chats.dmBlocks
+                        delegate: PersonRow {
+                            required property var model
+                            objectName: "dmBlockedRow"
+                            Layout.fillWidth: true
+                            chats: page.chats
+                            mode: "dmBlocked"
+                            developer: page.backend.developerMode
+                            userId: model.user
+                            name: model.name
+                            avatar: model.avatar || ""
+                            since: model.created_at || 0
+                        }
                     }
                 }
-                Rectangle { visible: page.chats.blocked.count > 0; Layout.fillWidth: true; height: 1; color: Theme.hairline; Layout.topMargin: 8 }
+                Rectangle { Layout.fillWidth: true; height: 1; color: Theme.hairline; Layout.topMargin: 8 }
                 Label { Layout.margins: 16; Layout.bottomMargin: 0; text: qsTr("Activity"); font.bold: true }
                 Label {
                     visible: page.backend.error !== ""

@@ -133,6 +133,7 @@ void Ponds::refresh()
                 stillThere = true;
         }
         list_.setItems(rows);
+        emit listChanged();
         updateVoicePeople();
         if (!current_.isEmpty() && !stillThere) { // we left it (here or on another device)
             close();
@@ -143,6 +144,14 @@ void Ponds::refresh()
             refreshMessages();
         }
     });
+}
+
+QString Ponds::iconOf(const QString &pondId) const
+{
+    for (const QJsonObject &p : list_.items())
+        if (p.value("id").toString() == pondId)
+            return p.value("icon").toString();
+    return QString();
 }
 
 void Ponds::refreshPond()
@@ -390,6 +399,7 @@ QVariantMap Ponds::card(const QString &memberId) const
     c.insert("mutedUntil", who.value("mutedUntil").toDouble(-1));
     c.insert("place", currentName());
     c.insert("pond", current_);
+    c.insert("pondIcon", currentIcon());
     c.insert("dms", dmsOn() && who.value("dms").toBool(true)); /* a direct message through this Pond can be written to them */
     return c;
 }

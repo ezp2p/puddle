@@ -22,7 +22,8 @@ class Chats : public QObject {
     Q_PROPERTY(QObject *conversations READ conversations CONSTANT)  // newest first
     Q_PROPERTY(QObject *sidebar READ sidebar CONSTANT)              // the one list: what is waiting for an answer, then every friend and group (see rebuildSidebar)
     Q_PROPERTY(QObject *messages READ messages CONSTANT)            // the open chat, oldest first
-    Q_PROPERTY(QObject *blocked READ blocked CONSTANT)              // people we blocked: user, name, created_at
+    Q_PROPERTY(QObject *blocked READ blocked CONSTANT)              // people we blocked: user, name, avatar, created_at
+    Q_PROPERTY(QObject *dmBlocks READ dmBlocks CONSTANT)            // people whose direct messages through Ponds we drop: user, name, avatar, created_at
     Q_PROPERTY(QObject *groupInvites READ groupInvites CONSTANT)    // invitations to groups waiting for an answer
     Q_PROPERTY(QObject *members READ members CONSTANT)              // the open group's members: id, name, avatar, color, state, isMe, friend
     Q_PROPERTY(bool currentIsGroup READ currentIsGroup NOTIFY currentChanged)
@@ -62,6 +63,7 @@ public:
     QObject *sidebar() { return &sidebar_; }
     QObject *messages() { return &messages_; }
     QObject *blocked() { return &blocked_; }
+    QObject *dmBlocks() { return &dmBlocks_; }
     QObject *groupInvites() { return &invites_; }
     QObject *members() { return &members_; }
     bool currentIsGroup() const { return currentKind_ == QLatin1String("group"); }
@@ -217,6 +219,11 @@ public:
     // The picture with this hash as a file: its URL, or "" while it is being fetched (then avatarReady is emitted). One our
     // Puddle does not hold yet (a friend's or a Pond member's, still on its way) is asked for again until it is there.
     Q_INVOKABLE QString avatarFor(const QString &hash);
+    // How the owner is seen in a place ("dm:<user>", "group:<id>", "pond:<id>"): the profile chosen for it, {name, avatar}, or the
+    // default profile where none is. Our own picture is always the one that place sees, never just the default's.
+    Q_INVOKABLE QVariantMap meIn(const QString &place) const;
+    // Someone's picture as we last saw it directly (their profile for us), "" for none
+    Q_INVOKABLE QString avatarOf(const QString &userId) const { return avatars_.value(userId); }
     void setCacheDir(const QString &dir) { cacheDir_ = dir; }
 
     // A short code derived from an id, e.g. "K7QM-2XPD", to compare with the person out loud. And the id in groups of four.
@@ -287,7 +294,7 @@ private:
     Ponds ponds_{ &api_ };
     Calls calls_{ &api_ };
     QTimer timer_;
-    JsonListModel people_, conversations_, messages_, blocked_, profiles_, invites_, members_, sidebar_, devices_;
+    JsonListModel people_, conversations_, messages_, blocked_, dmBlocks_, profiles_, invites_, members_, sidebar_, devices_;
     int pendingDevices_ = 0;
     QSet<QString> knownDevices_;
     bool devicesLoaded_ = false;
@@ -312,6 +319,8 @@ private:
     void askAgain();
     QString current_;
     QHash<QString, QString> names_, avatars_, colors_;
+    QHash<QString, QPair<QString, QString>> places_; // a place -> the name and picture of our profile shown there
+    QString currentPlace() const;                     // the place of the open conversation, "" for none
     QHash<QString, int> unread_;
     QSet<QString> requested_;
     bool peopleLoaded_ = false, conversationsLoaded_ = false;

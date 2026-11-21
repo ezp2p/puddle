@@ -68,6 +68,10 @@ Pane {
             people: shell.backend.phone ? [] : shell.chats.calls.state !== "" ? shell.chats.calls.people
                                                                                 : shell.chats.ponds.voicePeople.filter(id => id !== shell.backend.myId)
             nameOf: key => shell.videoName(key)
+            readonly property bool inCall: shell.chats.calls.state !== ""
+            avatarOf: key => inCall ? shell.chats.avatarOf(key) : shell.ponds.avatarOf(key)
+            selfPlace: inCall ? (shell.chats.calls.group !== "" ? "group:" + shell.chats.calls.group : "dm:" + shell.chats.calls.user)
+                              : "pond:" + shell.ponds.voicePond
         }
     }
     readonly property var ponds: chats.ponds

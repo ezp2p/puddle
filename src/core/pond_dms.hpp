@@ -34,6 +34,9 @@ struct Conv {
     std::string chat, pond, member, pondName;
     std::string offer;    // their friend offer: the puddle:// link they sent, "" for none
     bool offered = false; // we sent them one
+    // how they last showed themselves in the Pond: their name, and their picture and colour as JSON ("" for none), so the
+    // conversation keeps their face after one of us has left
+    std::string memberName, memberAvatar, memberColor;
     int64_t created = 0;
 };
 

@@ -96,7 +96,7 @@ struct Reader {
 
 std::string convJson(const Conv &c)
 {
-    return build(1024, [&](puddle_jw *w) {
+    return build(2048 + c.memberName.size() * 6 + c.memberAvatar.size() * 2 + c.memberColor.size() * 2, [&](puddle_jw *w) {
         puddle_jw_object(w);
         puddle_jw_str(w, "chat", c.chat.c_str());
         puddle_jw_str(w, "pond", c.pond.c_str());
@@ -105,6 +105,9 @@ std::string convJson(const Conv &c)
         puddle_jw_str(w, "offer", c.offer.c_str());
         puddle_jw_flag(w, "offered", c.offered);
         puddle_jw_num(w, "created", c.created);
+        puddle_jw_str(w, "member_name", c.memberName.c_str());
+        puddle_jw_str(w, "member_avatar", c.memberAvatar.c_str());
+        puddle_jw_str(w, "member_color", c.memberColor.c_str());
         puddle_jw_end_object(w);
     });
 }
@@ -117,6 +120,7 @@ std::optional<Conv> convOf(const std::string &text)
     Conv c;
     c.chat = r.str("chat"), c.pond = r.str("pond"), c.member = r.str("member"), c.pondName = r.str("pond_name");
     c.offer = r.str("offer"), c.offered = r.flag("offered"), c.created = r.num("created");
+    c.memberName = r.str("member_name"), c.memberAvatar = r.str("member_avatar"), c.memberColor = r.str("member_color");
     if (!idOk(c.chat, PUDDLE_USER_ID_LEN) || !idOk(c.pond, PUDDLE_USER_ID_LEN) || !idOk(c.member, PUDDLE_USER_ID_LEN))
         return std::nullopt;
     return c;

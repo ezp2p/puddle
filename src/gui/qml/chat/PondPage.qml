@@ -156,6 +156,8 @@ Pane {
             chats: page.chats
             people: page.ponds.voicePeople.filter(id => id !== page.ponds.myId)
             nameOf: key => page.ponds.nameOf(key)
+            avatarOf: key => page.ponds.avatarOf(key)
+            selfPlace: "pond:" + page.ponds.current
             Layout.fillWidth: true
             Layout.leftMargin: 8
             Layout.rightMargin: 8

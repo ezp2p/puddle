@@ -39,7 +39,12 @@ ItemDelegate {
 
     contentItem: RowLayout {
         spacing: 12
-        Avatar { chats: row.chats; name: row.convName; hash: row.model.avatar || ""; tint: row.model.color || ""; size: 32; opacity: row.waiting ? 0.6 : 1 }
+        Avatar {
+            chats: row.chats; name: row.convName; hash: row.model.avatar || ""; tint: row.model.color || ""; size: 32; opacity: row.waiting ? 0.6 : 1
+            // someone met through a Pond: its icon in the corner
+            badge: row.kind === "pond_dm" ? row.model.pondIcon || "" : ""
+            badgeName: row.kind === "pond_dm" ? row.model.pondName || "" : ""
+        }
         ColumnLayout {
             Layout.fillWidth: true
             spacing: 0

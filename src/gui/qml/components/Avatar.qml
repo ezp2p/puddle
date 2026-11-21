@@ -13,6 +13,10 @@ Item {
     property int size: 40
     property real radius: width / 2   // round unless said (a Pond's icon on the rail is a rounded square)
     property string url: ""
+    // a small picture in the corner: the Pond someone is met through (its icon's hash, and its name for the letter without one)
+    property string badge: ""
+    property string badgeName: ""
+    readonly property bool badged: badge !== "" || badgeName !== ""
     readonly property bool ready: img.status === Image.Ready   // the picture shows, not the letter
 
     width: size
@@ -60,5 +64,32 @@ Item {
         maskEnabled: true
         maskSource: mask
         visible: img.status === Image.Ready
+    }
+    // the badge sits on a ring of the window's colour, so it reads apart from the picture under it
+    Rectangle {
+        visible: av.badged
+        width: Math.max(14, Math.round(av.size * 0.45)) + 4
+        height: width
+        radius: width * 0.3
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.rightMargin: -3
+        anchors.bottomMargin: -3
+        color: av.palette.window
+        Loader {
+            anchors.centerIn: parent
+            active: av.badged
+            sourceComponent: Component {
+                Item {
+                    width: Math.max(14, Math.round(av.size * 0.45))
+                    height: width
+                    // an Avatar of its own, made only when wanted (an Avatar can't hold one directly)
+                    Component.onCompleted: Qt.createComponent("Avatar.qml").createObject(this, {
+                        chats: Qt.binding(() => av.chats), name: Qt.binding(() => av.badgeName), hash: Qt.binding(() => av.badge),
+                        size: width, radius: width * 0.3,
+                        objectName: "avatarBadge" })
+                }
+            }
+        }
     }
 }

@@ -85,4 +85,9 @@ with the Pond's id and name, `closed`, `friend_offer`, `offered`, `blocked` and 
   says it is waiting to be fetched.
 - In the Pond's menu, **Direct messages…**: take direct messages here, on or off.
 - The menu on someone who isn't a friend has **Block their messages** (in a Pond) and **Block**.
-- Not yet: the Pond's icon on the person's picture, and the list of blocked direct messages in Settings (the routes are there).
+- The Pond's icon (its initial, without one) sits in the corner of their picture: in the sidebar, the header and their
+  card. Our own picture there is the profile that Pond sees, never just the default one.
+- The conversation keeps how they last looked in the Pond (`member_name`, `member_avatar`, `member_color` in its file
+  under `state/pond_dms/conversations/`), so it still shows their name and picture after one of us has left.
+- **Settings → Blocks** lists both kinds: **Blocked** (the Puddle's own block) and **Messages blocked** (direct messages
+  through any Pond dropped), each with when and an **Unblock**.

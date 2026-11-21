@@ -1253,6 +1253,8 @@ int main(int argc, char **argv)
         CHECK(until([&] { return find("pondPage") != nullptr && P.current() == pondId; }, 5000)); /* joining opens it */
         auto *members = static_cast<JsonListModel *>(P.members());
         CHECK(until([&] { return row(members, "name", "Bob").value("avatar").toString() == bobs; }, 15000));
+        /* the bar at the bottom shows us as this Pond sees us: Ann and her picture, not the default profile */
+        CHECK(until([&] { QQuickItem *i = find("pondSelfAvatar"); return i && i->property("hash").toString() == mine && i->property("name").toString() == "Ann"; }, 10000));
         /* Bob's picture reached our Puddle through the Pond, and shows in the member list */
         CHECK(until([&] {
             for (QQuickItem *i : all("pondMemberAvatar"))
@@ -1369,17 +1371,44 @@ int main(int argc, char **argv)
             CHECK(until([&] { return row(static_cast<JsonListModel *>(A.messages()), "body", "psst, bob").value("deliveryState").toString().isEmpty(); }, 15000));
             B.send("hello ann");
             CHECK(until([&] { return !row(static_cast<JsonListModel *>(A.messages()), "body", "hello ann").isEmpty(); }, 15000));
+            /* our own messages carry the picture this Pond sees, not the default profile's */
+            CHECK(row(static_cast<JsonListModel *>(A.messages()), "body", "psst, bob").value("avatar").toString() == mine);
+            CHECK(row(static_cast<JsonListModel *>(A.messages()), "body", "psst, bob").value("senderName").toString() == "Ann");
             B.befriend();
             CHECK(until([&] { return find("pondDmAcceptOffer") != nullptr; }, 15000));
+            /* the Pond's icon sits on Bob's picture: in the list, and over the conversation */
+            if (P.canAdmin()) {
+                P.setIcon(icon);
+                CHECK(until([&] { return row(static_cast<JsonListModel *>(A.sidebar()), "id", conv).value("pondIcon").toString() == icon; }, 15000));
+                CHECK(until([&] {
+                    int ready = 0;
+                    for (QQuickItem *i : all("avatarBadge"))
+                        ready += i->property("hash").toString() == icon && i->property("ready").toBool();
+                    return ready >= 2;
+                }, 15000));
+            } else {
+                CHECK(until([&] { return all("avatarBadge").size() >= 2; }, 5000));
+            }
             settle(400);
             if (!shot.isEmpty())
                 win->grabWindow().save(shot + "-pond-dm.png");
+            /* block his messages: listed in Settings, under Blocks */
+            A.dmBlock(bobId);
+            CHECK(until([&] { return static_cast<JsonListModel *>(A.dmBlocks())->rowCount() == 1; }, 10000));
             B.close();
             A.close();
         }
         P.leave(pondId);
         PB.leave(pondId);
         CHECK(until([&] { return static_cast<JsonListModel *>(P.list())->rowCount() == 0; }, 10000));
+        /* gone from the Pond, the conversation through it keeps Bob's name and picture as they last were */
+        A.refresh();
+        CHECK(until([&] {
+            for (const QJsonObject &r : static_cast<JsonListModel *>(A.sidebar())->items())
+                if (r.value("kind").toString() == "pond_dm")
+                    return r.value("name").toString().startsWith("Bob @ ") && r.value("avatar").toString() == bobs;
+            return false;
+        }, 10000));
     }
 
     /* ---- a phone, let in from the window (docs/identity.md, "Devices") ---- */
@@ -1502,6 +1531,29 @@ int main(int argc, char **argv)
             settle(100);
             wheel(find("profilesSettings") ? find("profilesSettings") : scroll, -3);
             CHECK(until([&] { return scroll->property("contentY").toDouble() > 0; }, 2000));
+        }
+        /* Blocks: both kinds listed, each with Unblock; Bob's messages, blocked through the Pond, are let back */
+        {
+            auto *dmBlocks = static_cast<JsonListModel *>(A.dmBlocks());
+            CHECK(find("blocksSection") != nullptr);
+            if (dmBlocks->rowCount() == 0) /* no Pond to meet him in: block Bob's messages from here */
+                A.dmBlock(row(static_cast<JsonListModel *>(A.people()), "name", "Bob").value("id").toString());
+            CHECK(until([&] { return dmBlocks->rowCount() == 1 && find("dmBlockedRow") != nullptr; }, 5000));
+            CHECK(find("dmBlockedRow") && find("dmBlockedRow")->property("name").toString() == "Bob");
+            reveal(find("dmBlockedRow"));
+            settle(300);
+            if (const QString shot = qEnvironmentVariable("PUDDLE_SHOT"); !shot.isEmpty())
+                win->grabWindow().save(shot + "-blocks.png");
+            QQuickItem *unblock = nullptr;
+            for (QQuickItem *i : all("personUnblock"))
+                for (QQuickItem *p = i; p; p = p->parentItem())
+                    if (p->objectName() == "dmBlockedRow")
+                        unblock = i;
+            CHECK(click(unblock));
+            CHECK(until([&] { return dmBlocks->rowCount() == 0 && find("dmBlockedRow") == nullptr; }, 10000));
+            if (scroll)
+                scroll->setProperty("contentY", 0);
+            settle(100);
         }
         if (const QString shot = qEnvironmentVariable("PUDDLE_SHOT"); !shot.isEmpty()) {
             win->grabWindow().save(shot + "-settings.png");

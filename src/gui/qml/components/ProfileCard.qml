@@ -115,6 +115,9 @@ Popup {
                     hash: card.info.avatar || ""
                     tint: card.colors.length ? card.colors[0] : ""
                     size: 72
+                    // seen in a Pond, or met through one: its icon in the corner
+                    badge: card.info.pond ? card.info.pondIcon || "" : ""
+                    badgeName: card.info.pond ? card.info.pondName || card.info.place || "" : ""
                 }
             }
             RoleBadge { anchors.right: parent.right; anchors.rightMargin: 14; anchors.top: parent.top; anchors.topMargin: 8; role: card.info.role || "" }

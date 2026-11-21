@@ -315,8 +315,10 @@ Rectangle {
                 anchors.leftMargin: 8
                 anchors.rightMargin: 8
                 spacing: 8
-                Avatar { chats: bar.chats; name: bar.chats.myName; hash: bar.chats.myAvatar; size: 32 }
-                Label { text: bar.chats.myName !== "" ? bar.chats.myName : qsTr("You"); font.bold: true; elide: Text.ElideRight; Layout.fillWidth: true }
+                // as this Pond sees us: the profile chosen for it (myName is read so a profile change redraws it)
+                readonly property var me: (bar.chats.myName, bar.chats.meIn("pond:" + bar.ponds.current))
+                Avatar { objectName: "pondSelfAvatar"; chats: bar.chats; name: parent.me.name; hash: parent.me.avatar; size: 32 }
+                Label { text: parent.me.name !== "" ? parent.me.name : qsTr("You"); font.bold: true; elide: Text.ElideRight; Layout.fillWidth: true }
                 ToolButton {
                     objectName: "pondSettingsButton"
                     icon.source: Theme.icon("settings"); icon.width: Theme.iconSize; icon.height: Theme.iconSize

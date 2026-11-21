@@ -143,7 +143,12 @@ Pane {
                 anchors.rightMargin: 12
                 spacing: 10
                 PanelToggle { objectName: "sidebarButton"; glyph: "layout-sidebar"; label: qsTr("Conversations"); active: page.sidebarShown; onClicked: page.toggleSidebar() }
-                Avatar { chats: page.chats; name: page.chats.currentName; hash: page.chats.currentAvatar; tint: page.chats.currentColor; size: 28 }
+                Avatar {
+                    objectName: "chatHeaderAvatar"
+                    chats: page.chats; name: page.chats.currentName; hash: page.chats.currentAvatar; tint: page.chats.currentColor; size: 28
+                    badge: page.chats.currentIsPondDm ? page.chats.currentPondDm.pondIcon || "" : ""
+                    badgeName: page.chats.currentIsPondDm ? page.chats.currentPondDm.pondName || "" : ""
+                }
                 Label { text: page.chats.currentName; font.bold: true; font.pixelSize: 16; elide: Text.ElideRight; Layout.fillWidth: true }
                 // ring this friend, or start a call in this group or join the one going on (docs/calls.md); one call at a time
                 ToolButton {
@@ -256,6 +261,9 @@ Pane {
             people: page.backend && page.backend.phone ? [] : calls.people   /* a phone's keys are its leg's, not ids */
             nameOf: key => key === "" ? calls.name : key.startsWith("slot:") ? page.chats.nameOf(calls.slotUser(parseInt(key.substring(5))))
                                                                               : page.chats.nameOf(key)
+            avatarOf: key => key === "" ? page.chats.avatarOf(calls.user) : key.startsWith("slot:") ? page.chats.avatarOf(calls.slotUser(parseInt(key.substring(5))))
+                                                                                    : page.chats.avatarOf(key)
+            selfPlace: calls.group !== "" ? "group:" + calls.group : "dm:" + calls.user
             Layout.fillWidth: true
             Layout.leftMargin: 8
             Layout.rightMargin: 8

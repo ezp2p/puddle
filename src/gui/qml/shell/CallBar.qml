@@ -27,7 +27,7 @@ Card {
         anchors.centerIn: parent
         spacing: 10
 
-        Avatar { chats: bar.chats; name: bar.calls.name; hash: ""; size: 28 }
+        Avatar { chats: bar.chats; name: bar.calls.name; hash: bar.inGroup ? "" : bar.chats.avatarOf(bar.calls.user); size: 28 }
         ColumnLayout {
             spacing: 0
             Label { objectName: "callName"; text: bar.calls.name; font.bold: true; elide: Text.ElideRight; Layout.maximumWidth: 220 }

@@ -121,6 +121,8 @@ public:
     // The parts of a profile a card shows: name, avatar, blurb, pronouns, colors (its name colour, or the stops of its gradient), angle
     static QVariantMap cardOf(const QJsonObject &profile);
     // ...and their picture's hash there ("" for none)
+    // A Pond's icon (a picture's hash, "" for none), from the rail's list: for its badge on someone met through it
+    QString iconOf(const QString &pondId) const;
     Q_INVOKABLE QString avatarOf(const QString &memberId) const { return people_.value(memberId).value("avatar").toString(); }
 
     // ---- roles (the Pond's docs/design.md, "Roles") ----
@@ -169,6 +171,7 @@ signals:
     void adminDone(const QString &what);   // said in words, for a short notice
     void adminFailed(const QString &why);
     void inviteMade(const QString &link);
+    void listChanged();   // the rail's list was read again (names, icons)
 
 private:
     QSet<QString> blocked_;

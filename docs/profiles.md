@@ -135,6 +135,10 @@ The app shows each person as they are in the place on screen: directly in the fr
 and as they are in the group in a group's members and messages. In the owner API, `User.profile` is what they show
 us directly; a group's members and messages carry each person as they are in that group.
 
+The owner too is shown as that place sees them: their own messages, their row among a group's members, their tile in a
+call, and the bar at the bottom of a Pond use the profile chosen for the place (`dm:`, `group:` or `pond:`), and the
+default profile only where none is chosen.
+
 ## The owner API
 
 - `GET /api/v1/profiles`, `GET /api/v1/profiles/{id}`: the owner's profiles, each with `places` (where it is shown).
