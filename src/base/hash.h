@@ -1,26 +1,18 @@
 #ifndef PUDDLE_HASH_H
 #define PUDDLE_HASH_H
 
-#include <stddef.h>
+/* SHA-256, HKDF and hex: libpuddle-proto's, under Puddle's names.
+ *
+ *   puddle_hex_encode(bytes, len, out)        lowercase hex, out holds 2*len+1
+ *   puddle_sha256(data, len, out[32])
+ *   puddle_sha256_hex(data, len, out[65])
+ *   puddle_hkdf_sha256(ikm, len, salt, info, out, outlen)   RFC 5869; 0 or -1 */
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+#include <puddle_proto.h>
 
-/* Lowercase hex of `len` bytes into `out` (needs 2*len+1 bytes). */
-void puddle_hex_encode(const unsigned char *bytes, unsigned len, char *out);
+#define puddle_hex_encode pp_hex_encode
+#define puddle_sha256 pp_sha256
+#define puddle_sha256_hex pp_sha256_hex
+#define puddle_hkdf_sha256 pp_hkdf_sha256
 
-/* SHA-256 of `data`, as its 32 bytes. */
-void puddle_sha256(const void *data, size_t len, unsigned char out[32]);
-
-/* SHA-256 of `data` as 64 lowercase hex characters (+ NUL). */
-void puddle_sha256_hex(const void *data, size_t len, char out[65]);
-
-/* HKDF-SHA256 (RFC 5869): `outlen` bytes from `ikm`, with a salt and a context label. 0 or -1. */
-int puddle_hkdf_sha256(const void *ikm, size_t ikm_len, const char *salt, const char *info,
-                       unsigned char *out, size_t outlen);
-
-#ifdef __cplusplus
-}
-#endif
 #endif

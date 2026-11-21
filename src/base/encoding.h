@@ -1,30 +1,20 @@
 #ifndef PUDDLE_ENCODING_H
 #define PUDDLE_ENCODING_H
 
-#include <stddef.h>
+/* base32, base64 and hex, as the protocol writes them: libpuddle-proto's (third_party/protocol/lib), under Puddle's names.
+ *
+ *   puddle_base32_encode(in, len, out, cap)   lowercase, unpadded; the length written, or 0 if `cap` is too small
+ *   puddle_base32_decode(in, out, len)        exactly `len` bytes; 0 or -1
+ *   puddle_base64_encode(in, len, out, cap)   standard, padded; the length, or 0
+ *   puddle_base64_decode(in, out, cap, &n)    strict; 0 and the count, or -1
+ *   puddle_hex_decode(hex, out, n)            exactly `n` bytes from 2n lowercase hex characters; 0 or -1 */
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+#include <puddle_proto.h>
 
-/* RFC 4648 base32, lowercase, no padding. Writes a NUL-terminated string; returns its length, or 0 if
- * `cap` is too small. 32 bytes give 52 characters (a user id). */
-size_t puddle_base32_encode(const unsigned char *in, size_t len, char *out, size_t cap);
+#define puddle_base32_encode pp_base32_encode
+#define puddle_base32_decode pp_base32_decode
+#define puddle_base64_encode pp_base64_encode
+#define puddle_base64_decode pp_base64_decode
+#define puddle_hex_decode pp_hex_decode
 
-/* Exactly `len` bytes from lowercase, unpadded base32 that encodes exactly that many (spare bits zero, as the encoder leaves
- * them). 0 or -1. */
-int puddle_base32_decode(const char *in, unsigned char *out, size_t len);
-
-/* Standard base64 with padding. Same return convention. */
-size_t puddle_base64_encode(const unsigned char *in, size_t len, char *out, size_t cap);
-
-/* Strict base64: padding required, no whitespace, no stray bits. 0 and the byte count in *outlen, or -1. */
-int puddle_base64_decode(const char *in, unsigned char *out, size_t cap, size_t *outlen);
-
-/* Exactly `n` bytes from 2n lowercase hex characters. 0 or -1. */
-int puddle_hex_decode(const char *hex, unsigned char *out, size_t n);
-
-#ifdef __cplusplus
-}
-#endif
 #endif

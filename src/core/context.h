@@ -31,7 +31,7 @@ typedef struct puddle_transfers puddle_transfers;
 typedef struct puddle_ponds puddle_ponds;
 typedef struct puddle_pond_followers puddle_pond_followers;
 typedef struct puddle_calls puddle_calls;
-typedef struct puddle_replay puddle_replay;
+typedef struct pp_replay puddle_replay; /* libpuddle-proto's nonce memory */
 typedef struct puddle_bucket puddle_bucket;
 typedef struct puddle_keyed puddle_keyed;
 typedef int (*puddle_peer_key_fn)(void *user, const char *sender_id, const char *kid, unsigned char sign_pub[32]);

@@ -40,6 +40,8 @@ jobs:
           - { name: desktop-macos-intel, os: macos-15-intel,   kind: desktop }
     steps:
       - uses: actions/checkout@v5
+        with:
+          submodules: true
 
       - name: Version
         run: |
@@ -166,6 +168,8 @@ jobs:
         shell: msys2 {0}
     steps:
       - uses: actions/checkout@v5
+        with:
+          submodules: true
 
       - uses: msys2/setup-msys2@v2
         with:

@@ -9,6 +9,8 @@
 #include "base/json.h"
 #include "base/log.h"
 
+#include <puddle_proto.h>
+
 #include <errno.h>
 #include <stdarg.h>
 #include <mutex>
@@ -126,18 +128,12 @@ static int sign_with(const keypair *kp, const void *data, size_t len, unsigned c
 int puddle_verify_signature(const unsigned char sign_pub[32], const void *data, size_t len,
                             const unsigned char sig[64])
 {
-    EVP_PKEY *pk = EVP_PKEY_new_raw_public_key(EVP_PKEY_ED25519, NULL, sign_pub, 32);
-    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-    int ok = pk && ctx && EVP_DigestVerifyInit(ctx, NULL, NULL, NULL, pk) == 1 &&
-             EVP_DigestVerify(ctx, sig, 64, (const unsigned char *)data, len) == 1;
-    EVP_MD_CTX_free(ctx);
-    EVP_PKEY_free(pk);
-    return ok;
+    return pp_ed25519_verify(sign_pub, data, len, sig);
 }
 
 void puddle_key_id(const unsigned char sign_pub[32], char out[65])
 {
-    puddle_sha256_hex(sign_pub, 32, out);
+    pp_key_id(sign_pub, out);
 }
 
 /* The user id binds the first signing key AND the commitment to the first roll key: SHA-256 of the key
@@ -146,12 +142,7 @@ void puddle_key_id(const unsigned char sign_pub[32], char out[65])
 static void user_id_of(const unsigned char first_sign_pub[32], const unsigned char first_roll_commit[32],
                        char out[PUDDLE_USER_ID_LEN + 1])
 {
-    unsigned char both[64], md[EVP_MAX_MD_SIZE];
-    unsigned mdlen = 0;
-    memcpy(both, first_sign_pub, 32);
-    memcpy(both + 32, first_roll_commit, 32);
-    EVP_Digest(both, sizeof both, md, &mdlen, EVP_sha256(), NULL);
-    puddle_base32_encode(md, mdlen, out, PUDDLE_USER_ID_LEN + 1);
+    pp_user_id(first_sign_pub, first_roll_commit, out);
 }
 
 static void user_id_from_roll_pub(const unsigned char first_sign_pub[32], const unsigned char first_roll_pub[32],
@@ -250,12 +241,7 @@ static int append_line(const char *path, const char *dir, const char *line, size
 
 /* ------------------------------------------------------------- chain verify */
 
-static int cfail(char *err, size_t errlen, size_t line, const char *what)
-{
-    seterr(err, errlen, "identity chain record %zu: %s", line, what);
-    return -1;
-}
-
+/* a record's key or hash, for reading this Puddle's own chain and roll journal */
 static int get_key(const char *rec, size_t len, const char *name, unsigned char out[32])
 {
     puddle_span v;
@@ -279,101 +265,20 @@ static int get_hex64(const char *rec, size_t len, const char *name, char out[65]
     return 0;
 }
 
-static int get_sig(const char *line, size_t len, const char *name, unsigned char out[64])
-{
-    puddle_span v;
-    char text[100];
-    size_t n = 0;
-    unsigned char tmp[72];
-    if (puddle_json_member(line, len, name, &v) != 0 || puddle_json_string(v, text, sizeof text) != 0 ||
-        puddle_base64_decode(text, tmp, sizeof tmp, &n) != 0 || n != 64)
-        return -1;
-    memcpy(out, tmp, 64);
-    return 0;
-}
-
+/* libpuddle-proto's (spec/01): the same check Ponds and Levees make. */
 int puddle_chain_verify(const char *text, size_t len, const char *expected_id, puddle_chain_head *out,
                         char *err, size_t errlen)
 {
-    if (len == 0 || len > MAX_CHAIN_BYTES)
-        return cfail(err, errlen, 0, "empty or too large");
-
-    puddle_chain_head h;
-    memset(&h, 0, sizeof h);
-    size_t count = 0, pos = 0;
-
-    while (pos < len) {
-        const char *line = text + pos;
-        const char *nl = (const char *)memchr(line, '\n', len - pos);
-        size_t ll = nl ? (size_t)(nl - line) : len - pos;
-        pos += ll + (nl ? 1 : 0);
-        if (ll == 0)
-            continue;
-        if (++count > MAX_CHAIN_RECORDS)
-            return cfail(err, errlen, count, "too many records");
-
-        puddle_span rv;
-        char type[32];
-        unsigned char sig[64];
-        int64_t seq;
-        if (!puddle_json_valid_object(line, ll) || puddle_json_member(line, ll, "record", &rv) != 0 ||
-            rv.len == 0 || rv.p[0] != '{' || get_sig(line, ll, "sig", sig) != 0)
-            return cfail(err, errlen, count, "malformed");
-
-        const char *rec = rv.p;
-        size_t rl = rv.len;
-        puddle_span t;
-        if (puddle_json_member(rec, rl, "type", &t) != 0 || puddle_json_string(t, type, sizeof type) != 0 ||
-            puddle_json_member(rec, rl, "seq", &t) != 0 || puddle_json_int64(t, &seq) != 0)
-            return cfail(err, errlen, count, "missing type or seq");
-
-        unsigned char sp[32], ep[32];
-        char next[65];
-        if (get_key(rec, rl, "signing", sp) != 0 || get_key(rec, rl, "encryption", ep) != 0 ||
-            get_hex64(rec, rl, "next", next) != 0)
-            return cfail(err, errlen, count, "bad keys or commitment");
-
-        if (count == 1) {
-            if (strcmp(type, "identity.inception") != 0 || seq != 0)
-                return cfail(err, errlen, count, "the chain must start with an inception record");
-            unsigned char commit_raw[32];
-            puddle_hex_decode(next, commit_raw, 32); /* already checked to be 64 hex characters */
-            user_id_of(sp, commit_raw, h.id);
-            if (expected_id && strcmp(expected_id, h.id) != 0)
-                return cfail(err, errlen, count, "this chain belongs to a different id");
-            if (!puddle_verify_signature(sp, rec, rl, sig))
-                return cfail(err, errlen, count, "bad signature");
-        } else {
-            char prev[65], roll_hash[65];
-            unsigned char roll_pub[32], sig_roll[64], sig_prev[64];
-            if (strcmp(type, "identity.rotate") != 0 || seq < 0 || (uint64_t)seq != h.seq + 1)
-                return cfail(err, errlen, count, "out of order");
-            if (get_hex64(rec, rl, "prev", prev) != 0 || strcmp(prev, h.head_hash) != 0)
-                return cfail(err, errlen, count, "does not follow the previous record");
-            if (get_key(rec, rl, "roll", roll_pub) != 0 || get_sig(line, ll, "sig_roll", sig_roll) != 0 ||
-                get_sig(line, ll, "sig_prev", sig_prev) != 0)
-                return cfail(err, errlen, count, "malformed");
-            /* the authority to change keys: the roll key the previous record committed to */
-            puddle_sha256_hex(roll_pub, 32, roll_hash);
-            if (strcmp(roll_hash, h.next) != 0)
-                return cfail(err, errlen, count, "the roll key is not the one the previous record committed to");
-            if (!puddle_verify_signature(roll_pub, rec, rl, sig_roll))
-                return cfail(err, errlen, count, "bad signature from the roll key");
-            if (!puddle_verify_signature(sp, rec, rl, sig))
-                return cfail(err, errlen, count, "bad signature from the new key");
-            if (!puddle_verify_signature(h.sign_pub, rec, rl, sig_prev))
-                return cfail(err, errlen, count, "bad signature from the previous key");
-        }
-
-        h.seq = (uint64_t)seq;
-        memcpy(h.sign_pub, sp, 32);
-        memcpy(h.enc_pub, ep, 32);
-        memcpy(h.next, next, 65);
-        puddle_sha256_hex(rec, rl, h.head_hash);
-    }
-    if (count == 0)
-        return cfail(err, errlen, 0, "empty");
-    *out = h;
+    pp_chain_head h;
+    if (pp_chain_verify(text, len, expected_id, &h, err, errlen) != 0)
+        return -1;
+    memset(out, 0, sizeof *out);
+    memcpy(out->id, h.id, sizeof out->id);
+    out->seq = h.seq;
+    memcpy(out->sign_pub, h.sign_pub, 32);
+    memcpy(out->enc_pub, h.enc_pub, 32);
+    memcpy(out->next, h.next, sizeof out->next);
+    memcpy(out->head_hash, h.head_hash, sizeof out->head_hash);
     return 0;
 }
 
