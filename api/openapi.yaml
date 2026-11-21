@@ -39,6 +39,7 @@ tags:
   - { name: files, description: "Files sent in chats: uploaded a chunk at a time, then sent in a message (docs/files.md)" }
   - { name: devices, description: "Phones paired with this Puddle: thin clients that sign every request with a key of their own (docs/identity.md, \"Devices\")" }
   - { name: calls, description: "Calls with friends: the Puddles carry them, the owner's device records and plays (docs/calls.md)" }
+  - { name: levee, description: "This Puddle's Levee: the public side it can sit behind, so it needs no open ports (docs/levee.md)" }
   - { name: updates, description: Objects as they change }
 
 paths:
@@ -890,6 +891,26 @@ paths:
     post: { tags: [calls], summary: "Hang up, or give up ringing (`cancelled`); on one ringing here, the same as decline. In a group call: leave it, to the others (it is `open` then, while anyone is in it)", responses: { "200": { description: It, ended (or `open`), content: { application/json: { schema: { $ref: "objects/call.yaml" } } } } } }
 
   # ---- phones (docs/identity.md, "Devices"). The owner token only: a phone may not let other phones in ----
+  # ---- the Levee ----
+  /api/v1/levee:
+    get:
+      tags: [levee]
+      summary: Whether this Puddle is behind a Levee
+      description: "`{joined}`; when joined also `address` (where others reach it now), `id` (the Levee's), `since`, `attached` (connected to it now) and `calls` (it has a relay)."
+      responses: { "200": { description: OK, content: { application/json: { schema: { type: object, required: [joined], properties: { joined: { type: boolean }, address: { type: string }, id: { type: string }, since: { type: integer }, attached: { type: boolean }, calls: { type: boolean } } } } } } }
+  /api/v1/levee/join:
+    post:
+      tags: [levee]
+      summary: Join the Levee a levee:// link names (from `leveectl join`); this Puddle's address becomes its, and friends are told
+      requestBody: { content: { application/json: { schema: { type: object, required: [link], properties: { link: { type: string } } } } } }
+      responses:
+        "200": { description: "As GET /api/v1/levee" }
+        "409": { description: "`bad_link` (not a levee:// link), `refused` (the Levee didn't take it: used already, another Puddle joined, or unreachable; `message` says which)", content: { application/json: { schema: { $ref: "objects/error.yaml" } } } }
+  /api/v1/levee/leave:
+    post:
+      tags: [levee]
+      summary: Leave the Levee; it forgets this Puddle and what it kept for it, and friends are told this Puddle's own address again
+      responses: { "204": { description: Left } }
   /api/v1/devices:
     get:
       tags: [devices]

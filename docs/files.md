@@ -196,7 +196,8 @@ Second round:
 ## Not in this
 
 Playing a video while it downloads; sending a file to someone you have no chat with; voice notes; a settings screen for
-the two limits (they are in `puddle.yaml` for now); fetching through a Levee.
+the two limits (they are in `puddle.yaml` for now). A file sent from behind a Levee waits there for friends, sealed under a
+key the message carries: `docs/levee.md`, "What joining changes".
 
 Known gaps, for later:
 
