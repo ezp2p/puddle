@@ -75,6 +75,20 @@ the same with `kubectl exec -it deploy/<name> -- puddled --pair`.
 The link carries the address in `advertise`: set `PUDDLE_ADVERTISE` (or `advertise:` in `puddle.yaml`) to where the app
 reaches the Puddle, not the container's own address.
 
+## Behind a Levee
+
+With a Levee (`ezp2p/levee`, docs/levee.md) the Puddle needs no open ports: friends and phones reach it at the Levee's
+address. On the Levee run `leveectl join`, then give the link it prints to the Puddle (quoted: it has `&` in it):
+
+```sh
+docker exec puddle puddled --join-levee 'levee://levee.example.org?id=…&k=…&token=…'
+docker exec puddle puddled --levee          # where it is reached now, and whether it is connected
+docker exec -it puddle puddled --leave-levee
+```
+
+Once joined, the published ports aren't needed to be reached; keep `127.0.0.1:8443` published if you call the owner API
+from the host.
+
 **5. Make friends.** Give people your link (`home.example.org:8443`) and send them requests from the phone.
 
 ## Testing with two Puddles

@@ -21,7 +21,8 @@ Built 2026-11-21. Decided with the owner:
 ## In the app
 
 Settings, "Levee": paste the link and Join. The section then says where friends reach the Puddle and whether it is
-connected now, and offers to leave. The owner API: `GET /api/v1/levee`, `POST /api/v1/levee/join {link}`,
+connected now, and offers to leave. A Puddle with no window (in Docker, say): `puddled --join-levee 'levee://…'`,
+`puddled --levee` and `puddled --leave-levee`, which call the same API (`service/main.cpp`). The owner API: `GET /api/v1/levee`, `POST /api/v1/levee/join {link}`,
 `POST /api/v1/levee/leave` (`api/openapi.yaml`, "Levee").
 
 ## What joining changes
