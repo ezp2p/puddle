@@ -51,6 +51,12 @@ class Chats : public QObject {
     Q_PROPERTY(QObject *devices READ devices CONSTANT)
     Q_PROPERTY(int pendingDevices READ pendingDevices NOTIFY devicesChanged)    // waiting for the owner to accept them
     Q_PROPERTY(QString pairingLink READ pairingLink NOTIFY pairingChanged)       // the one-time link for a phone, "" if none is open
+    // this Puddle's Levee (docs/levee.md): joined to one, where, attached to it now, and why joining didn't work
+    Q_PROPERTY(bool leveeJoined READ leveeJoined NOTIFY leveeChanged)
+    Q_PROPERTY(QString leveeAddress READ leveeAddress NOTIFY leveeChanged)
+    Q_PROPERTY(bool leveeAttached READ leveeAttached NOTIFY leveeChanged)
+    Q_PROPERTY(bool leveeBusy READ leveeBusy NOTIFY leveeChanged)
+    Q_PROPERTY(QString leveeError READ leveeError NOTIFY leveeChanged)
     Q_PROPERTY(qint64 pairingExpires READ pairingExpires NOTIFY pairingChanged)  // UTC ms
     Q_PROPERTY(QString problem READ problem NOTIFY connectedChanged)             // a phone: why the Puddle's answers are not believed, "" if they are
     Q_PROPERTY(QObject *ponds READ ponds CONSTANT)                  // the Ponds we are in, and the one that is open (ponds.h)
@@ -96,6 +102,11 @@ public:
     QObject *devices() { return &devices_; }
     int pendingDevices() const { return pendingDevices_; }
     QString pairingLink() const { return pairingLink_; }
+    bool leveeJoined() const { return levee_.value("joined").toBool(); }
+    QString leveeAddress() const { return levee_.value("address").toString(); }
+    bool leveeAttached() const { return levee_.value("attached").toBool(); }
+    bool leveeBusy() const { return leveeBusy_; }
+    QString leveeError() const { return leveeError_; }
     qint64 pairingExpires() const { return pairingExpires_; }
 
     // A phone: talk to its Puddle as the paired device whose key this is (docs/identity.md, "Devices").
@@ -107,6 +118,10 @@ public:
     Q_INVOKABLE void acceptDevice(const QString &id);
     Q_INVOKABLE void declineDevice(const QString &id);
     Q_INVOKABLE void revokeDevice(const QString &id);
+
+    // The desktop app: put this Puddle behind a Levee, with the levee:// link its operator made, or take it out.
+    Q_INVOKABLE void joinLevee(const QString &link);
+    Q_INVOKABLE void leaveLevee();
     QString myAvatar() const { return myAvatar_; }
     QString current() const { return current_; }
     int friendCount() const { return friends_; }
@@ -244,6 +259,7 @@ signals:
     void connectedChanged();
     void devicesChanged();
     void pairingChanged();
+    void leveeChanged();
     void newDevice(const QString &name); // a phone asks to be let in
     void failed(const QString &what);                    // something the owner asked for did not work
     void newIncoming(const QString &userId, int unread); // for notifications: a chat has more unread than before
@@ -278,6 +294,7 @@ private:
     void updateCurrentInfo();
     void refreshBlocked();
     void refreshDevices();
+    void refreshLevee();
     void refreshGroups();
     void refreshProfiles();
     void refreshFileRequests();
@@ -300,6 +317,9 @@ private:
     bool devicesLoaded_ = false;
     QString pairingLink_;
     qint64 pairingExpires_ = 0;
+    QJsonObject levee_;
+    bool leveeBusy_ = false, leveeLoading_ = false;
+    QString leveeError_;
     QHash<QString, QJsonObject> groups_;   // the groups we are in or invited to, by id
     QSet<QString> invitedTo_;
     QString currentKind_ = QStringLiteral("dm"), self_;

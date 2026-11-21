@@ -1555,6 +1555,21 @@ int main(int argc, char **argv)
                 scroll->setProperty("contentY", 0);
             settle(100);
         }
+        /* Levee: none joined; a link that isn't one is said so, and nothing changes */
+        {
+            CHECK(find("leveeSettings") != nullptr && find("leveeLinkField") != nullptr);
+            CHECK(until([&] { return !A.leveeJoined(); }, 5000));
+            A.joinLevee("puddle://not-a-levee.example.org");
+            CHECK(until([&] { return !A.leveeBusy() && !A.leveeError().isEmpty(); }, 10000));
+            CHECK(!A.leveeJoined() && find("leveeError") && find("leveeError")->isVisible());
+            reveal(find("leveeSettings"));
+            settle(200);
+            if (const QString shot = qEnvironmentVariable("PUDDLE_SHOT"); !shot.isEmpty())
+                win->grabWindow().save(shot + "-levee.png");
+            if (scroll)
+                scroll->setProperty("contentY", 0);
+            settle(100);
+        }
         if (const QString shot = qEnvironmentVariable("PUDDLE_SHOT"); !shot.isEmpty()) {
             win->grabWindow().save(shot + "-settings.png");
             CHECK(click(find("moveButton")));

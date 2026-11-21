@@ -468,6 +468,83 @@ Pane {
                                                qsTr("Restart and choose"), () => page.backend.askAgain())
                     }
                 }
+                Rectangle { visible: !page.backend.phone; Layout.fillWidth: true; height: 1; color: Theme.hairline }
+
+                // a Levee: the public side of this Puddle, so it needs no open ports (docs/levee.md)
+                ColumnLayout {
+                    objectName: "leveeSettings"
+                    visible: !page.backend.phone
+                    Layout.fillWidth: true
+                    Layout.margins: 16
+                    spacing: 8
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Label { text: qsTr("Levee"); font.bold: true }
+                        Item { Layout.fillWidth: true }
+                        Label {
+                            objectName: "leveeStatus"
+                            visible: page.chats.leveeJoined
+                            font.pixelSize: 12
+                            color: page.chats.leveeAttached ? palette.text : Theme.warning
+                            opacity: page.chats.leveeAttached ? 0.65 : 1
+                            text: page.chats.leveeAttached ? qsTr("Connected") : qsTr("Not connected: trying again")
+                        }
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.Wrap
+                        opacity: 0.65
+                        font.pixelSize: 12
+                        text: page.chats.leveeJoined
+                              ? qsTr("Friends reach your Puddle at %1, and what you send goes out through it, so your own address stays "
+                                     + "private and you need no open ports. While this computer is off, messages wait there for you.")
+                                .arg(page.chats.leveeAddress)
+                              : qsTr("A Levee is a small server you run (on a VPS, say) that stands in for this Puddle on the internet: "
+                                     + "friends reach you there, you need no open ports, and messages wait there while this computer is off. "
+                                     + "Your chats stay here. On the Levee, run \"leveectl join\" and paste the link it gives.")
+                    }
+                    RowLayout {
+                        visible: !page.chats.leveeJoined
+                        Layout.fillWidth: true
+                        TextField {
+                            id: leveeLink
+                            objectName: "leveeLinkField"
+                            Layout.fillWidth: true
+                            placeholderText: "levee://…"
+                            selectByMouse: true
+                            font.pixelSize: 12
+                            enabled: !page.chats.leveeBusy
+                            onAccepted: if (text.trim() !== "") page.chats.joinLevee(text)
+                            FieldMenu {}
+                        }
+                        Button {
+                            objectName: "joinLeveeButton"
+                            text: page.chats.leveeBusy ? qsTr("Joining…") : qsTr("Join")
+                            highlighted: true
+                            enabled: !page.chats.leveeBusy && leveeLink.text.trim() !== ""
+                            onClicked: page.chats.joinLevee(leveeLink.text)
+                        }
+                    }
+                    Label {
+                        objectName: "leveeError"
+                        visible: page.chats.leveeError !== "" && !page.chats.leveeJoined
+                        Layout.fillWidth: true
+                        wrapMode: Text.Wrap
+                        font.pixelSize: 12
+                        color: Theme.warning
+                        text: page.chats.leveeError
+                    }
+                    Button {
+                        objectName: "leaveLeveeButton"
+                        visible: page.chats.leveeJoined
+                        text: qsTr("Leave the Levee…")
+                        enabled: !page.chats.leveeBusy
+                        onClicked: confirm.ask(qsTr("Leave the Levee?"),
+                                               qsTr("Friends are told your own address instead, and this Puddle needs an open port again to be "
+                                                    + "reached. What the Levee was keeping for you is deleted there."),
+                                               qsTr("Leave"), () => { leveeLink.text = ""; page.chats.leaveLevee() })
+                    }
+                }
                 Rectangle { Layout.fillWidth: true; height: 1; color: Theme.hairline }
                 // people you blocked, both kinds, and a way to let them back
                 ColumnLayout {
