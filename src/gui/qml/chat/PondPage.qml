@@ -25,8 +25,13 @@ Pane {
     padding: 0
     background: null
 
-    readonly property bool canSend: ponds.channel !== "" && ponds.currentStatus !== "removed"
+    readonly property bool canSend: ponds.channel !== "" && ponds.currentStatus !== "removed" && !muted
+    // muted by an operator or administrator: until it runs out (looked at again each minute)
+    property double now: Date.now()
+    Timer { interval: 30000; running: page.ponds.mutedUntil >= 0; repeat: true; onTriggered: page.now = Date.now() }
+    readonly property bool muted: ponds.mutedUntil === 0 || ponds.mutedUntil > now
     property var drafts: ({})
+    property var people: null     // the Shell: someone's card and menu (showCard, personMenuAt)
     property string draftOwner: ""
 
     readonly property string timeFormat: Qt.locale().timeFormat(Locale.ShortFormat).replace(/[:.]ss/, "")
@@ -151,6 +156,8 @@ Pane {
             chats: page.chats
             people: page.ponds.voicePeople.filter(id => id !== page.ponds.myId)
             nameOf: key => page.ponds.nameOf(key)
+            avatarOf: key => page.ponds.avatarOf(key)
+            selfPlace: "pond:" + page.ponds.current
             Layout.fillWidth: true
             Layout.leftMargin: 8
             Layout.rightMargin: 8
@@ -235,7 +242,17 @@ Pane {
                 implicitHeight: col.implicitHeight
 
                 HoverHandler { id: hover }
-                ContextTrigger { onRequested: (x, y) => ctx.popup(msg, x, y) }
+                // on their name or picture, the menu about them; anywhere else, the message's
+                ContextTrigger {
+                    onRequested: (x, y) => {
+                        for (const it of [msgAvatar, msgName]) {
+                            const p = msg.mapToItem(it, x, y)
+                            if (it.visible && it.contains(p) && page.people)
+                                return page.people.personMenuAt(it, p.x, p.y, msg.model.author)
+                        }
+                        ctx.popup(msg, x, y)
+                    }
+                }
                 Menu {
                     id: ctx
                     MenuItem {
@@ -273,7 +290,13 @@ Pane {
                             Layout.preferredWidth: 40
                             Layout.preferredHeight: msg.grouped ? 1 : 40
                             Layout.alignment: Qt.AlignTop
-                            Avatar { visible: !msg.grouped; name: msg.model.name || ""; tint: msg.model.tint || ""; size: 40 }
+                            Avatar {
+                                id: msgAvatar
+                                objectName: "pondMessageAvatar"
+                                visible: !msg.grouped; chats: page.chats; name: msg.model.name || ""; hash: msg.model.avatar || ""; tint: msg.model.tint || ""; size: 40
+                                HoverHandler { cursorShape: Qt.PointingHandCursor }
+                                TapHandler { onTapped: if (page.people) page.people.showCard(msgName, msg.model.author) }
+                            }
                             Label {
                                 visible: msg.grouped && hover.hovered
                                 anchors.horizontalCenter: parent.horizontalCenter
@@ -288,7 +311,14 @@ Pane {
                             RowLayout {
                                 visible: !msg.grouped
                                 spacing: 8
-                                Label { text: msg.model.name || ""; font.bold: true; color: msg.model.tint && !msg.model.mine ? msg.model.tint : palette.text }
+                                Label {
+                                    id: msgName
+                                    objectName: "pondMessageName"
+                                    text: msg.model.name || ""; font.bold: true; color: msg.model.tint && !msg.model.mine ? msg.model.tint : palette.text
+                                    font.underline: nameHover.hovered
+                                    HoverHandler { id: nameHover; cursorShape: Qt.PointingHandCursor }
+                                    TapHandler { onTapped: if (page.people) page.people.showCard(msgName, msg.model.author) }
+                                }
                                 Label { text: page.dayLabel(msg.model.ts); font.pixelSize: 11; opacity: 0.55 }
                             }
                             TextEdit {
@@ -359,6 +389,8 @@ Pane {
                     objectName: "pondComposer"
                     enabled: page.canSend
                     placeholderText: page.ponds.currentStatus === "removed" ? qsTr("You are no longer a member here.")
+                                     : page.muted ? (page.ponds.mutedUntil > 0 ? qsTr("You're muted here until %1.").arg(new Date(page.ponds.mutedUntil).toLocaleTimeString(Qt.locale(), Locale.ShortFormat))
+                                                                               : qsTr("You're muted here."))
                                      : qsTr("Message #%1").arg(page.ponds.channelName)
                     wrapMode: TextArea.Wrap
                     selectByMouse: true

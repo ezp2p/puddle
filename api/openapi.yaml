@@ -85,6 +85,20 @@ paths:
       summary: Unblock them
       responses:
         "200": { $ref: "#/components/responses/User" }
+  /api/v1/users/{user}/dm-block:
+    parameters: [{ $ref: "#/components/parameters/User" }]
+    post:
+      tags: [users]
+      summary: "Block their direct messages through Ponds: dropped unread, still answered as delivered (docs/pond-dms.md, \"Blocks\"). Their messages in channels still show."
+      responses: { "200": { description: "{id, dms_blocked}" } }
+  /api/v1/users/{user}/dm-unblock:
+    parameters: [{ $ref: "#/components/parameters/User" }]
+    post: { tags: [users], summary: Unblock their direct messages, responses: { "200": { description: "{id, dms_blocked}" } } }
+  /api/v1/dm-blocks:
+    get:
+      tags: [users]
+      summary: Whose direct messages through Ponds are blocked
+      responses: { "200": { description: "A page of {user, created_at}" } }
   /api/v1/blocks:
     get:
       tags: [users]
@@ -233,6 +247,12 @@ paths:
   /api/v1/conversations/{conversation}/retry:
     parameters: [{ $ref: "#/components/parameters/Conversation" }]
     post: { tags: [conversations], summary: Try again to deliver what is stuck, responses: { "200": { $ref: "#/components/responses/Conversation" } } }
+  /api/v1/conversations/{conversation}/befriend:
+    parameters: [{ $ref: "#/components/parameters/Conversation" }]
+    post:
+      tags: [conversations]
+      summary: "A pond_dm: offer to be friends, with a link to this Puddle good once for 30 days, sent in a letter (docs/pond-dms.md)"
+      responses: { "200": { $ref: "#/components/responses/Conversation" }, "409": { description: "`left`, `not_accepted`, `dms_off`, `no_link`" } }
 
   # ---- groups ----
   /api/v1/groups:
@@ -455,6 +475,23 @@ paths:
         role there, `409 no_role`.
       requestBody: { content: { application/json: { schema: { type: object, properties: { name: { type: string }, description: { type: string } } } } } }
       responses: { "204": { description: Done } }
+  /api/v1/ponds/{pond}/admin/icon:
+    parameters: [{ $ref: "#/components/parameters/Pond" }]
+    post:
+      tags: [ponds]
+      summary: Set the Pond's icon, or take it away
+      description: |
+        `hash` is a picture this Puddle holds (`POST /api/v1/media/upload`), of at most 1 MiB: the Puddle sends it to the Pond
+        (its `/pond/v1/pictures`), then names it as the icon (`/pond/v1/admin/icon`). `null` leaves the Pond with none
+        (docs/ponds.md, "Pictures").
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [hash], properties: { hash: { oneOf: [{ type: string, pattern: "^[0-9a-f]{64}$" }, { type: "null" }] } } }
+      responses:
+        "204": { description: Done }
+        "404": { description: "`no_picture`: this Puddle does not hold it" }
+        "409": { description: "`too_large` (over 1 MiB), `no_pictures` (a Pond from before icons), `no_role`" }
   /api/v1/ponds/{pond}/admin/channels/create:
     parameters: [{ $ref: "#/components/parameters/Pond" }]
     post:
@@ -482,12 +519,56 @@ paths:
       summary: Ban a member
       requestBody: { content: { application/json: { schema: { type: object, properties: { reason: { type: string, maxLength: 500 } } } } } }
       responses: { "204": { description: Banned } }
+  /api/v1/ponds/{pond}/admin/members/{member}/mute:
+    parameters: [{ $ref: "#/components/parameters/Pond" }, { name: member, in: path, required: true, schema: { $ref: "wire/ids.yaml#/$defs/UserId" } }]
+    post:
+      tags: [ponds]
+      summary: "Mute a member: they stay, but can't write or be heard, until `until` (ms) or until unmuted (a Pond of protocol 7)"
+      requestBody: { content: { application/json: { schema: { type: object, properties: { until: { type: integer } } } } } }
+      responses: { "204": { description: Muted } }
+  /api/v1/ponds/{pond}/admin/members/{member}/unmute:
+    parameters: [{ $ref: "#/components/parameters/Pond" }, { name: member, in: path, required: true, schema: { $ref: "wire/ids.yaml#/$defs/UserId" } }]
+    post: { tags: [ponds], summary: Unmute a member, responses: { "204": { description: Unmuted } } }
   /api/v1/ponds/{pond}/admin/bans:
     parameters: [{ $ref: "#/components/parameters/Pond" }]
     get: { tags: [ponds], summary: "Who is banned, as the Pond says (its /pond/v1/admin/bans)", responses: { "200": { description: "{bans: [{member, by, reason, ts, profile}]}" } } }
   /api/v1/ponds/{pond}/admin/bans/{member}/unban:
     parameters: [{ $ref: "#/components/parameters/Pond" }, { name: member, in: path, required: true, schema: { $ref: "wire/ids.yaml#/$defs/UserId" } }]
     post: { tags: [ponds], summary: Lift a ban, responses: { "204": { description: Lifted } } }
+  /api/v1/ponds/{pond}/admin/invites:
+    parameters: [{ $ref: "#/components/parameters/Pond" }]
+    get:
+      tags: [ponds]
+      summary: "The invites that can still be used, as the Pond says (its /pond/v1/admin/invites)"
+      responses: { "200": { description: "{invites: [{token, link, uses, max_uses, expires, created}]}: `max_uses` and `expires` (ms) null for none" } }
+  /api/v1/ponds/{pond}/admin/invites/create:
+    parameters: [{ $ref: "#/components/parameters/Pond" }]
+    post:
+      tags: [ponds]
+      summary: Make an invite
+      description: "`uses`: how many may join with it; `expires`: when it stops working (ms). Neither: it lasts until revoked."
+      requestBody: { content: { application/json: { schema: { type: object, properties: { uses: { type: integer, minimum: 1 }, expires: { type: integer } } } } } }
+      responses: { "200": { description: "The invite: {token, link, uses, max_uses, expires, created}. `link` is the pond:// link to give out." } }
+  /api/v1/ponds/{pond}/admin/invites/{token}/revoke:
+    parameters: [{ $ref: "#/components/parameters/Pond" }, { name: token, in: path, required: true, schema: { type: string, pattern: "^[a-z2-7]{26}$" } }]
+    post: { tags: [ponds], summary: Revoke an invite; it stops working at once, responses: { "204": { description: Revoked }, "404": { description: "`no_invite`" } } }
+  /api/v1/ponds/{pond}/dms/{member}/open:
+    parameters: [{ $ref: "#/components/parameters/Pond" }, { name: member, in: path, required: true, schema: { $ref: "wire/ids.yaml#/$defs/UserId" } }]
+    post:
+      tags: [ponds]
+      summary: "The conversation with a member through this Pond (docs/pond-dms.md), made if there is none yet"
+      description: Its messages, sending, reading, editing and deleting are then the conversation routes', by its id.
+      responses:
+        "200": { $ref: "#/components/responses/Conversation" }
+        "404": { description: Not a Pond we are in, or not a member }
+        "409": { description: "`not_accepted` (they take no direct messages there), `dms_off` (the Pond relays none)" }
+  /api/v1/ponds/{pond}/dms/settings:
+    parameters: [{ $ref: "#/components/parameters/Pond" }]
+    post:
+      tags: [ponds]
+      summary: Whether the owner takes direct messages in this Pond (told to the Pond)
+      requestBody: { content: { application/json: { schema: { type: object, required: [accept], properties: { accept: { type: boolean } } } } } }
+      responses: { "200": { description: "{accept}" }, "409": { description: "`dms_off`: the Pond has no direct messages" } }
   /api/v1/ponds/{pond}/channels/{channel}/voice/join:
     parameters: [{ $ref: "#/components/parameters/Pond" }, { $ref: "#/components/parameters/Channel" }]
     post:

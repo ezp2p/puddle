@@ -68,6 +68,10 @@ Pane {
             people: shell.backend.phone ? [] : shell.chats.calls.state !== "" ? shell.chats.calls.people
                                                                                 : shell.chats.ponds.voicePeople.filter(id => id !== shell.backend.myId)
             nameOf: key => shell.videoName(key)
+            readonly property bool inCall: shell.chats.calls.state !== ""
+            avatarOf: key => inCall ? shell.chats.avatarOf(key) : shell.ponds.avatarOf(key)
+            selfPlace: inCall ? (shell.chats.calls.group !== "" ? "group:" + shell.chats.calls.group : "dm:" + shell.chats.calls.user)
+                              : "pond:" + shell.ponds.voicePond
         }
     }
     readonly property var ponds: chats.ponds
@@ -84,7 +88,8 @@ Pane {
         else if (contextDrawer.opened) contextDrawer.close()
         else contextDrawer.open()
     }
-    readonly property bool contextWanted: (page === "chat" && chats.current !== "") || (page === "pond" && ponds.current !== "")
+    // the side panel: a friend's profile or a group's members, or a Pond's members; none beside a conversation through a Pond (its banner says what there is to say)
+    readonly property bool contextWanted: (page === "chat" && chats.current !== "" && !chats.currentIsPondDm) || (page === "pond" && ponds.current !== "")
     // the conversations: beside the page when wide, a drawer over it when narrow
     readonly property bool sidebarOpen: wide ? showSidebar : sidebarDrawer.opened
     function toggleSidebar() {
@@ -94,6 +99,17 @@ Pane {
     }
     // Alt+Up / Alt+Down walk through the conversations, whichever of the two holds the list
     function step(delta) { const l = wide ? sidebarInline : sidebarInDrawer; if (l.item) l.item.step(delta) }
+    // ---- someone's card and menu (a click, or a right-click, on their name or picture), wherever they are shown ----
+    function cardFor(id) {
+        if (page === "pond") {
+            const c = ponds.card(id)
+            c.friend = chats.person(id).state === "active"
+            return c
+        }
+        return chats.card(id)
+    }
+    function showCard(item, id) { profileCard.showFor(item, cardFor(id)) }
+    function personMenuAt(item, x, y, id) { personMenu.anchor = item; personMenu.popup(item, x, y, cardFor(id)) }
     function openPond(id) { sidebarDrawer.close(); chats.close(); ponds.open(id); page = "pond" }
     function joinPond() { sidebarDrawer.close(); joinPondDialog.show() }
 
@@ -147,6 +163,7 @@ Pane {
         function onCurrentChanged() { if (shell.page === "chat" && shell.chats.current === "") { shell.lastChat = ({}); shell.goHome() } }
         function onFailed(what) { toast.show(what) }
         function onGroupCreated(id) { shell.openChat(id, "group") }
+        function onPondDmOpened(id) { shell.openChat(id, "pond_dm") }
     }
     Connections {
         target: shell.ponds
@@ -233,6 +250,7 @@ Pane {
                 backend: shell.backend
                 view: videoView
                 objectName: "pondPage"
+                people: shell
                 anchors.fill: parent
                 visible: shell.page === "pond"
                 chats: shell.chats
@@ -243,6 +261,7 @@ Pane {
                 onToggleContext: shell.toggleContext()
             }
             ChatPage {
+                people: shell
                 video: shell.backend.video
                 backend: shell.backend
                 view: videoView
@@ -364,7 +383,19 @@ Pane {
                         Accessible.role: Accessible.Button
                         Accessible.name: model.name
                         Accessible.onPressAction: shell.openPond(model.id)
+                        // its icon, where it has one and it is here; its initials until then
+                        Avatar {
+                            id: pondPicture
+                            objectName: "pondIcon_" + pondIcon.model.name
+                            anchors.fill: parent
+                            chats: shell.chats
+                            name: pondIcon.model.name
+                            hash: pondIcon.model.icon || ""
+                            radius: pondIcon.radius
+                            visible: hash !== "" && ready
+                        }
                         Label {
+                            visible: !pondPicture.visible
                             anchors.centerIn: parent
                             // the first letter of up to the first three words, as Discord shows a server with no picture
                             text: String(pondIcon.model.name).split(/\s+/).filter(w => w.length).slice(0, 3).map(w => w.charAt(0)).join("")
@@ -491,6 +522,7 @@ Pane {
         ContextBar {
             chats: shell.chats
             developer: shell.backend.developerMode
+            people: shell
             closable: !shell.contextInline
             onCloseRequested: contextDrawer.close()
             onOpenChat: id => { contextDrawer.close(); shell.openChat(id, "dm") }
@@ -502,6 +534,8 @@ Pane {
         id: pondMembers
         PondMembers {
             ponds: shell.ponds
+            chats: shell.chats
+            people: shell
             closable: !shell.contextInline
             onCloseRequested: contextDrawer.close()
         }
@@ -529,6 +563,23 @@ Pane {
     ConfirmDialog { id: leaveConfirm }
     JoinPondDialog { id: joinPondDialog; chats: shell.chats }
     PondSettings { id: pondSettings; chats: shell.chats }
+
+    ProfileCard {
+        id: profileCard
+        chats: shell.chats
+        onMessageRequested: id => shell.openChat(id, "dm")
+        onPondMessageRequested: (pond, id) => shell.chats.openPondDm(pond, id)
+    }
+    PersonMenu {
+        id: personMenu
+        property Item anchor: null    // what was right-clicked: Profile opens the card under it
+        chats: shell.chats
+        ponds: shell.page === "pond" ? shell.ponds : null
+        developer: shell.backend.developerMode
+        onProfileRequested: info => { if (anchor) profileCard.showFor(anchor, info) }
+        onMessageRequested: id => shell.openChat(id, "dm")
+        onPondMessageRequested: (pond, id) => shell.chats.openPondDm(pond, id)
+    }
 
     NewConversationDialog {
         id: newConv

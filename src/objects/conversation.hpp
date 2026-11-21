@@ -26,11 +26,16 @@ class PartialUsers;
 
 class Conversation {
 public:
-    enum class Kind { Dm, Group };
+    enum class Kind { Dm, Group, PondDm }; // PondDm: with a member of a Pond, through it (docs/pond-dms.md)
 
     static std::optional<Conversation> get(puddle_ctx *ctx, const std::string &id);
     // Every DM that has messages and every group the owner is in, newest activity first.
     static std::vector<Conversation> all(puddle_ctx *ctx);
+    // The conversation with `member` through `pond`, made if there is none yet (they must be a member who takes them).
+    static Conversation withMember(puddle_ctx *ctx, const std::string &pond, const std::string &member);
+    const std::string &pond() const { return pond_; }
+    const std::string &member() const { return member_; }
+    Conversation befriend(); // a PondDm: offer to be friends
 
     const std::string &id() const { return id_; }
     Kind kind() const { return kind_; }
@@ -48,6 +53,7 @@ public:
 
 private:
     Conversation(puddle_ctx *ctx, std::string id, Kind kind) : ctx_(ctx), id_(std::move(id)), kind_(kind) {}
+    std::string placeOf() const; // where people are shown as they are here (PartialUsers::In)
     void summarise(); // the last message, the unread count and the sort time, from the end of the chat log
 
     puddle_ctx *ctx_;
@@ -56,6 +62,8 @@ private:
     std::string name_;
     std::optional<puddle_stream_state> stream_; // a DM's
     std::optional<Group> group_;                 // a group's
+    std::string pond_, member_, pondName_, offer_; // a PondDm's: the Pond, the other member, the Pond's name, their friend offer
+    bool offered_ = false;
     int unread_ = 0;
     int64_t sortTs_ = 0;
     struct Last {

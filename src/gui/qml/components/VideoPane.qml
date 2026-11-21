@@ -17,6 +17,8 @@ Rectangle {
     required property var view         // the shell's: full, popped, pinned (shared by the page and the window)
     property var backend: null          // who is talking, and the order chosen
     property var nameOf: key => key     // a sender's name, by the key their frames come with
+    property var avatarOf: key => ""    // their picture's hash, by the same key
+    property string selfPlace: ""       // where the call is ("dm:<user>", "group:<id>", "pond:<id>"): our picture is the one it sees
     property bool inWindow: false       // this is the popped-out window's
     property var people: []             // who else is in it (ids, in the order they came): a tile each, video or not
     property var chats: null            // for pictures (Avatar)
@@ -82,8 +84,9 @@ Rectangle {
             visible: !tile.live
             anchors.centerIn: parent
             chats: pane.chats
-            name: tile.key === "self" && pane.chats ? pane.chats.myName : pane.title(tile.key)
-            hash: tile.key === "self" && pane.chats ? pane.chats.myAvatar : ""
+            name: me ? me.name : pane.title(tile.key)
+            readonly property var me: tile.key === "self" && pane.chats ? (pane.chats.myName, pane.chats.meIn(pane.selfPlace)) : null
+            hash: me ? me.avatar : pane.avatarOf(tile.key) || ""
             size: Math.max(32, Math.min(96, Math.min(tile.width, tile.height) * 0.4))
         }
         VideoOutput {

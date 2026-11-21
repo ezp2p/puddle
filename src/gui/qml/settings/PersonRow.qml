@@ -5,7 +5,7 @@ import "../components"
 import "../theme"
 
 // One person in the Friends lists: who, what state, and what can be done.
-// `mode` is "friend", "pending" or "blocked".
+// `mode` is "friend", "pending", "blocked" or "dmBlocked" (their direct messages through Ponds are dropped).
 Rectangle {
     id: row
 
@@ -19,6 +19,7 @@ Rectangle {
     property string note: ""
     property string error: ""
     property bool provisional: false
+    property real since: 0         // when they were blocked (ms), for the two blocked modes
     property bool developer: false // Developer Mode: show what is normally hidden
     property var confirmDialog: null // a ConfirmDialog to ask in; without one the action just happens
     signal message()
@@ -105,7 +106,8 @@ Rectangle {
                 opacity: 0.65
                 font.pixelSize: 12
                 elide: Text.ElideRight
-                text: row.mode === "blocked" ? qsTr("Blocked")
+                text: row.mode === "blocked" || row.mode === "dmBlocked"
+                      ? (row.since > 0 ? qsTr("Since %1").arg(new Date(row.since).toLocaleDateString(Qt.locale(), "d MMMM yyyy")) : "")
                       : row.streamState === "pending_in" ? qsTr("Incoming friend request")
                       : row.streamState === "pending_out" ? qsTr("Outgoing friend request")
                       : row.streamState === "closed" ? qsTr("Stream closed")
@@ -193,9 +195,11 @@ Rectangle {
             onClicked: menu.popup(this, 0, height)
         }
         Button {
-            visible: row.mode === "blocked"
+            objectName: "personUnblock"
+            visible: row.mode === "blocked" || row.mode === "dmBlocked"
             text: qsTr("Unblock")
-            onClicked: chats.unblock(row.userId)
+            Accessible.name: qsTr("Unblock %1").arg(row.name)
+            onClicked: row.mode === "dmBlocked" ? chats.dmUnblock(row.userId) : chats.unblock(row.userId)
         }
     }
 }

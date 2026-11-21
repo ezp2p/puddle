@@ -81,19 +81,28 @@ Chats::Chats(QObject *parent)
       conversations_({ "id", "kind", "user", "group", "name", "avatar", "color", "stream", "last", "lastBy", "unread", "members" }, nullptr, "id"),
       messages_({ "id", "sender", "senderName", "ts", "body", "files", "outgoing", "edited", "deleted", "reply_to", "avatar", "tint", "grouped",
                   "dayStart", "replyName", "replyText", "replyMissing", "deliveryState", "deliveryReason", "deliveryNext", "kind", "noticeText" }),
-      blocked_({ "id", "user", "name", "created_at" }, nullptr, "user"),
+      blocked_({ "id", "user", "name", "avatar", "created_at" }, nullptr, "user"),
+      dmBlocks_({ "id", "user", "name", "avatar", "created_at" }, nullptr, "user"),
       profiles_({ "id", "display_name", "avatar", "default", "pronouns", "blurb", "place_count" }),
       invites_({ "id", "name", "invitedBy", "invitedByName" }),
       members_({ "id", "name", "avatar", "color", "state", "isMe", "friend" }),
-      sidebar_({ "key", "kind", "id", "name", "avatar", "color", "preview", "lastTs", "unread", "state", "members", "note", "invitedBy", "section" }, nullptr, "key"),
+      sidebar_({ "key", "kind", "id", "name", "avatar", "color", "preview", "lastTs", "unread", "state", "members", "note", "invitedBy", "section",
+                 "pond", "pondName", "pondIcon" }, nullptr, "key"),
       devices_({ "id", "name", "state", "check", "created_at", "last_seen" }, nullptr, "id")
 {
     cacheDir_ = QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + "/avatars";
     fileCacheDir_ = QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + "/files";
     timer_.setInterval(2000);
     connect(&timer_, &QTimer::timeout, this, &Chats::refresh);
+    missingTimer_.setInterval(3000);
+    connect(&missingTimer_, &QTimer::timeout, this, &Chats::askAgain);
     calls_.setNameOf([this](const QString &u) { return nameOf(u); });
     connect(&calls_, &Calls::historyChanged, this, &Chats::refreshCallNotes);
+    connect(&ponds_, &Ponds::listChanged, this, [this] { // a Pond's icon is on the pictures of those met through it
+        rebuildSidebar();
+        if (currentIsPondDm())
+            emit currentInfoChanged();
+    });
 }
 
 bool Chats::attach(const QUrl &base, const QString &tokenFile, const QString &certFile)
@@ -234,9 +243,36 @@ void Chats::refreshBlocked()
             b.insert("id", user);
             b.insert("user", user);
             b.insert("name", names_.contains(user) ? nameOf(user) : who.value("display_name").toString());
+            b.insert("avatar", names_.contains(user) ? avatars_.value(user) : avatarIn(who));
             rows.append(b);
         }
         blocked_.setItems(rows);
+        QSet<QString> ids;
+        for (const QJsonObject &b : rows)
+            ids.insert(b.value("user").toString());
+        ponds_.setBlocked(ids); /* what they write in Ponds isn't shown either */
+        emit blockedChanged();
+    });
+    api_.get(QStringLiteral("/api/v1/dm-blocks"), [this](int status, const QJsonDocument &doc) {
+        if (status != 200)
+            return;
+        QSet<QString> ids;
+        QList<QJsonObject> rows;
+        for (const QJsonValue &v : doc.object().value("items").toArray()) {
+            const QJsonObject who = v.toObject().value("user").toObject();
+            const QString user = who.value("id").toString();
+            ids.insert(user);
+            // as we know them: a friend by their name for us, someone met only in a Pond by what they show there
+            const QString shown = who.value("display_name").toString();
+            rows.append({ { "id", user }, { "user", user }, { "created_at", v.toObject().value("created_at") },
+                          { "name", names_.contains(user) ? nameOf(user) : !shown.isEmpty() ? shown : shortId(user) },
+                          { "avatar", names_.contains(user) ? avatars_.value(user) : avatarIn(who) } });
+        }
+        dmBlocks_.setItems(rows);
+        if (ids != dmBlocked_) {
+            dmBlocked_ = ids;
+            emit blockedChanged();
+        }
     });
 }
 
@@ -269,7 +305,10 @@ void Chats::refreshProfiles()
             if (rows.isEmpty()) {
                 myName_ = p.value("display_name").toString();
                 myAvatar_ = p.value("avatar").toString();
+                places_.clear();
             }
+            for (const QJsonValue &place : p.value("places").toArray())
+                places_.insert(place.toString(), { p.value("display_name").toString(), p.value("avatar").toString() });
             rows.append(p);
         }
         /* the same as last time: nothing to redraw */
@@ -432,6 +471,14 @@ QString Chats::avatarFor(const QString &hash)
     fetching_.insert(hash);
     api_.getBytes(QStringLiteral("/api/v1/media?hash=") + hash, [this, hash, path](int status, const QByteArray &bytes) {
         fetching_.remove(hash);
+        if (status == 404 || status == 0) { // not on our Puddle yet (it fetches a friend's or a Pond's picture by itself): ask again
+            if (!missing_.contains(hash))
+                missing_.insert(hash, QDateTime::currentMSecsSinceEpoch());
+            if (!missingTimer_.isActive())
+                missingTimer_.start();
+            return;
+        }
+        missing_.remove(hash);
         if (status != 200 || bytes.isEmpty() || QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex() != hash.toLatin1())
             return; // not what was asked for: not shown
         QDir().mkpath(cacheDir_);
@@ -444,6 +491,20 @@ QString Chats::avatarFor(const QString &hash)
         }
     });
     return QString();
+}
+
+// Every few seconds for the first two minutes, then once a minute: a friend who is away sends their picture when they are back.
+void Chats::askAgain()
+{
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    const bool slow = now - missingSlow_ >= 60000;
+    if (slow)
+        missingSlow_ = now;
+    for (auto it = missing_.cbegin(); it != missing_.cend(); ++it)
+        if (now - it.value() < 120000 || slow)
+            avatarFor(it.key());
+    if (missing_.isEmpty())
+        missingTimer_.stop();
 }
 
 void Chats::copy(const QString &text)
@@ -537,6 +598,56 @@ QVariantMap Chats::person(const QString &userId) const
     return {};
 }
 
+QVariantMap Chats::card(const QString &userId) const
+{
+    const bool me = !self_.isEmpty() && userId == self_;
+    bool isFriend = false;
+    for (const QJsonObject &p : people_.items())
+        if (p.value("id").toString() == userId)
+            isFriend = p.value("state").toString() == QLatin1String("active");
+    QVariantMap c;
+    for (const QJsonObject &m : members_.items()) /* as they are in the open group */
+        if (m.value("id").toString() == userId)
+            c = { { "name", m.value("name").toString() }, { "avatar", m.value("avatar").toString() } };
+    if (c.isEmpty())
+        c = me ? meIn(currentPlace()) : QVariantMap{ { "name", nameOf(userId) }, { "avatar", avatars_.value(userId) } };
+    const QString color = me ? QString() : colors_.value(userId);
+    c.insert("colors", color.isEmpty() ? QVariantList() : QVariantList{ color });
+    c.insert("id", userId);
+    c.insert("isMe", me);
+    c.insert("friend", isFriend);
+    c.insert("place", currentIsGroup() ? currentName() : QString());
+    if (currentIsPondDm() && !me) { // met through a Pond: its icon on their picture
+        const QVariantMap pdm = currentPondDm();
+        c.insert("pond", pdm.value("pond"));
+        c.insert("pondName", pdm.value("pondName"));
+        c.insert("pondIcon", pdm.value("pondIcon"));
+    }
+    return c;
+}
+
+void Chats::loadCard(const QString &userId)
+{
+    if (userId.isEmpty() || (!self_.isEmpty() && userId == self_))
+        return;
+    const QString place = currentIsGroup() ? QStringLiteral("group:") + current_ : QStringLiteral("dm");
+    api_.get(QStringLiteral("/api/v1/users/%1/profiles").arg(userId), [this, userId, place](int status, const QJsonDocument &doc) {
+        if (status != 200)
+            return;
+        QJsonObject chosen;
+        for (const QJsonValue &v : doc.object().value("items").toArray()) {
+            const QJsonObject p = v.toObject();
+            if (p.value("place").toString() == place || (chosen.isEmpty() && p.value("place").toString() == QLatin1String("dm")))
+                chosen = p;
+        }
+        if (chosen.isEmpty())
+            return; /* they show us nothing here: the card keeps what it has */
+        QVariantMap c = Ponds::cardOf(chosen);
+        c.insert("id", userId);
+        emit cardLoaded(userId, c);
+    });
+}
+
 int Chats::friendMatches(const QString &filter) const
 {
     int n = 0;
@@ -624,9 +735,19 @@ void Chats::refreshConversations()
         for (const QJsonValue &v : doc.object().value("conversations").toArray()) {
             QJsonObject c = v.toObject();
             const bool isGroup = c.value("kind").toString() == QLatin1String("group");
+            const bool isPondDm = c.value("kind").toString() == QLatin1String("pond_dm");
             const QString user = c.value("id").toString(); // the id of the chat: who, or which group
             c.insert("last", c.value("last_message"));
-            if (isGroup) {
+            if (isPondDm) { // "Ann @ Lily Pad": never mistaken for a friend
+                const QJsonObject who = c.value("recipient").toObject();
+                const QString name = who.value("display_name").toString() + QStringLiteral(" @ ") + c.value("pond").toObject().value("name").toString();
+                c.insert("user", who.value("id"));
+                c.insert("name", name);
+                c.insert("avatar", who.value("avatar").toObject().value("hash"));
+                c.insert("color", who.value("color").isString() ? who.value("color") : QJsonValue(QString()));
+                names_.insert(user, name);
+                pondDms_.insert(user, c);
+            } else if (isGroup) {
                 names_.insert(user, c.value("name").toString()); // so a notification can name it
                 c.insert("members", c.value("group").toObject().value("member_count"));
                 c.insert("group", user);
@@ -813,6 +934,7 @@ void Chats::renderMessages()
     });
     QList<QJsonObject> rows;
     QHash<QString, QJsonObject> byId = msgs_;
+    const QVariantMap here = meIn(currentPlace()); // how we look in this conversation
     // what the messages are, and what happened to the group between them, in the order it happened
     QList<QJsonObject> items;
     for (QJsonObject m : list) {
@@ -853,7 +975,8 @@ void Chats::renderMessages()
         }
         const QJsonValue author = m.value("author");
         m.insert("senderName", mine ? selfName(author) : !nameIn(author).isEmpty() ? nameIn(author) : nameOf(sender));
-        m.insert("avatar", mine ? myAvatar_ : author.isObject() ? avatarIn(author) : avatars_.value(sender));
+        m.insert("avatar", mine ? (!avatarIn(author).isEmpty() ? avatarIn(author) : here.value("avatar").toString())
+                                : author.isObject() ? avatarIn(author) : avatars_.value(sender));
         m.insert("tint", mine ? QString() : colors_.value(sender));
         m.insert("grouped", !first && !newDay && prev.value("kind").toString() == QLatin1String("message") && prev.value("sender") == m.value("sender") &&
                                 !m.contains("reply_to") && ts - qint64(prev.value("ts").toDouble()) < 7 * 60 * 1000);
@@ -946,9 +1069,39 @@ void Chats::refreshCallNotes()
     });
 }
 
+QVariantMap Chats::currentPondDm() const
+{
+    if (!currentIsPondDm() || !pondDms_.contains(current_))
+        return {};
+    const QJsonObject c = pondDms_.value(current_);
+    const QJsonObject pond = c.value("pond").toObject(), who = c.value("recipient").toObject();
+    return {
+        { "pond", pond.value("id").toString() },
+        { "pondName", pond.value("name").toString() },
+        { "pondIcon", ponds_.iconOf(pond.value("id").toString()) },
+        { "member", who.value("id").toString() },
+        { "memberName", who.value("display_name").toString() },
+        { "closed", c.value("closed").toString() },
+        { "offer", c.value("friend_offer").toString() },
+        { "offered", c.value("offered").toBool() },
+        { "blocked", c.value("blocked").toBool() },
+        { "friend", c.value("friend").toBool() },
+    };
+}
+
 void Chats::updateCurrentInfo()
 {
     QString name, avatar, color, state;
+    if (currentIsPondDm()) {
+        const QJsonObject c = pondDms_.value(current_);
+        name = c.value("name").toString();
+        avatar = c.value("avatar").toString();
+        color = c.value("color").toString();
+        state = c.isEmpty() ? QString() : c.value("closed").isNull() ? QStringLiteral("active") : QStringLiteral("closed");
+        curName_ = name; curAvatar_ = avatar; curColor_ = color; curState_ = state;
+        emit currentInfoChanged(); // the banner's state changes without the name changing
+        return;
+    }
     if (currentIsGroup() && groups_.contains(current_)) {
         const QJsonObject g = groups_.value(current_);
         name = g.value("name").toString();
@@ -1191,6 +1344,54 @@ static QJsonObject withProfile(QJsonObject o, const QString &profile)
 void Chats::accept(const QString &u, const QString &profile) { post(path("streams", u, "accept"), withProfile({}, profile), tr("Could not accept.")); }
 void Chats::decline(const QString &u) { post(path("streams", u, "decline"), QJsonObject{}, tr("Could not decline.")); }
 void Chats::cancel(const QString &u) { post(path("streams", u, "delete"), QJsonObject{}, tr("Could not remove.")); }
+void Chats::openPondDm(const QString &pond, const QString &member)
+{
+    api_.post(QStringLiteral("/api/v1/ponds/%1/dms/%2/open").arg(pond, member), QJsonObject{}, [this](int status, const QJsonDocument &doc) {
+        if (status != 200) {
+            const QString code = doc.object().value("error").toString();
+            emit failed(code == QLatin1String("not_accepted") ? tr("They don't take direct messages in this Pond.")
+                        : code == QLatin1String("dms_off") ? tr("This Pond doesn't pass on direct messages.")
+                                                           : tr("The conversation could not be opened."));
+            return;
+        }
+        QJsonObject c = doc.object();
+        const QString id = c.value("id").toString();
+        const QJsonObject who = c.value("recipient").toObject();
+        c.insert("name", who.value("display_name").toString() + QStringLiteral(" @ ") + c.value("pond").toObject().value("name").toString());
+        c.insert("avatar", who.value("avatar").toObject().value("hash"));
+        c.insert("user", who.value("id"));
+        pondDms_.insert(id, c);
+        names_.insert(id, c.value("name").toString());
+        open(id, QStringLiteral("pond_dm"));
+        emit pondDmOpened(id);
+        refreshConversations();
+    });
+}
+
+void Chats::befriend()
+{
+    if (currentIsPondDm())
+        post(path("conversations", current_, "befriend"), QJsonObject{}, tr("The offer could not be sent."));
+}
+
+void Chats::acceptFriendOffer()
+{
+    const QString link = currentPondDm().value("offer").toString();
+    if (!link.isEmpty())
+        request(link, QString());
+}
+
+void Chats::dmBlock(const QString &u) { post(path("users", u, "dm-block"), QJsonObject{}, tr("Could not block their messages.")); }
+void Chats::dmUnblock(const QString &u) { post(path("users", u, "dm-unblock"), QJsonObject{}, tr("Could not unblock their messages.")); }
+
+bool Chats::isBlocked(const QString &userId) const
+{
+    for (const QJsonObject &b : blocked_.items())
+        if (b.value("user").toString() == userId)
+            return true;
+    return false;
+}
+
 void Chats::block(const QString &u) { post(path("users", u, "block"), QJsonObject{}, tr("Could not block.")); }
 void Chats::unblock(const QString &u) { post(path("users", u, "unblock"), QJsonObject{}, tr("Could not unblock.")); }
 
@@ -1273,18 +1474,26 @@ void Chats::rebuildSidebar()
     QSet<QString> haveChat;
     for (const QJsonObject &c : conversations_.items()) {
         const bool isGroup = c.value("kind").toString() == QLatin1String("group");
+        const bool isPondDm = c.value("kind").toString() == QLatin1String("pond_dm");
         const QString id = c.value("id").toString();
         haveChat.insert(id);
         const QJsonObject last = c.value("last").toObject();
         QJsonObject o;
-        o.insert("key", (isGroup ? QStringLiteral("group:") : QStringLiteral("dm:")) + id);
-        o.insert("kind", isGroup ? QStringLiteral("group") : QStringLiteral("dm"));
+        o.insert("key", (isGroup ? QStringLiteral("group:") : isPondDm ? QStringLiteral("pdm:") : QStringLiteral("dm:")) + id);
+        o.insert("kind", isGroup ? QStringLiteral("group") : isPondDm ? QStringLiteral("pond_dm") : QStringLiteral("dm"));
+        if (isPondDm) {
+            const QString pond = c.value("pond").toObject().value("id").toString();
+            o.insert("pond", pond);
+            o.insert("pondName", c.value("pond").toObject().value("name"));
+            o.insert("pondIcon", ponds_.iconOf(pond));
+            o.insert("user", c.value("user"));
+        }
         o.insert("id", id);
         o.insert("name", c.value("name"));
         o.insert("avatar", c.value("avatar"));
         o.insert("color", c.value("color"));
         o.insert("unread", c.value("unread"));
-        o.insert("state", c.value("stream"));
+        o.insert("state", isPondDm ? QJsonValue(c.value("closed").isNull() ? QStringLiteral("active") : QStringLiteral("closed")) : c.value("stream"));
         o.insert("members", c.value("members"));
         o.insert("section", QStringLiteral("chats"));
         QString preview;
@@ -1294,6 +1503,8 @@ void Chats::rebuildSidebar()
             preview = last.value("deleted").toBool() ? tr("Message deleted")
                       : (isGroup ? c.value("lastBy").toString() + QStringLiteral(": ")
                                  : last.value("outgoing").toBool() ? tr("You: ") : QString()) + last.value("preview").toString();
+        } else if (isPondDm && !c.value("friend_offer").isNull()) {
+            preview = tr("Offers to be friends");
         } else if (isGroup) {
             ts = qint64(groups_.value(id).value("updated_at").toDouble());
             const int n = c.value("members").toInt();
@@ -1349,6 +1560,7 @@ void Chats::rebuildSidebar()
 void Chats::rebuildMembers()
 {
     QList<QJsonObject> rows;
+    const QVariantMap here = meIn(currentPlace());
     if (currentIsGroup() && groups_.contains(current_)) {
         QSet<QString> friends;
         for (const QJsonObject &p : people_.items())
@@ -1361,7 +1573,7 @@ void Chats::rebuildMembers()
             r.insert("id", id);
             const bool me = !self_.isEmpty() && id == self_;
             r.insert("name", me ? selfName(m.value("user")) : !nameIn(m.value("user")).isEmpty() ? nameIn(m.value("user")) : nameOf(id));
-            r.insert("avatar", me ? myAvatar_ : avatarIn(m.value("user")));
+            r.insert("avatar", me ? (!avatarIn(m.value("user")).isEmpty() ? avatarIn(m.value("user")) : here.value("avatar").toString()) : avatarIn(m.value("user")));
             r.insert("color", me ? QString() : colors_.value(id));
             r.insert("state", m.value("state"));
             r.insert("isMe", me);
@@ -1485,22 +1697,28 @@ QString Chats::selfName(const QJsonValue &author) const
 {
     if (const QString n = nameIn(author); !n.isEmpty())
         return n;
-    if (currentIsGroup()) {
-        for (const QJsonValue &v : groups_.value(current_).value("members").toArray())
-            if (idOf(v.toObject().value("user")) == self_)
-                if (const QString n = nameIn(v.toObject().value("user")); !n.isEmpty())
-                    return n;
-    } else {
-        QString profile;
-        for (const QJsonObject &p : people_.items())
-            if (p.value("id").toString() == current_)
-                profile = p.value("profile").toString();
-        if (!profile.isEmpty())
-            for (const QJsonObject &p : profiles_.items())
-                if (p.value("id").toString() == profile && !p.value("display_name").toString().isEmpty())
-                    return p.value("display_name").toString();
-    }
-    return myName_.isEmpty() ? tr("You") : myName_;
+    if (const QString n = meIn(currentPlace()).value("name").toString(); !n.isEmpty())
+        return n;
+    return tr("You");
+}
+
+QString Chats::currentPlace() const
+{
+    if (current_.isEmpty())
+        return QString();
+    if (currentIsGroup())
+        return QStringLiteral("group:") + current_;
+    if (currentIsPondDm())
+        return QStringLiteral("pond:") + pondDms_.value(current_).value("pond").toObject().value("id").toString();
+    return QStringLiteral("dm:") + current_;
+}
+
+QVariantMap Chats::meIn(const QString &place) const
+{
+    const auto it = places_.constFind(place);
+    const QString name = it != places_.cend() && !it->first.isEmpty() ? it->first : myName_;
+    const QString avatar = it != places_.cend() ? it->second : myAvatar_;
+    return { { "name", name }, { "avatar", avatar } };
 }
 
 QString Chats::nameOf(const QString &userId) const

@@ -1,9 +1,12 @@
 #include "objects/user.hpp"
 
+#include "core/ponds.h"
+
 #include "core/error.hpp"
 #include "core/group.h"
 #include "core/identity.h"
 #include "core/people.h"
+#include "core/pond_dms.hpp"
 
 #include <cstdlib>
 #include <cstring>
@@ -205,17 +208,37 @@ const PartialUsers::Entry &PartialUsers::lookup(const std::string &id)
     if (it != cache_.end())
         return it->second;
     std::string profile;
+    bool inPond = false;
     if (id == ownId(ctx_)) {
         profile = ownProfileJson(ctx_, place_);
+    } else if (place_.rfind("pond:", 0) == 0) { // as they show themselves in that Pond (a direct message through it)
+        char *json = nullptr;
+        size_t len = 0;
+        if (ctx_->ponds && puddle_ponds_member(ctx_->ponds, place_.c_str() + 5, id.c_str(), &json, &len, nullptr) == 0) {
+            profile.assign(json ? json : "", len);
+            inPond = true;
+        }
+        free(json);
     } else {
         profile = peerProfile(ctx_, id.c_str(), place_.c_str());
     }
     Entry e;
     e.name = member(profile, "display_name", true);
-    if (e.name.empty())
-        e.name = User::fallbackName(id);
     e.avatar = member(profile, "avatar", false);
     e.color = member(profile, "color", false);
+    // a direct message through a Pond keeps how they last looked there: kept while they are in it, shown once one of us left
+    if (place_.rfind("pond:", 0) == 0 && id != ownId(ctx_))
+        if (pdm::Store *st = pdm::of(ctx_))
+            if (auto c = st->convWith(place_.substr(5), id)) {
+                if (inPond && (c->memberName != e.name || c->memberAvatar != e.avatar || c->memberColor != e.color)) {
+                    c->memberName = e.name, c->memberAvatar = e.avatar, c->memberColor = e.color;
+                    st->put(*c);
+                } else if (!inPond) {
+                    e.name = c->memberName, e.avatar = c->memberAvatar, e.color = c->memberColor;
+                }
+            }
+    if (e.name.empty())
+        e.name = User::fallbackName(id);
     return cache_.emplace(key, std::move(e)).first->second;
 }
 

@@ -29,6 +29,7 @@ extern "C" {
 #define PUDDLE_POND_TEXT_MAX 4000
 #define PUDDLE_POND_FILES_MAX 10   /* files a message carries */
 #define PUDDLE_POND_FILE_ID_LEN 64 /* hex, the same id a file has in a Puddle (storage/files.h) */
+#define PUDDLE_POND_PICTURE_MAX (1 << 20) /* the largest picture a Pond keeps (its docs/design.md, "Pictures") */
 
 typedef struct puddle_ponds puddle_ponds;
 
@@ -103,6 +104,13 @@ int puddle_ponds_files(puddle_ponds *p, const char *id, puddle_pond_file_fn fn, 
 /* Does kept message `message` of `channel` carry `file`? 0 with its size, 1 not kept or not carried, -1 no such channel. */
 int puddle_ponds_message_file(puddle_ponds *p, const char *id, int64_t channel, int64_t message, const char *file, int64_t *size);
 
+/* ---- pictures (docs/ponds.md, "Pictures") ---- */
+
+/* Every picture the Pond shows us: its icon, then those in its members' profiles, each once: `fn` per picture until it returns
+ * nonzero. 0, or -1 no such Pond. */
+typedef int (*puddle_pond_picture_fn)(void *user, const char *hash, const char *mime, int64_t size);
+int puddle_ponds_pictures(puddle_ponds *p, const char *id, puddle_pond_picture_fn fn, void *user);
+
 /* Something the owner sees of the Pond changed outside what is kept here (a file arrived): the version moves on. */
 void puddle_ponds_touch(puddle_ponds *p, const char *id);
 
@@ -120,9 +128,21 @@ int64_t puddle_ponds_offer(puddle_ponds *p, const char *id);
 /* The owner answered it: the offer is gone, and our role is `role` (NULL: unchanged). */
 void puddle_ponds_answered(puddle_ponds *p, const char *id, const char *role);
 
+/* ---- direct messages (docs/pond-dms.md) ---- */
+
+/* Does the Pond relay direct messages between members (its "dms", protocol 8)? 1 yes, 0 its admin turned them off, -1 it says
+ * nothing of them (or no such Pond). `files_max` (may be NULL): the largest file one may carry, 0 none. */
+int puddle_ponds_dms(puddle_ponds *p, const char *id, int64_t *files_max);
+/* A member of the Pond, as it last said: their profile there (malloc'd, cleaned JSON, "" for none; `profile` may be NULL) and
+ * whether they take direct messages. 0, 1 not a member (now), -1 no such Pond. */
+int puddle_ponds_member(puddle_ponds *p, const char *id, const char *member, char **profile, size_t *len, int *dms);
+/* The Pond's name, and our own id in it (the owner's). 0, or -1 no such Pond. */
+int puddle_ponds_name(puddle_ponds *p, const char *id, char *out, size_t cap);
+int puddle_ponds_me(puddle_ponds *p, const char *id, char out[PUDDLE_USER_ID_LEN + 1]);
+
 /* ---- for the owner's routes (openapi.yaml, "ponds") ---- */
 
-/* [{id, name, description, address, status, channels: [...]}]: each channel with its `kind`, and a voice channel with who is
+/* [{id, name, description, icon, address, status, channels: [...]}]: `icon` {hash, mime, size} or null; each channel with its `kind`, and a voice channel with who is
  * in it now (`voice`: [{member, slot, muted, deafened, camera, screen}]) */
 void puddle_ponds_write_list(puddle_ponds *p, puddle_jw *w);
 /* {id, name, ..., channels, members, me}. 0, or 1 if there is no such Pond. */

@@ -91,6 +91,14 @@ Rectangle {
                         glyph: "users"
                         onActivated: { dropdown.close(); appearMenu.popup(header, 8, header.height + 4) }
                     }
+                    // direct messages (docs/pond-dms.md): whether members may write to us here, where the Pond passes them on
+                    PondMenuRow {
+                        objectName: "acceptDmsItem"
+                        visible: bar.ponds.dmsOn
+                        label: bar.ponds.acceptDms ? qsTr("Turn off direct messages") : qsTr("Allow direct messages")
+                        glyph: "message"
+                        onActivated: { dropdown.close(); bar.ponds.setAcceptDms(!bar.ponds.acceptDms) }
+                    }
                     PondMenuRow {
                         objectName: "copyMyId"
                         label: qsTr("Copy my id")
@@ -260,7 +268,7 @@ Rectangle {
                                 color: "transparent"
                                 border.width: 2
                                 border.color: person.talking ? Theme.primary : "transparent"
-                                Avatar { anchors.centerIn: parent; chats: bar.chats; name: person.modelData.name; tint: person.modelData.color || ""; size: 20 }
+                                Avatar { anchors.centerIn: parent; chats: bar.chats; name: person.modelData.name; hash: person.modelData.avatar || ""; tint: person.modelData.color || ""; size: 20 }
                             }
                             Label {
                                 text: person.modelData.name
@@ -307,8 +315,10 @@ Rectangle {
                 anchors.leftMargin: 8
                 anchors.rightMargin: 8
                 spacing: 8
-                Avatar { chats: bar.chats; name: bar.chats.myName; hash: bar.chats.myAvatar; size: 32 }
-                Label { text: bar.chats.myName !== "" ? bar.chats.myName : qsTr("You"); font.bold: true; elide: Text.ElideRight; Layout.fillWidth: true }
+                // as this Pond sees us: the profile chosen for it (myName is read so a profile change redraws it)
+                readonly property var me: (bar.chats.myName, bar.chats.meIn("pond:" + bar.ponds.current))
+                Avatar { objectName: "pondSelfAvatar"; chats: bar.chats; name: parent.me.name; hash: parent.me.avatar; size: 32 }
+                Label { text: parent.me.name !== "" ? parent.me.name : qsTr("You"); font.bold: true; elide: Text.ElideRight; Layout.fillWidth: true }
                 ToolButton {
                     objectName: "pondSettingsButton"
                     icon.source: Theme.icon("settings"); icon.width: Theme.iconSize; icon.height: Theme.iconSize

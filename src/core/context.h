@@ -87,6 +87,12 @@ typedef struct {
     int (*voice_leave)(puddle_ctx *ctx, const char **code);
     int (*voice_state)(puddle_ctx *ctx, int muted, int deafened, int camera, int screen, const char **code);
     void (*voice_write)(puddle_ctx *ctx, puddle_jw *w);
+    /* direct messages through a Pond (federation/pond_dms.h): an event of ours sent as a letter; a friend offer; what waits,
+     * tried now; whether the owner takes them in a Pond */
+    int (*pdm_send_event)(puddle_ctx *ctx, const char *chat, const char *event, size_t len, char id[65], const char **code);
+    int (*pdm_befriend)(puddle_ctx *ctx, const char *chat, const char **code);
+    void (*pdm_retry)(puddle_ctx *ctx, const char *chat);
+    int (*pdm_accept)(puddle_ctx *ctx, const char *pond, int accept, const char **code);
 } puddle_courier;
 
 /* What handlers can reach. */
@@ -107,6 +113,8 @@ struct puddle_ctx {
     puddle_ponds *ponds;                   /* the Ponds we are in (core/ponds.h); NULL in tests that have none */
     puddle_pond_followers *pond_followers; /* a thread following each (federation/ponds.h); NULL = none are followed */
     puddle_calls *calls;                   /* calls with friends (federation/calls.h); NULL = none (off, not built, or not started) */
+    void *pond_dms;                        /* direct messages through Ponds: a puddle::pdm::Store (core/pond_dms.hpp); NULL = none */
+    void *pond_dms_worker;                 /* what sends and fetches them (federation/pond_dms.h); NULL = none */
     puddle_replay *replay;                 /* one nonce memory for the whole Puddle */
     puddle_bucket *anon_bucket;            /* work done for strangers before they are authenticated; NULL = unlimited */
     puddle_keyed *access_limit;            /* requests for a stream, per requester; NULL = unlimited */

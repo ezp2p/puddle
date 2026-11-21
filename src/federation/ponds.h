@@ -25,7 +25,7 @@ int puddle_pond_join(puddle_ctx *ctx, const puddle_link *link, const char *profi
 /* Post `text` to a channel, with `files` (NULL, or the text of a "files" array as the owner's send gives it: files here whole,
  * each sent to the Pond first, docs/ponds.md "Files"). 0, or -1 with `code`: "no_pond", "no_channel", "bad_text", "slow_down",
  * "unreachable", "removed" (the Pond no longer has us), "no_file" (one is not here whole), "files_off" (the Pond takes none),
- * "too_large" (one is over what it takes), "failed". */
+ * "too_large" (one is over what it takes), "muted" (an operator or administrator muted us), "failed". */
 int puddle_pond_send(puddle_ctx *ctx, const char *pond, int64_t channel, const char *text, const char *files, size_t files_len,
                      const char **code);
 
@@ -38,8 +38,9 @@ int puddle_pond_history(puddle_ctx *ctx, const char *pond, int64_t channel, int6
  * older than what is kept): fetch it soon, and keep it a week. 0, or -1 with `code`: "no_pond", "no_channel", "too_large". */
 int puddle_pond_fetch(puddle_ctx *ctx, const char *pond, int64_t channel, int64_t message, const char *file, const char **code);
 
-/* What an operator or administrator asks of the Pond (`target` under /pond/v1/admin/), or the answer to a role it offered
- * (/pond/v1/roles/answer): the Pond's status and answer (malloc'd), as it gave them. 0, or -1 with `code` as for sending. */
+/* What an operator or administrator asks of the Pond (`target` under /pond/v1/admin/), the answer to a role it offered
+ * (/pond/v1/roles/answer), or a picture sent for the icon (/pond/v1/pictures, the bytes as `body`): the Pond's status and
+ * answer (malloc'd), as it gave them. 0, or -1 with `code` as for sending. */
 int puddle_pond_admin(puddle_ctx *ctx, const char *pond, const char *method, const char *target, const char *body, size_t len,
                       int *status, char **reply, size_t *reply_len, const char **code);
 
@@ -65,5 +66,13 @@ void puddle_pond_followers_stop(puddle_pond_followers *f);
 
 #ifdef __cplusplus
 }
+
+#include <string>
+
+/* A call to a Pond we are in, as the owner's are (sealed to it, believed only with its receipt): its status and answer. false with
+ * `code` if no answer came that counts: "no_pond", "unreachable", "not_proven", "removed" (it no longer has us), "failed".
+ * Direct messages (federation/pond_dms.cpp) make theirs with this. */
+bool puddle_pond_call(puddle_ctx *ctx, const char *pond, const char *method, const std::string &target, const std::string &body,
+                      size_t max_body, int total_s, int *status, std::string *reply, const char **code);
 #endif
 #endif

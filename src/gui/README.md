@@ -38,6 +38,7 @@ src/gui/
     dialogs/          JoinPondDialog: the + under the Ponds on the rail. NewConversationDialog: the "+": message one friend or start a group, or add a friend by address; also asks more friends into a group
     settings/         the settings page (activity log, developer mode, phones, who is blocked) and PersonRow, the blocked-person row
     components/       small things used everywhere: Card (a floating panel), PanelToggle (the fold-away circle), Avatar, Icon, ContextTrigger (right-click), FieldMenu (text box menu),
+                      ProfileCard (someone's card, under their name) and PersonMenu (the right-click menu on someone: Profile, Message, and a Pond's Mute, Kick, Ban),
                       ConfirmDialog, ConversationMenu, ScrollList and ScrollArea (see below)
     theme/            Theme: every colour, size and gap, in one file
   assets/           images, and the icons (icons/tabler: see icons/README.md)
@@ -71,6 +72,11 @@ are there. Colours that follow light or dark mode come from `palette` where they
 
 - `tests/ui_test.cpp` loads `qml/shell/Shell.qml` straight from this folder and drives it with real mouse and key events. It finds things by
   `objectName`, so keep those when you restyle; rename one and the test needs the new name.
+- The Pond screens need a real Pond: `PUDDLE_TEST_POND=<a pond:// invite> PUDDLE_TEST_PONDCTL="<the command that runs its pondctl>" ./build/ui_test`
+  joins it with the window's Puddle and a friend's, and checks pictures, the icon and what an operator sees (the pond
+  repository's `pondd` and `pondctl` on this machine will do). Offscreen, pictures never draw in `PUDDLE_SHOT` pictures (the
+  software renderer has no `MultiEffect`); for screenshots that show them, run it in a headless KWin:
+  `kwin_wayland --virtual --socket wl-test &` then `WAYLAND_DISPLAY=wl-test ./build/ui_test -platform wayland`.
 - `tests/chats_test.cpp` and `tests/backend_test.cpp` test `app/` without a window.
 - Videos play only on the system's own platform (on macOS, AVFoundation answers through its event loop), not the offscreen one the
   tests use. `PUDDLE_TEST_VIDEO=<a short clip> ./build/ui_test` runs the video part too, with the window showing.

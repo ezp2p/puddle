@@ -111,7 +111,7 @@ static int send_message(const puddle_call *c, puddle_jw *w)
     Conversation conv = conversationOf(c);
     Message m = conv.send(text, ref, files);
     PartialUsers people(c->ctx);
-    Deliveries d(c->ctx, conv.kind() == Conversation::Kind::Dm ? conv.id() : std::string());
+    Deliveries d(c->ctx, conv.kind() == Conversation::Kind::Group ? std::string() : conv.id());
     m.write(w, c->ctx, people, &d);
     return 201;
 }
@@ -131,6 +131,14 @@ static int delete_message(const puddle_call *c, puddle_jw *w)
     Message m = messageOf(c).remove(c->ctx);
     PartialUsers people(c->ctx);
     m.write(w, c->ctx, people, nullptr);
+    return 200;
+}
+
+/* Through a Pond: offer to be friends (docs/pond-dms.md, "Becoming friends"). */
+static int befriend(const puddle_call *c, puddle_jw *w)
+{
+    PartialUsers people(c->ctx);
+    conversationOf(c).befriend().write(w, people);
     return 200;
 }
 
@@ -159,5 +167,6 @@ const puddle_route puddle_conversation_routes[] = {
     { "POST", "/api/v1/conversations/{conversation:id}/messages/{message:event}/delete", PUDDLE_AUTH_OWNER, 64, delete_message, NULL },
     { "POST", "/api/v1/conversations/{conversation:id}/read",            PUDDLE_AUTH_OWNER, 64,   mark_read,          NULL },
     { "POST", "/api/v1/conversations/{conversation:id}/retry",           PUDDLE_AUTH_OWNER, 64,   retry,              NULL },
+    { "POST", "/api/v1/conversations/{conversation:id}/befriend",        PUDDLE_AUTH_OWNER, 64,   befriend,           NULL },
 };
 const size_t puddle_conversation_routes_count = sizeof puddle_conversation_routes / sizeof puddle_conversation_routes[0];

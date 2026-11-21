@@ -87,7 +87,8 @@ a warning.
 - `group:<group id>`: what the members of that group see. Chosen with `POST /api/v1/groups/{group}/profile`, or with
   `"profile"` when creating the group (`/api/v1/groups/create`) or joining it (`/api/v1/groups/{group}/accept`).
 - `pond:<pond id>`: what the members of that Pond see. Chosen with `"profile"` when joining (`/api/v1/ponds/join`), or
-  with `POST /api/v1/ponds/{pond}/profile`. Pictures are left out: a Pond has no way to fetch them (docs/ponds.md).
+  with `POST /api/v1/ponds/{pond}/profile`. Its pictures are sent to the Pond, which shows them to its members, where the
+  Pond takes pictures and each is at most 1 MiB (docs/ponds.md, "Pictures").
 
 `{"profile": null}` takes a choice back: the place sees nothing of the owner there any more, and is told so. Deleting a
 profile does the same for every place that showed it. If a chosen profile's file goes missing, its places see nothing.
@@ -134,6 +135,10 @@ The app shows each person as they are in the place on screen: directly in the fr
 and as they are in the group in a group's members and messages. In the owner API, `User.profile` is what they show
 us directly; a group's members and messages carry each person as they are in that group.
 
+The owner too is shown as that place sees them: their own messages, their row among a group's members, their tile in a
+call, and the bar at the bottom of a Pond use the profile chosen for the place (`dm:`, `group:` or `pond:`), and the
+default profile only where none is chosen.
+
 ## The owner API
 
 - `GET /api/v1/profiles`, `GET /api/v1/profiles/{id}`: the owner's profiles, each with `places` (where it is shown).
@@ -151,4 +156,4 @@ In code: `puddle::Profile` (`src/objects/profile.hpp`). `Profile::get(ctx, "work
 
 The app's screens for making and editing profiles (sending a request, accepting one and joining a group already ask
 "Appear as"); reloading hand-edited files while running and resizing pictures
-(docs/discuss-later.md, 1 and 2); and pictures in a Pond.
+(docs/discuss-later.md, 1 and 2).

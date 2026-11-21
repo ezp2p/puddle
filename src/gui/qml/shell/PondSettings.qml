@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Dialogs
 import "../components"
 import "../theme"
 
@@ -20,6 +21,26 @@ Popup {
     property bool statusBad: false
     function say(text, bad) { status = text; statusBad = bad; statusTimer.restart() }
     Timer { id: statusTimer; interval: 5000; onTriggered: settings.status = "" }
+    // the icon: a picture is sent to our Puddle first (as for a profile), then named as the Pond's
+    property bool iconBusy: false
+    FileDialog {
+        id: iconPicker
+        title: qsTr("Choose an icon")
+        nameFilters: [qsTr("Pictures (*.png *.jpg *.jpeg *.gif *.webp)")]
+        onAccepted: { settings.iconBusy = true; settings.chats.uploadPicture(selectedFile, "pond-icon") }
+    }
+    Connections {
+        target: settings.chats
+        function onPictureUploaded(slot, hash, error) {
+            if (slot !== "pond-icon")
+                return
+            settings.iconBusy = false
+            if (error !== "")
+                settings.say(error, true)
+            else
+                settings.ponds.setIcon(hash)
+        }
+    }
     Connections {
         target: settings.ponds
         function onAdminDone(what) { if (settings.opened) settings.say(what, false) }
@@ -33,10 +54,26 @@ Popup {
         status = ""
         open()
     }
-    onSectionChanged: if (section === "bans") ponds.loadBans()
+    onSectionChanged: { if (section === "bans") ponds.loadBans(); if (section === "invites") ponds.loadInvites() }
     onOpened: {
         overview.reset()
+        madeLink = ""
         if (section === "bans") ponds.loadBans()
+        if (section === "invites") ponds.loadInvites()
+    }
+    // the invite just made: its link, to copy and give out
+    property string madeLink: ""
+    Connections {
+        target: settings.ponds
+        function onInviteMade(link) { settings.madeLink = link; settings.chats.copy(link); settings.say(qsTr("Invite made, and its link copied."), false) }
+    }
+    // "in 3 days", "in 5 hours": when an invite stops working
+    function fromNow(ms) {
+        const s = Math.max(0, (ms - Date.now()) / 1000)
+        const m = Math.max(1, Math.round(s / 60)), h = Math.round(s / 3600), d = Math.round(s / 86400)
+        if (s < 3600) return m === 1 ? qsTr("in a minute") : qsTr("in %1 minutes").arg(m)
+        if (s < 86400 * 2) return h === 1 ? qsTr("in an hour") : qsTr("in %1 hours").arg(h)
+        return qsTr("in %1 days").arg(d)
     }
 
     parent: Overlay.overlay
@@ -56,6 +93,7 @@ Popup {
         { id: "overview", title: qsTr("Overview"), glyph: "settings" },
         { id: "channels", title: qsTr("Channels"), glyph: "hash" },
         { id: "members", title: qsTr("Members"), glyph: "users" },
+        { id: "invites", title: qsTr("Invites"), glyph: "user-plus" },
         { id: "bans", title: qsTr("Bans"), glyph: "x" }
     ]
     function titleOf(id) { for (const s of sections) if (s.id === id) return s.title; return "" }
@@ -168,7 +206,7 @@ Popup {
                     x: 32
                     y: 8
                     width: scroller.width - 64
-                    currentIndex: ["overview", "channels", "members", "bans"].indexOf(settings.section)
+                    currentIndex: ["overview", "channels", "members", "bans", "invites"].indexOf(settings.section)
 
                     // ---- Overview ----
                     ColumnLayout {
@@ -176,6 +214,57 @@ Popup {
                         spacing: 16
                         function reset() { nameField.text = settings.ponds.currentName; descField.text = settings.ponds.currentDescription }
                         readonly property bool changed: nameField.text.trim() !== settings.ponds.currentName || descField.text.trim() !== settings.ponds.currentDescription
+                        SettingsGroup {
+                            title: qsTr("Icon")
+                            Layout.fillWidth: true
+                            visible: settings.ponds.canIcon
+                            RowLayout {
+                                spacing: 16
+                                Rectangle {
+                                    width: 64; height: 64; radius: 20
+                                    color: Theme.tint(Theme.text, Theme.selected)
+                                    Avatar {
+                                        id: iconNow
+                                        objectName: "pondSettingsIcon"
+                                        anchors.fill: parent
+                                        chats: settings.chats
+                                        name: settings.ponds.currentName
+                                        hash: settings.ponds.currentIcon
+                                        radius: parent.radius
+                                        visible: hash !== "" && ready
+                                    }
+                                    Label {
+                                        visible: !iconNow.visible
+                                        anchors.centerIn: parent
+                                        text: String(settings.ponds.currentName).split(/\s+/).filter(w => w.length).slice(0, 3).map(w => w.charAt(0)).join("")
+                                        font.bold: true; font.pixelSize: 20
+                                    }
+                                }
+                                ColumnLayout {
+                                    spacing: 6
+                                    Label {
+                                        text: qsTr("Shown on the Pond's button for every member. A PNG, JPEG, GIF or WebP of at most 1 MiB; square works best.")
+                                        wrapMode: Text.Wrap; opacity: 0.7; font.pixelSize: 12
+                                        Layout.fillWidth: true; Layout.maximumWidth: 360
+                                    }
+                                    RowLayout {
+                                        spacing: 8
+                                        PrimaryButton {
+                                            objectName: "changePondIcon"
+                                            text: settings.iconBusy ? qsTr("Sending…") : qsTr("Change icon")
+                                            enabled: !settings.iconBusy
+                                            onClicked: iconPicker.open()
+                                        }
+                                        Button {
+                                            objectName: "removePondIcon"
+                                            text: qsTr("Remove")
+                                            enabled: settings.ponds.currentIcon !== "" && !settings.iconBusy
+                                            onClicked: settings.ponds.setIcon("")
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         SettingsGroup {
                             title: qsTr("Pond")
                             Layout.fillWidth: true
@@ -344,7 +433,7 @@ Popup {
                                     RowLayout {
                                         Layout.fillWidth: true
                                         spacing: 10
-                                        Avatar { name: mRow.model.name; tint: mRow.model.color || ""; size: 32 }
+                                        Avatar { chats: settings.chats; name: mRow.model.name; hash: mRow.model.avatar || ""; tint: mRow.model.color || ""; size: 32 }
                                         ColumnLayout {
                                             spacing: 0
                                             Layout.fillWidth: true
@@ -407,6 +496,119 @@ Popup {
                                             }
                                         }
                                         Button { text: qsTr("Unban"); onClicked: settings.ponds.unban(bRow.model.member) }
+                                    }
+                                    Rectangle { Layout.fillWidth: true; height: 1; color: Theme.hairline }
+                                }
+                            }
+                        }
+                    }
+
+                    // ---- Invites ----
+                    ColumnLayout {
+                        spacing: 16
+                        SettingsGroup {
+                            title: qsTr("Make an invite")
+                            note: qsTr("Anyone with the link can join, until it is used up, expires or is revoked.")
+                            Layout.fillWidth: true
+                            RowLayout {
+                                spacing: 16
+                                ColumnLayout {
+                                    spacing: 4
+                                    Label { text: qsTr("Expire after"); font.bold: true; font.pixelSize: 12 }
+                                    ComboBox {
+                                        id: expiry
+                                        objectName: "inviteExpiry"
+                                        textRole: "text"
+                                        valueRole: "value"
+                                        currentIndex: 5
+                                        model: [
+                                            { text: qsTr("30 minutes"), value: 1800 }, { text: qsTr("1 hour"), value: 3600 },
+                                            { text: qsTr("6 hours"), value: 21600 }, { text: qsTr("12 hours"), value: 43200 },
+                                            { text: qsTr("1 day"), value: 86400 }, { text: qsTr("7 days"), value: 604800 },
+                                            { text: qsTr("Never"), value: 0 }
+                                        ]
+                                    }
+                                }
+                                ColumnLayout {
+                                    spacing: 4
+                                    Label { text: qsTr("Number of uses"); font.bold: true; font.pixelSize: 12 }
+                                    ComboBox {
+                                        id: uses
+                                        objectName: "inviteUses"
+                                        textRole: "text"
+                                        valueRole: "value"
+                                        model: [
+                                            { text: qsTr("No limit"), value: 0 }, { text: qsTr("1 use"), value: 1 }, { text: qsTr("5 uses"), value: 5 },
+                                            { text: qsTr("10 uses"), value: 10 }, { text: qsTr("25 uses"), value: 25 }, { text: qsTr("100 uses"), value: 100 }
+                                        ]
+                                    }
+                                }
+                                ColumnLayout {
+                                    spacing: 4
+                                    Label { text: " "; font.pixelSize: 12 }
+                                    PrimaryButton {
+                                        objectName: "createInvite"
+                                        text: qsTr("Make invite")
+                                        onClicked: settings.ponds.createInvite(uses.currentValue, expiry.currentValue)
+                                    }
+                                }
+                            }
+                            // the one just made: copied already, and here to copy again
+                            RowLayout {
+                                visible: settings.madeLink !== ""
+                                Layout.fillWidth: true
+                                Layout.topMargin: 6
+                                spacing: 8
+                                TextField {
+                                    objectName: "madeInviteLink"
+                                    Layout.fillWidth: true
+                                    readOnly: true
+                                    text: settings.madeLink
+                                    selectByMouse: true
+                                    onActiveFocusChanged: if (activeFocus) selectAll()
+                                }
+                                Button { objectName: "copyMadeInvite"; text: qsTr("Copy"); onClicked: { settings.chats.copy(settings.madeLink); settings.say(qsTr("Link copied."), false) } }
+                            }
+                        }
+                        SettingsGroup {
+                            title: qsTr("Invites (%1)").arg(settings.ponds.invites.count)
+                            note: qsTr("Those that can still be used, made here or with pondctl. Revoking one stops it working at once; nobody who joined with it leaves.")
+                            Layout.fillWidth: true
+                            Label { visible: settings.ponds.invites.count === 0; text: qsTr("No invites can be used right now."); opacity: 0.6 }
+                            Repeater {
+                                model: settings.ponds.invites
+                                delegate: ColumnLayout {
+                                    id: iRow
+                                    required property var model
+                                    objectName: "inviteRow"
+                                    Layout.fillWidth: true
+                                    spacing: 6
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 10
+                                        ColumnLayout {
+                                            spacing: 2
+                                            Layout.fillWidth: true
+                                            Label { text: iRow.model.token; font.family: "monospace"; font.bold: true; elide: Text.ElideRight; Layout.fillWidth: true }
+                                            Label {
+                                                Layout.fillWidth: true
+                                                wrapMode: Text.Wrap
+                                                font.pixelSize: 12
+                                                opacity: 0.65
+                                                text: (iRow.model.maxUses > 0 ? qsTr("Used %1 of %2").arg(iRow.model.uses).arg(iRow.model.maxUses)
+                                                                              : iRow.model.uses === 1 ? qsTr("Used once, no limit")
+                                                                              : qsTr("Used %1 times, no limit").arg(iRow.model.uses))
+                                                      + " · " + (iRow.model.expires > 0 ? qsTr("expires %1").arg(settings.fromNow(iRow.model.expires)) : qsTr("never expires"))
+                                            }
+                                        }
+                                        Button { objectName: "copyInvite"; text: qsTr("Copy link"); onClicked: { settings.chats.copy(iRow.model.link); settings.say(qsTr("Link copied."), false) } }
+                                        Button {
+                                            objectName: "revokeInvite"
+                                            text: qsTr("Revoke")
+                                            onClicked: confirm.ask(qsTr("Revoke this invite?"),
+                                                                   qsTr("The link stops working at once. Anyone who joined with it stays."),
+                                                                   qsTr("Revoke"), () => settings.ponds.revokeInvite(iRow.model.token))
+                                        }
                                     }
                                     Rectangle { Layout.fillWidth: true; height: 1; color: Theme.hairline }
                                 }

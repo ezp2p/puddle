@@ -12,6 +12,7 @@ Rectangle {
     objectName: "contextBar"
     required property var chats
     property bool developer: false
+    property var people: null         // the Shell: someone's card (showCard)
     property bool closable: false     // in a drawer: show a button to close it
     signal closeRequested()
     signal openChat(string userId)    // a member (a friend) was chosen
@@ -100,7 +101,8 @@ Rectangle {
                         Label { text: mrow.model.name; Layout.fillWidth: true; elide: Text.ElideRight }
                         Label { visible: mrow.model.state === "invited"; text: qsTr("invited"); opacity: 0.6; font.pixelSize: 12 }
                     }
-                    HoverHandler { id: mhover }
+                    HoverHandler { id: mhover; cursorShape: Qt.PointingHandCursor }
+                    TapHandler { onTapped: if (bar.people) bar.people.showCard(mrow, mrow.model.id) }
                     ContextTrigger { active: !mrow.me || bar.developer; onRequested: (x, y) => memberMenu.popup(mrow, x, y) }
                     ToolButton {
                         objectName: "memberMore"
@@ -116,6 +118,10 @@ Rectangle {
                     }
                     Menu {
                         id: memberMenu
+                        MenuItem {
+                            objectName: "memberProfile"; text: qsTr("Profile")
+                            onTriggered: if (bar.people) bar.people.showCard(mrow, mrow.model.id)
+                        }
                         MenuItem {
                             objectName: "memberMessage"; text: qsTr("Message")
                             visible: !mrow.me && mrow.model.friend === true; height: visible ? implicitHeight : 0

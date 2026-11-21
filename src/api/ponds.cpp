@@ -3,8 +3,11 @@
 #include "core/link.h"
 #include "core/ponds.h"
 #include "core/profile.h"
+#include "objects/conversation.hpp"
 #include "objects/file.hpp"
+#include "objects/user.hpp"
 #include "storage/files.h"
+#include "storage/media.h"
 
 #include <cstdlib>
 #include <cstring>
@@ -35,7 +38,7 @@ static Error failure(const char *code)
         return Error(409, code); /* the Pond takes no files, or not one this large; or it is not here whole */
     if (!strcmp(code, "slow_down"))
         return Error(429, code);
-    if (!strcmp(code, "invite_refused") || !strcmp(code, "removed"))
+    if (!strcmp(code, "invite_refused") || !strcmp(code, "removed") || !strcmp(code, "muted"))
         return Error(409, code);
     return Error(502, code); /* unreachable, not_a_pond, not_proven, failed */
 }
@@ -201,7 +204,7 @@ static int fetch_file(const puddle_call *c, puddle_jw *)
 
 /* Ask the Pond, as an operator or administrator, and answer the owner with what it said (the Pond's docs/design.md, "Roles").
  * A Pond that does not know the route for us (we hold no role) is `409 no_role`. */
-static int relay(const puddle_call *c, const char *method, const std::string &target, const std::string &body, std::string *answer = nullptr)
+static int ask(const puddle_call *c, const char *method, const std::string &target, const std::string &body, std::string &text)
 {
     const char *pond = puddle_param(c, "pond"), *code = "internal";
     if (puddle_ponds_conn(pondsOf(c), pond, nullptr) != 0)
@@ -213,12 +216,19 @@ static int relay(const puddle_call *c, const char *method, const std::string &ta
         c->ctx->courier->pond_admin(c->ctx, pond, method, target.c_str(), body.empty() ? nullptr : body.data(), body.size(), &status, &reply,
                                     &len, &code) != 0)
         throw failure(code);
-    std::string text(reply, len);
+    text.assign(reply, len);
     free(reply);
     if (status == 404 && text.find("\"not_found\"") != std::string::npos)
         throw Error(409, "no_role");
     if (status >= 500)
         throw Error(502, "failed");
+    return status;
+}
+
+static int relay(const puddle_call *c, const char *method, const std::string &target, const std::string &body, std::string *answer = nullptr)
+{
+    std::string text;
+    int status = ask(c, method, target, body, text);
     if (answer)
         *answer = text;
     if (status == 204 || text.empty())
@@ -264,6 +274,35 @@ static int accept_offer(const puddle_call *c, puddle_jw *) { return answer_offer
 static int decline_offer(const puddle_call *c, puddle_jw *) { return answer_offer(c, false); }
 
 static int admin_pond(const puddle_call *c, puddle_jw *) { return relay(c, "POST", "/pond/v1/admin/pond", objectBody(c)); }
+/* {"hash": a picture this Puddle holds (POST /api/v1/media/upload), or null}: the Pond's icon. The picture is sent to the Pond
+ * first (the Pond's docs/design.md, "Pictures"), then named as its icon. */
+static int admin_icon(const puddle_call *c, puddle_jw *)
+{
+    Body b(c);
+    if (!b.has("hash"))
+        throw Error::badRequest();
+    if (b.isNull("hash"))
+        return relay(c, "POST", "/pond/v1/admin/icon", "{\"hash\":null}");
+    std::string hash = b.string("hash", 64);
+    if (!puddle_media_hash_valid(hash.c_str()))
+        throw Error::badRequest();
+    if (!puddle_ponds_has_feature(pondsOf(c), puddle_param(c, "pond"), "pictures"))
+        throw Error(409, "no_pictures"); /* an older Pond, without icons */
+    unsigned char *bytes = nullptr;
+    size_t len = 0;
+    char mime[40];
+    int r = puddle_media_read(c->ctx->config->data_dir, hash.c_str(), PUDDLE_POND_PICTURE_MAX, &bytes, &len, mime);
+    if (r == 1)
+        throw Error::notFound("no_picture");
+    if (r != 0)
+        throw Error(409, "too_large"); /* over what a Pond keeps (or not an image) */
+    std::string sent((const char *)bytes, len), said;
+    free(bytes);
+    int status = ask(c, "POST", "/pond/v1/pictures", sent, said);
+    if (status != 200)
+        throw Error(502, "failed");
+    return relay(c, "POST", "/pond/v1/admin/icon", "{\"hash\":\"" + hash + "\"}");
+}
 static int admin_channel_create(const puddle_call *c, puddle_jw *) { return relay(c, "POST", "/pond/v1/admin/channels/create", objectBody(c)); }
 static int admin_channel_edit(const puddle_call *c, puddle_jw *)
 {
@@ -281,7 +320,21 @@ static int admin_ban(const puddle_call *c, puddle_jw *)
 {
     return relay(c, "POST", std::string("/pond/v1/admin/members/") + puddle_param(c, "member") + "/ban", objectBody(c));
 }
+static int admin_mute(const puddle_call *c, puddle_jw *)
+{
+    return relay(c, "POST", std::string("/pond/v1/admin/members/") + puddle_param(c, "member") + "/mute", objectBody(c));
+}
+static int admin_unmute(const puddle_call *c, puddle_jw *)
+{
+    return relay(c, "POST", std::string("/pond/v1/admin/members/") + puddle_param(c, "member") + "/unmute", "");
+}
 static int admin_bans(const puddle_call *c, puddle_jw *) { return relay(c, "GET", "/pond/v1/admin/bans", ""); }
+static int admin_invites(const puddle_call *c, puddle_jw *) { return relay(c, "GET", "/pond/v1/admin/invites", ""); }
+static int admin_invite_create(const puddle_call *c, puddle_jw *) { return relay(c, "POST", "/pond/v1/admin/invites/create", objectBody(c)); }
+static int admin_invite_revoke(const puddle_call *c, puddle_jw *)
+{
+    return relay(c, "POST", std::string("/pond/v1/admin/invites/") + puddle_param(c, "token") + "/revoke", "");
+}
 static int admin_unban(const puddle_call *c, puddle_jw *)
 {
     return relay(c, "POST", std::string("/pond/v1/admin/bans/") + puddle_param(c, "member") + "/unban", "");
@@ -393,6 +446,36 @@ static int voice_state(const puddle_call *c, puddle_jw *w)
     return writeVoice(c, w);
 }
 
+/* ---- direct messages through the Pond (docs/pond-dms.md) ---- */
+
+/* The conversation with a member through this Pond, made if there is none yet: then its messages, sending and reading are the
+ * conversation routes'. */
+static int open_dm(const puddle_call *c, puddle_jw *w)
+{
+    Conversation conv = Conversation::withMember(c->ctx, puddle_param(c, "pond"), puddle_param(c, "member"));
+    PartialUsers people(c->ctx);
+    conv.write(w, people);
+    return 200;
+}
+
+/* {"accept": bool}: whether the owner takes direct messages in this Pond. */
+static int dm_settings(const puddle_call *c, puddle_jw *w)
+{
+    Body b(c);
+    puddle_span v = b.raw("accept");
+    bool yes = v.len == 4 && !memcmp(v.p, "true", 4), no = v.len == 5 && !memcmp(v.p, "false", 5);
+    if (!yes && !no)
+        throw Error::badRequest("bad_accept");
+    pondsOf(c);
+    const char *code = "failed";
+    if (c->ctx->courier->pdm_accept(c->ctx, puddle_param(c, "pond"), yes, &code) != 0)
+        throw !strcmp(code, "dms_off") ? Error::conflict(code) : failure(code);
+    puddle_jw_object(w);
+    puddle_jw_flag(w, "accept", yes);
+    puddle_jw_end_object(w);
+    return 200;
+}
+
 #define POND "/api/v1/ponds/{pond:id}"
 
 const puddle_route puddle_pond_api_routes[] = {
@@ -407,14 +490,22 @@ const puddle_route puddle_pond_api_routes[] = {
     { "POST", POND "/offer/accept",                               PUDDLE_AUTH_OWNER, 64,    accept_offer,     NULL },
     { "POST", POND "/offer/decline",                              PUDDLE_AUTH_OWNER, 64,    decline_offer,    NULL },
     { "POST", POND "/admin/pond",                                 PUDDLE_AUTH_OWNER, 8192,  admin_pond,       NULL },
+    { "POST", POND "/admin/icon",                                 PUDDLE_AUTH_OWNER, 256,   admin_icon,       NULL },
     { "POST", POND "/admin/channels/create",                      PUDDLE_AUTH_OWNER, 4096,  admin_channel_create, NULL },
     { "POST", POND "/admin/channels/{channel:num}/edit",          PUDDLE_AUTH_OWNER, 4096,  admin_channel_edit,   NULL },
     { "POST", POND "/admin/channels/{channel:num}/delete",        PUDDLE_AUTH_OWNER, 64,    admin_channel_delete, NULL },
     { "POST", POND "/admin/members/{member:id}/remove",           PUDDLE_AUTH_OWNER, 64,    admin_remove,     NULL },
     { "POST", POND "/admin/members/{member:id}/ban",              PUDDLE_AUTH_OWNER, 2048,  admin_ban,        NULL },
+    { "POST", POND "/admin/members/{member:id}/mute",             PUDDLE_AUTH_OWNER, 256,   admin_mute,       NULL },
+    { "POST", POND "/admin/members/{member:id}/unmute",           PUDDLE_AUTH_OWNER, 64,    admin_unmute,     NULL },
     { "GET",  POND "/admin/bans",                                 PUDDLE_AUTH_OWNER, 0,     admin_bans,       NULL },
     { "POST", POND "/admin/bans/{member:id}/unban",               PUDDLE_AUTH_OWNER, 64,    admin_unban,      NULL },
+    { "GET",  POND "/admin/invites",                              PUDDLE_AUTH_OWNER, 0,     admin_invites,    NULL },
+    { "POST", POND "/admin/invites/create",                       PUDDLE_AUTH_OWNER, 256,   admin_invite_create, NULL },
+    { "POST", POND "/admin/invites/{token:token}/revoke",         PUDDLE_AUTH_OWNER, 64,    admin_invite_revoke, NULL },
     { "POST", POND "/channels/{channel:num}/voice/join",          PUDDLE_AUTH_OWNER, 64,    join_voice,       NULL },
+    { "POST", POND "/dms/{member:id}/open",                        PUDDLE_AUTH_OWNER, 64,    open_dm,          NULL },
+    { "POST", POND "/dms/settings",                               PUDDLE_AUTH_OWNER, 64,    dm_settings,      NULL },
     { "GET",  "/api/v1/voice",                                    PUDDLE_AUTH_OWNER, 0,     get_voice,        NULL },
     { "POST", "/api/v1/voice/leave",                              PUDDLE_AUTH_OWNER, 64,    leave_voice,      NULL },
     { "POST", "/api/v1/voice/state",                              PUDDLE_AUTH_OWNER, 256,   voice_state,      NULL },
