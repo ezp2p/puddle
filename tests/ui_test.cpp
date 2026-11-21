@@ -1558,6 +1558,7 @@ int main(int argc, char **argv)
         /* Levee: none joined; a link that isn't one is said so, and nothing changes */
         {
             CHECK(find("leveeSettings") != nullptr && find("leveeLinkField") != nullptr);
+            CHECK(find("pondVoiceDirectSwitch") == nullptr); /* only shown behind a Levee (find sees what is visible) */
             CHECK(until([&] { return !A.leveeJoined(); }, 5000));
             A.joinLevee("puddle://not-a-levee.example.org");
             CHECK(until([&] { return !A.leveeBusy() && !A.leveeError().isEmpty(); }, 10000));

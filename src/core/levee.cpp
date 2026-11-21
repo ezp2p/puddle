@@ -113,6 +113,8 @@ int puddle_levee_load(const char *data_dir)
                 puddle_json_string(v, st.turn_pass, sizeof st.turn_pass);
             if (puddle_json_member(text, n, "joined_ms", &v) == 0 && puddle_json_int64(v, &joined) == 0)
                 st.joined_ms = joined;
+            if (puddle_json_member(text, n, "pond_voice_direct", &v) == 0)
+                st.pond_voice_direct = v.len == 4 && !memcmp(v.p, "true", 4);
         }
         st.joined = rc == 1;
     }
@@ -121,13 +123,13 @@ int puddle_levee_load(const char *data_dir)
     return rc;
 }
 
-int puddle_levee_save(const char *data_dir, const puddle_levee_state *st)
+/* Write `st` and make it current. g_mu held, so a save and a change of the owner's choice can't undo each other. */
+static int save_locked(const char *data_dir, const puddle_levee_state *st)
 {
     char dir[1100], file[1200];
     path_of(data_dir, dir, sizeof dir, file, sizeof file);
     if (!st->joined) {
         remove(file);
-        std::lock_guard<std::mutex> g(g_mu);
         memset(&g_state, 0, sizeof g_state);
         return 0;
     }
@@ -146,13 +148,31 @@ int puddle_levee_save(const char *data_dir, const puddle_levee_state *st)
     puddle_jw_str(&w, "turn_pass", st->turn_pass);
     puddle_jw_num(&w, "after", (int64_t)st->after);
     puddle_jw_num(&w, "joined_ms", st->joined_ms);
+    puddle_jw_flag(&w, "pond_voice_direct", st->pond_voice_direct);
     puddle_jw_end_object(&w);
     size_t n = puddle_jw_finish(&w);
     if (!n || puddle_write_file_atomic(dir, file, buf, n) != 0)
         return -1;
-    std::lock_guard<std::mutex> g(g_mu);
     g_state = *st;
     return 0;
+}
+
+int puddle_levee_save(const char *data_dir, const puddle_levee_state *st)
+{
+    std::lock_guard<std::mutex> g(g_mu);
+    puddle_levee_state copy = *st;
+    copy.pond_voice_direct = g_state.joined ? g_state.pond_voice_direct : 0; /* the owner's, not the worker's to change */
+    return save_locked(data_dir, &copy);
+}
+
+int puddle_levee_set_pond_voice_direct(const char *data_dir, int direct)
+{
+    std::lock_guard<std::mutex> g(g_mu);
+    if (!g_state.joined)
+        return -1;
+    puddle_levee_state copy = g_state;
+    copy.pond_voice_direct = direct ? 1 : 0;
+    return save_locked(data_dir, &copy);
 }
 
 int puddle_levee_current(puddle_levee_state *out)

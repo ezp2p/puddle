@@ -449,6 +449,18 @@ paths:
       tags: [ponds]
       summary: Leave. The Pond is told if it can be reached; it is forgotten here either way, with everything kept of it.
       responses: { "204": { description: Left } }
+  /api/v1/levee/settings:
+    post:
+      tags: [levee]
+      summary: The owner's choices while behind a Levee
+      description: |
+        `pond_voice_direct`: Pond voice channels connect straight to the Pond instead of through the Levee's relay. Shorter,
+        and it doesn't load the Levee, but the Pond then sees this Puddle's own address. Off unless set; leaving the Levee
+        forgets it. Applies from the next voice channel joined.
+      requestBody: { content: { application/json: { schema: { type: object, required: [pond_voice_direct], properties: { pond_voice_direct: { type: boolean } } } } } }
+      responses:
+        "200": { description: "As GET /api/v1/levee" }
+        "409": { description: "`not_joined`: this Puddle is not behind a Levee", content: { application/json: { schema: { $ref: "objects/error.yaml" } } } }
   /api/v1/ponds/{pond}/offer/accept:
     parameters: [{ $ref: "#/components/parameters/Pond" }]
     post:
@@ -896,8 +908,8 @@ paths:
     get:
       tags: [levee]
       summary: Whether this Puddle is behind a Levee
-      description: "`{joined}`; when joined also `address` (where others reach it now), `id` (the Levee's), `since`, `attached` (connected to it now) and `calls` (it has a relay)."
-      responses: { "200": { description: OK, content: { application/json: { schema: { type: object, required: [joined], properties: { joined: { type: boolean }, address: { type: string }, id: { type: string }, since: { type: integer }, attached: { type: boolean }, calls: { type: boolean } } } } } } }
+      description: "`{joined}`; when joined also `address` (where others reach it now), `id` (the Levee's), `since`, `attached` (connected to it now), `calls` (it has a relay) and `pond_voice_direct` (the owner's choice, below)."
+      responses: { "200": { description: OK, content: { application/json: { schema: { type: object, required: [joined], properties: { joined: { type: boolean }, address: { type: string }, id: { type: string }, since: { type: integer }, attached: { type: boolean }, calls: { type: boolean }, pond_voice_direct: { type: boolean } } } } } } }
   /api/v1/levee/join:
     post:
       tags: [levee]

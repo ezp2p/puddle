@@ -3,7 +3,8 @@
  * We offer a WebRTC connection to the Pond, on our calls port: one Opus track for the owner's voice, and a data channel
  * (`frames`) on which the Pond sends everyone else's, each as its sender's slot (2 bytes), its RTP timestamp (4) and the frame.
  * The Pond answers with its own, and its UDP port; we add its address there as a candidate, since it is the one with a public
- * address. Whose each slot is comes from the Pond's `voice` events, kept by core/ponds. */
+ * address. Behind a Levee the connection goes through its relay, so the Pond never sees our address, unless the owner chose
+ * to go straight to the Pond (docs/levee.md, "Pond voice"). Whose each slot is comes from the Pond's `voice` events, kept by core/ponds. */
 #include "federation/calls.h"
 
 #ifdef PUDDLE_HAVE_CALLS
@@ -129,7 +130,7 @@ static int connect_voice(puddle_calls *cs, const VoicePtr &v, const char **code)
     std::weak_ptr<PondVoice> weak = v;
     std::shared_ptr<rtc::PeerConnection> pc;
     try {
-        pc = std::make_shared<rtc::PeerConnection>(pc_config(cs));
+        pc = std::make_shared<rtc::PeerConnection>(pc_config(cs, true));
         pc->onStateChange([cs, weak](rtc::PeerConnection::State s) {
             std::lock_guard<std::mutex> g(cs->mu);
             VoicePtr v = weak.lock();
@@ -190,7 +191,9 @@ static int connect_voice(puddle_calls *cs, const VoicePtr &v, const char **code)
     }
 
     std::string target = "/pond/v1/channels/" + std::to_string(v->channel) + "/voice/join";
-    std::string body = offer_body(std::string(*pc->localDescription()), cs->port);
+    /* our calls port, for the Pond to add at the address the request came from; 0 behind a Levee, since the request comes
+     * from the Levee's address and our candidates (the relay's, or our own if the owner chose so) are in the offer */
+    std::string body = offer_body(std::string(*pc->localDescription()), (unsigned)our_udp(cs));
     int status = 0;
     char *reply = nullptr;
     size_t len = 0;

@@ -277,6 +277,22 @@ void Chats::leaveLevee()
     });
 }
 
+void Chats::setLeveePondVoiceDirect(bool direct)
+{
+    if (leveeBusy_)
+        return;
+    leveeBusy_ = true;
+    emit leveeChanged();
+    api_.post(QStringLiteral("/api/v1/levee/settings"), QJsonObject{ { "pond_voice_direct", direct } }, [this](int status, const QJsonDocument &doc) {
+        leveeBusy_ = false;
+        if (status == 200 && doc.isObject())
+            levee_ = doc.object();
+        else
+            emit failed(tr("Could not change how Pond voice connects."));
+        emit leveeChanged(); /* either way: the switch shows what is so */
+    });
+}
+
 void Chats::acceptDevice(const QString &id) { post(path("devices", id, "accept"), QJsonObject{}, tr("Could not let that phone in.")); }
 void Chats::declineDevice(const QString &id) { post(path("devices", id, "decline"), QJsonObject{}, tr("Could not turn that phone away.")); }
 void Chats::revokeDevice(const QString &id) { post(path("devices", id, "revoke"), QJsonObject{}, tr("Could not remove that phone.")); }

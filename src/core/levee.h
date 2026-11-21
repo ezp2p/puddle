@@ -39,12 +39,18 @@ typedef struct {
     char turn_user[48], turn_pass[48];
     uint64_t after;                /* the inbox: everything up to here was taken */
     int64_t joined_ms;
+    /* The owner's choice: Pond voice goes straight to the Pond instead of through the relay (shorter, but the Pond sees our
+     * address). Only puddle_levee_set_pond_voice_direct changes it; puddle_levee_save keeps what it was. */
+    int pond_voice_direct;
 } puddle_levee_state;
 
 /* Read state/levee.json at start: 1 joined, 0 not, -1 damaged (treated as not joined). Sets the current state. */
 int puddle_levee_load(const char *data_dir);
 /* Save `st` (and make it current); `st->joined` 0 removes the file. 0 or -1. */
 int puddle_levee_save(const char *data_dir, const puddle_levee_state *st);
+
+/* Set the owner's choice for Pond voice (above) and save it. 0, or -1 if not joined or it can't be saved. */
+int puddle_levee_set_pond_voice_direct(const char *data_dir, int direct);
 
 /* The current state: 1 and filled while joined, else 0. */
 int puddle_levee_current(puddle_levee_state *out);

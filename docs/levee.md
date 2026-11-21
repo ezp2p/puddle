@@ -15,6 +15,7 @@ Built 2026-11-21. Decided with the owner:
 | Strangers | The Levee knows the Puddle's friends and phones (`peers`, sealed to it) and refuses anyone else, except first contacts (a stream request, a phone pairing), which are rate-limited. |
 | Files | Left at the Levee, sealed under a key only the message carries, until each friend has fetched them; then deleted. Asking again is answered by putting it there again. |
 | Calls | Through a TURN relay on the Levee, in the first build. Its UDP ports are published directly, beside the proxy. |
+| Pond voice | Through the relay too, by default, so Ponds don't learn the Puddle's address; the owner may send it straight to the Pond instead (shorter, but the Pond sees the address). |
 | Storage | Plain files in the Levee's data folder; no database. |
 
 ## In the app
@@ -41,6 +42,19 @@ connected now, and offers to leave. The owner API: `GET /api/v1/levee`, `POST /a
   Levee first when the file has a key (`puddle_levee_fetch`), and says `done` there when it is whole.
 - **Calls.** With a relay, ICE uses only it (`iceTransportPolicy: relay`), so nothing shows the Puddle's own address, and
   offers and answers say `udp: 0`; a friend then adds no candidates of their own making.
+
+## Pond voice
+
+A Pond voice channel is a connection to the Pond, which forwards everyone's voice (the Pond's docs/voice.md). Behind a
+Levee it goes through the relay like a call (`pc_config(cs, true)` in `federation/calls.cpp`): the Puddle offers only the
+relay's address, and its join says `udp: 0`, since the request reaches the Pond from the Levee's address and the Pond would
+otherwise add that as a candidate.
+
+Settings, "Levee", has a switch for **Pond voice straight to the Pond** (`POST /api/v1/levee/settings
+{pond_voice_direct}`, kept in `state/levee.json`): the connection then uses the calls port as without a Levee. It is a
+shorter path and doesn't load the Levee, which carries everything the channel sends the owner, but the Pond sees the
+Puddle's own address. It is off unless the owner turns it on, applies from the next channel joined, and leaving the Levee
+forgets it. Only the owner changes it: the worker's saves keep it as it is.
 
 Leaving: the Levee forgets the Puddle and everything it kept for it, and friends are told the Puddle's own address again
 (or none, if it has no `advertise` and listens everywhere).
