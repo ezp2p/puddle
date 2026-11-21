@@ -26,6 +26,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <string>
+#include <string_view>
 #include <thread>
 
 namespace {
@@ -347,13 +348,13 @@ void handle_item(Worker *w, const puddle_levee_state &lv, const char *j, size_t 
         collect_big(&big, drop);
         return;
     }
-    const char *e = len ? (const char *)memmem(out.data(), len, "\r\n\r\n", 4) : nullptr;
-    if (!e) {
+    size_t hend = std::string_view(out.data(), len).find("\r\n\r\n"); /* no memmem on Windows */
+    if (hend == std::string_view::npos) {
         std::string drop;
         collect_big(&big, drop);
         return;
     }
-    size_t hl = (size_t)(e - out.data()) + 4;
+    size_t hl = hend + 4;
     std::string answer(out.data() + hl, len - hl);
     if (!collect_big(&big, answer))
         return;
