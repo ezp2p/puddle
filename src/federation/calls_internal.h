@@ -192,7 +192,9 @@ uint32_t video_now(); /* the time in a 90 kHz count, for our own video's timesta
 bool track_open(const std::shared_ptr<rtc::Track> &t);
 uint32_t stamp(uint32_t &next, uint32_t &last, bool &have, uint32_t in);
 void send_on(const std::shared_ptr<rtc::Track> &track, const rtc::binary &data, uint32_t ts);
-rtc::Configuration pc_config(puddle_calls *cs);
+/* How a connection finds its path: behind a Levee only through its relay, else on our calls port. `pond`: a Pond voice
+ * channel's, which the owner may have sent straight to the Pond (docs/levee.md, "Pond voice"). */
+rtc::Configuration pc_config(puddle_calls *cs, bool pond = false);
 bool gathered(const std::shared_ptr<rtc::PeerConnection> &pc, puddle_calls *cs, const std::function<bool()> &has_track);
 /* The answerer's side, once its offer is set: when every track it offered has been set up here (`seen` counts them, so each
  * says which SSRC we send it from: two tracks in one connection need that, or what arrives can't be told apart), make the

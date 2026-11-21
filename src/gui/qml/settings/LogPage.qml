@@ -534,6 +534,32 @@ Pane {
                         color: Theme.warning
                         text: page.chats.leveeError
                     }
+                    // Pond voice through the relay (the default), or straight to the Pond
+                    RowLayout {
+                        visible: page.chats.leveeJoined && page.chats.leveeCalls
+                        Layout.fillWidth: true
+                        Layout.topMargin: 4
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 2
+                            Label { text: qsTr("Pond voice straight to the Pond") }
+                            Label {
+                                Layout.fillWidth: true
+                                wrapMode: Text.Wrap
+                                opacity: 0.65
+                                font.pixelSize: 12
+                                text: qsTr("Voice channels in Ponds go through your Levee, so Ponds don't see where you are. Straight to "
+                                           + "the Pond is a shorter path, but the Pond sees your own address. From the next voice channel you join.")
+                            }
+                        }
+                        Switch {
+                            objectName: "pondVoiceDirectSwitch"
+                            checked: page.chats.leveePondVoiceDirect
+                            enabled: !page.chats.leveeBusy
+                            onToggled: page.chats.setLeveePondVoiceDirect(checked)
+                            Accessible.name: qsTr("Pond voice straight to the Pond")
+                        }
+                    }
                     Button {
                         objectName: "leaveLeveeButton"
                         visible: page.chats.leveeJoined

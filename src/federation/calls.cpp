@@ -485,12 +485,13 @@ static void setup_track(puddle_calls *cs, const std::weak_ptr<Call> &weak, const
     });
 }
 
-rtc::Configuration callsx::pc_config(puddle_calls *cs)
+rtc::Configuration callsx::pc_config(puddle_calls *cs, bool pond)
 {
     rtc::Configuration conf; /* no ICE servers: only the two Puddles' own addresses (docs/calls.md, "Finding a path") */
     conf.disableAutoNegotiation = true; /* the answer waits until each track says its SSRC (answer_when_ready) */
     puddle_levee_state lv;
-    if (puddle_levee_current(&lv) && lv.turn_port) {
+    /* Pond voice too, unless the owner chose to go straight to the Pond (docs/levee.md, "Pond voice") */
+    if (puddle_levee_current(&lv) && lv.turn_port && !(pond && lv.pond_voice_direct)) {
         /* behind a Levee nothing reaches us by UDP either: everything goes through its relay, and only the relay's addresses are
          * offered, so ours stays private (spec/06, "Calls: the relay"). The relay is our own Levee's, nobody else's. */
         conf.iceServers.emplace_back(lv.address.host, (uint16_t)lv.turn_port, lv.turn_user, lv.turn_pass, rtc::IceServer::RelayType::TurnUdp);

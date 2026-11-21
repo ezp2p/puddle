@@ -57,6 +57,8 @@ class Chats : public QObject {
     Q_PROPERTY(bool leveeAttached READ leveeAttached NOTIFY leveeChanged)
     Q_PROPERTY(bool leveeBusy READ leveeBusy NOTIFY leveeChanged)
     Q_PROPERTY(QString leveeError READ leveeError NOTIFY leveeChanged)
+    Q_PROPERTY(bool leveeCalls READ leveeCalls NOTIFY leveeChanged)                     // it has a relay for calls
+    Q_PROPERTY(bool leveePondVoiceDirect READ leveePondVoiceDirect NOTIFY leveeChanged) // Pond voice skips the relay (the owner's choice)
     Q_PROPERTY(qint64 pairingExpires READ pairingExpires NOTIFY pairingChanged)  // UTC ms
     Q_PROPERTY(QString problem READ problem NOTIFY connectedChanged)             // a phone: why the Puddle's answers are not believed, "" if they are
     Q_PROPERTY(QObject *ponds READ ponds CONSTANT)                  // the Ponds we are in, and the one that is open (ponds.h)
@@ -107,6 +109,8 @@ public:
     bool leveeAttached() const { return levee_.value("attached").toBool(); }
     bool leveeBusy() const { return leveeBusy_; }
     QString leveeError() const { return leveeError_; }
+    bool leveeCalls() const { return levee_.value("calls").toBool(); }
+    bool leveePondVoiceDirect() const { return levee_.value("pond_voice_direct").toBool(); }
     qint64 pairingExpires() const { return pairingExpires_; }
 
     // A phone: talk to its Puddle as the paired device whose key this is (docs/identity.md, "Devices").
@@ -122,6 +126,7 @@ public:
     // The desktop app: put this Puddle behind a Levee, with the levee:// link its operator made, or take it out.
     Q_INVOKABLE void joinLevee(const QString &link);
     Q_INVOKABLE void leaveLevee();
+    Q_INVOKABLE void setLeveePondVoiceDirect(bool direct);
     QString myAvatar() const { return myAvatar_; }
     QString current() const { return current_; }
     int friendCount() const { return friends_; }
