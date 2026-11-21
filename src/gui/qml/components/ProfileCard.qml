@@ -4,15 +4,40 @@ import QtQuick.Layouts
 import "../theme"
 
 // Someone's card, just under their name or picture where it was clicked, as Discord pops a profile out: a band in their
-// colours, their picture, name and pronouns, their blurb, and in a Pond their role and whether they are muted. In a Puddle
+// colours (or their banner), their picture, name and pronouns, their blurb, and in a Pond their role and whether they are
+// muted. Beside the picture, small icons: Message and Block, and for an operator or administrator who outranks them in a Pond, Mute, Kick and Ban
+// (asked through the PersonMenu's dialogs, so the card and the menu ask the same way). In a Puddle
 // chat it shows what is known at once and fills in as their profile for the place on screen arrives (Chats.loadCard).
 // showFor(item, card): `card` is Ponds.card(id) or Chats.card(id).
 Popup {
     id: card
 
     objectName: "profileCard"
+    // a small icon that does something about them, named in its tooltip
+    component CardAction: ToolButton {
+        property string glyph
+        property string tip
+        property bool danger: false
+        implicitWidth: 32
+        implicitHeight: 32
+        padding: 6
+        icon.source: Theme.icon(glyph)
+        icon.width: 18
+        icon.height: 18
+        icon.color: danger ? Theme.danger : palette.buttonText
+        display: AbstractButton.IconOnly
+        Accessible.name: tip
+        ToolTip.text: tip
+        ToolTip.visible: hovered
+        ToolTip.delay: 300
+        background: Rectangle { radius: Theme.radius; color: parent.hovered ? Theme.tint(Theme.text, Theme.hover) : "transparent" }
+    }
     property var chats
+    property var ponds: null       // in a Pond: its operators' and administrators' buttons
+    property var menu: null        // the PersonMenu, whose dialogs the buttons use (so they ask the same way)
     property var info: ({})
+    property bool canMod: false    // we outrank them in this Pond (asked as the card opens: ranks change)
+    property bool blocked: false
     signal messageRequested(string userId)
     signal pondMessageRequested(string pond, string userId) // not a friend: a direct message through the Pond (docs/pond-dms.md)
 
@@ -22,6 +47,8 @@ Popup {
     property Item anchorItem: null
     function showFor(item, data) {
         info = data
+        canMod = ponds !== null && !!data.id && data.isMe !== true && ponds.canActOn(data.id)
+        blocked = !!chats && !!data.id && chats.isBlocked(data.id)
         anchorItem = item
         place()
         open()
@@ -97,6 +124,18 @@ Popup {
                 }
                 ctx.fill()
             }
+            // their banner, when they have one: over their colours, which show while it comes
+            Avatar {
+                id: banner
+                objectName: "profileCardBanner"
+                anchors.fill: parent
+                chats: card.chats
+                hash: card.info.banner || ""
+                name: ""
+                tint: "transparent"
+                radius: Theme.radiusLarge + 4 /* the card's top corners */
+                visible: hash !== "" && ready
+            }
         }
 
         // the picture sits across the band's edge, ringed in the card's colour
@@ -120,7 +159,60 @@ Popup {
                     badgeName: card.info.pond ? card.info.pondName || card.info.place || "" : ""
                 }
             }
-            RoleBadge { anchors.right: parent.right; anchors.rightMargin: 14; anchors.top: parent.top; anchors.topMargin: 8; role: card.info.role || "" }
+            // what can be done about them, as small icons beside the picture: for anyone Message and Block; for an operator
+            // or administrator who outranks them in a Pond, Mute, Kick and Ban
+            RowLayout {
+                anchors.right: parent.right
+                anchors.rightMargin: 10
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 0
+                visible: card.info.isMe !== true
+                CardAction {
+                    objectName: "profileCardMessage"
+                    visible: card.info.friend === true || card.info.dms === true
+                    glyph: "message"
+                    tip: qsTr("Message")
+                    onClicked: {
+                        card.close()
+                        if (card.info.friend === true)
+                            card.messageRequested(card.info.id)
+                        else
+                            card.pondMessageRequested(card.info.pond, card.info.id)
+                    }
+                }
+                CardAction {
+                    objectName: "profileCardBlock"
+                    visible: card.menu !== null
+                    glyph: "ban"
+                    tip: card.blocked ? qsTr("Unblock") : qsTr("Block")
+                    danger: !card.blocked
+                    onClicked: { card.close(); card.menu.askBlock(card.info) }
+                }
+                Rectangle { visible: card.canMod && card.menu !== null; width: 1; height: 18; color: Theme.hairline; Layout.leftMargin: 4; Layout.rightMargin: 4 }
+                CardAction {
+                    objectName: card.info.muted === true ? "profileCardUnmute" : "profileCardMute"
+                    visible: card.canMod && card.menu !== null && card.ponds !== null && card.ponds.canMute
+                    glyph: card.info.muted === true ? "microphone" : "microphone-off"
+                    tip: card.info.muted === true ? qsTr("Unmute") : qsTr("Mute")
+                    onClicked: { card.close(); card.info.muted === true ? card.menu.unmute(card.info) : card.menu.askMute(card.info) }
+                }
+                CardAction {
+                    objectName: "profileCardKick"
+                    visible: card.canMod && card.menu !== null
+                    glyph: "door-exit"
+                    tip: qsTr("Kick")
+                    danger: true
+                    onClicked: { card.close(); card.menu.askKick(card.info) }
+                }
+                CardAction {
+                    objectName: "profileCardBan"
+                    visible: card.canMod && card.menu !== null
+                    glyph: "hammer"
+                    tip: qsTr("Ban")
+                    danger: true
+                    onClicked: { card.close(); card.menu.askBan(card.info) }
+                }
+            }
         }
 
         ColumnLayout {
@@ -129,14 +221,19 @@ Popup {
             Layout.rightMargin: 16
             Layout.bottomMargin: 14
             spacing: 4
-            Label {
-                objectName: "profileCardName"
+            RowLayout {
                 Layout.fillWidth: true
-                text: card.info.name || ""
-                font.bold: true
-                font.pixelSize: 18
-                color: card.nameColor
-                elide: Text.ElideRight
+                spacing: 8
+                Label {
+                    objectName: "profileCardName"
+                    Layout.fillWidth: true
+                    text: card.info.name || ""
+                    font.bold: true
+                    font.pixelSize: 18
+                    color: card.nameColor
+                    elide: Text.ElideRight
+                }
+                RoleBadge { role: card.info.role || "" }
             }
             Label {
                 visible: text !== ""
@@ -168,21 +265,6 @@ Popup {
                 font.pixelSize: 11
                 opacity: 0.55
                 elide: Text.ElideRight
-            }
-            Button {
-                objectName: "profileCardMessage"
-                visible: (card.info.friend === true || card.info.dms === true) && card.info.isMe !== true
-                Layout.fillWidth: true
-                Layout.topMargin: 8
-                text: qsTr("Message")
-                icon.source: Theme.icon("message")
-                onClicked: {
-                    card.close()
-                    if (card.info.friend === true)
-                        card.messageRequested(card.info.id)
-                    else
-                        card.pondMessageRequested(card.info.pond, card.info.id)
-                }
             }
         }
     }

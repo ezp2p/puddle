@@ -275,6 +275,19 @@ Dialog {
                 onTextChanged: if (length > 2000) remove(2000, length)
             }
 
+            // pictures chosen before they were made to fit: over the 1 MiB a Pond keeps, so no Pond shows them
+            Label {
+                objectName: "profileTooLarge"
+                readonly property var slots: (dlg.original.too_large_for_ponds || []).filter(s => dlg.pictures[s] === dlg.hashOf(dlg.original[s]) && dlg.pictures[s] !== "")
+                visible: slots.length > 0
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                color: Theme.danger
+                font.pixelSize: 12
+                text: qsTr("Some pictures here are over 1 MiB, so Ponds don't show them (%1). Choose them again: they are made smaller to fit.")
+                      .arg(slots.map(s => s === "avatar" ? qsTr("picture") : s === "banner" ? qsTr("banner") : qsTr("background")).join(", "))
+            }
+
             // ---- the banner and the background ----
             Repeater {
                 model: [{ slot: "banner", label: qsTr("Banner") }, { slot: "background", label: qsTr("Background") }]

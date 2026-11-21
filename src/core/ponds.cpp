@@ -26,6 +26,8 @@
 #define CHANNEL_NAME_MAX 32
 #define MAX_CHANNELS 500
 #define MAX_FEATURES 64
+#define MAX_ROLES 200      /* roles for channels in one Pond (the Pond keeps to 200) */
+#define ROLE_NAME_MAX 32   /* characters */
 #define FEATURE_MAX 32
 #define FILE_MAX (64u << 20)
 
@@ -41,6 +43,8 @@ struct Channel {
     int64_t id = 0, position = 0;
     std::string name, topic;
     bool voice = false;     /* a voice channel (the Pond's docs/voice.md); text otherwise, and before protocol 4 */
+    bool restricted = false;    /* not open to everyone: operators, administrators and those with one of `roles` (protocol 9) */
+    std::vector<int64_t> roles; /* the roles for channels that may see it */
     std::deque<Msg> recent; /* oldest first */
     bool filled = false;    /* the newest messages are held (so new ones can simply be added) */
     bool complete = false;  /* everything back to the channel's first message is held */
@@ -52,6 +56,13 @@ struct Member {
     std::string role = "member"; /* operator, administrator or member (the Pond's docs/design.md, "Roles") */
     int64_t muted = -1;          /* muted by an operator or administrator: -1 not, 0 until unmuted, else until then (ms; protocol 7) */
     bool dms = true;             /* takes direct messages here (protocol 8; docs/pond-dms.md) */
+    std::vector<int64_t> roles;  /* the roles for channels they hold (protocol 9; the Pond's docs/design.md, "Roles for channels") */
+};
+
+/* A role for channels: named by the Pond's operators and administrators, given to members, asked for by channels. */
+struct PondRole {
+    int64_t id = 0;
+    std::string name;
 };
 
 /* Someone in one of the Pond's voice channels now (the Pond's docs/voice.md, "Who is in it"): only in memory, as the Pond says
@@ -79,6 +90,7 @@ struct Pond {
     std::vector<Channel> channels;
     std::map<std::string, Member> members;
     std::vector<InVoice> voice;
+    std::vector<PondRole> roles; /* protocol 9 */
 };
 
 } // namespace
@@ -130,10 +142,69 @@ static bool channel_name_ok(const std::string &s)
     return true;
 }
 
+/* `key`: an array of ids above 0, into `out`; anything else (absent, null, not ids) is none. false if it was not an array. */
+static bool get_ids(puddle_span obj, const char *key, std::vector<int64_t> &out)
+{
+    puddle_span arr, item;
+    out.clear();
+    if (!member(obj, key, &arr) || !arr.len || *arr.p != '[')
+        return false;
+    size_t cur = 0;
+    int64_t n;
+    while (puddle_json_array_next(arr, &cur, &item) == 1 && out.size() < MAX_ROLES)
+        if (puddle_json_int64(item, &n) == 0 && n > 0)
+            out.push_back(n);
+    std::sort(out.begin(), out.end());
+    out.erase(std::unique(out.begin(), out.end()), out.end());
+    return true;
+}
+
+static void write_ids(puddle_jw *w, const char *key, const std::vector<int64_t> &ids)
+{
+    puddle_jw_key(w, key);
+    puddle_jw_array(w);
+    for (int64_t id : ids)
+        puddle_jw_int(w, id);
+    puddle_jw_end_array(w);
+}
+
+/* "roles": [{id, name}] as /info says them, or a `role` event's {id, name} */
+static bool parse_role(puddle_span v, PondRole &r)
+{
+    return get_int(v, "id", &r.id) && r.id > 0 && get_text(v, "name", ROLE_NAME_MAX, 0, r.name) && !r.name.empty();
+}
+
+static void parse_roles(puddle_span all, Pond &pd)
+{
+    puddle_span arr, item;
+    pd.roles.clear();
+    size_t cur = 0;
+    if (member(all, "roles", &arr) && arr.len && *arr.p == '[')
+        while (puddle_json_array_next(arr, &cur, &item) == 1 && pd.roles.size() < MAX_ROLES) {
+            PondRole r;
+            if (parse_role(item, r))
+                pd.roles.push_back(std::move(r));
+        }
+}
+
+static void write_roles(puddle_jw *w, const Pond &pd)
+{
+    puddle_jw_key(w, "roles");
+    puddle_jw_array(w);
+    for (auto &r : pd.roles) {
+        puddle_jw_object(w);
+        puddle_jw_num(w, "id", r.id);
+        puddle_jw_str(w, "name", r.name.c_str());
+        puddle_jw_end_object(w);
+    }
+    puddle_jw_end_array(w);
+}
+
 static bool parse_channel(puddle_span v, Channel &c)
 {
     std::string kind;
     c.voice = get_text(v, "kind", 8, 0, kind) && kind == "voice"; /* anything else, or none, is text */
+    c.restricted = get_ids(v, "roles", c.roles); /* null or none: open to everyone */
     return get_int(v, "id", &c.id) && c.id > 0 && get_text(v, "name", CHANNEL_NAME_MAX, 0, c.name) && channel_name_ok(c.name) &&
            get_text(v, "topic", TOPIC_MAX_CHARS, 0, c.topic) && get_int(v, "position", &c.position);
 }
@@ -305,6 +376,7 @@ static bool parse_member(puddle_ponds *p, puddle_span v, std::string &id, Member
     if (member(v, "muted", &mu) && mu.len && *mu.p == '{') /* {"until": ms or null} */
         m.muted = member(mu, "until", &until) && get_int(mu, "until", &m.muted) && m.muted > 0 ? m.muted : 0;
     m.dms = !get_flag_false(v, "dms");
+    get_ids(v, "roles", m.roles);
     m.profile.clear();
     if (p->clean && member(v, "profile", &prof) && *prof.p == '{') {
         std::string out(PUDDLE_PROFILE_JSON_MAX, '\0');
@@ -373,6 +445,7 @@ static bool parse_info(puddle_ponds *p, const char *json, size_t len, Pond &pd, 
     parse_dms(pond, pd);
     parse_icon(pond, pd);
     parse_offer(all, pd);
+    parse_roles(all, pd);
     pd.voice.clear();
     puddle_span voice;
     size_t vcur = 0;
@@ -442,6 +515,7 @@ static void write_member(puddle_jw *w, const std::string &id, const Member &m)
     write_profile(w, m.profile);
     puddle_jw_num(w, "joined", m.joined);
     puddle_jw_str(w, "role", m.role.c_str());
+    write_ids(w, "roles", m.roles);
     puddle_jw_key(w, "muted");
     if (m.muted < 0) {
         puddle_jw_null(w);
@@ -466,6 +540,8 @@ static void write_channel(puddle_jw *w, const Channel &c)
     puddle_jw_num(w, "position", c.position);
     if (c.voice)
         puddle_jw_str(w, "kind", "voice");
+    if (c.restricted)
+        write_ids(w, "roles", c.roles);
     puddle_jw_end_object(w);
 }
 
@@ -617,6 +693,7 @@ static void save_pond(puddle_ponds *p, const Pond &pd)
         puddle_jw_num(w, "cursor", pd.cursor);
         write_protocol(w, pd);
         write_offer(w, pd);
+        write_roles(w, pd);
         puddle_jw_str(w, "address", pd.address.c_str());
         puddle_jw_num(w, "joined", pd.joined);
         puddle_jw_key(w, "filled");
@@ -816,6 +893,27 @@ int puddle_ponds_add(puddle_ponds *p, const puddle_address *addr, const unsigned
     return 0;
 }
 
+/* The channels we may see now, whole (from /info, or a `channels` event): what is held of each one still here is kept (unless
+ * `reset`), and the rest forgotten, with who was in their voice. */
+static void replace_channels(puddle_ponds *p, Pond &pd, std::vector<Channel> channels, bool reset)
+{
+    for (auto &c : channels) {
+        Channel *old = find_channel(pd, c.id);
+        if (old && !reset)
+            c.recent = std::move(old->recent), c.filled = old->filled, c.complete = old->complete;
+    }
+    for (auto &c : pd.channels)
+        if (reset || !std::any_of(channels.begin(), channels.end(), [&](const Channel &n) { return n.id == c.id; }))
+            forget_channel_file(p, pd, c.id);
+    pd.voice.erase(std::remove_if(pd.voice.begin(), pd.voice.end(),
+                                  [&](const InVoice &v) {
+                                      return !std::any_of(channels.begin(), channels.end(), [&](const Channel &c) { return c.id == v.channel; });
+                                  }),
+                   pd.voice.end());
+    pd.channels = std::move(channels);
+    sort_channels(pd.channels);
+}
+
 int puddle_ponds_info(puddle_ponds *p, const char *id, const char *info, size_t len, int reset)
 {
     std::lock_guard<std::mutex> g(p->mu);
@@ -830,14 +928,7 @@ int puddle_ponds_info(puddle_ponds *p, const char *id, const char *info, size_t 
         return -1;
     if (fresh.key != pd.key || fresh.seal_key != pd.seal_key)
         return -1; /* a Pond's keys never change (its sealing key is derived from the other) */
-    for (auto &c : channels) {
-        Channel *old = find_channel(pd, c.id);
-        if (old && !reset)
-            c.recent = std::move(old->recent), c.filled = old->filled, c.complete = old->complete;
-    }
-    for (auto &c : pd.channels)
-        if (reset || !std::any_of(channels.begin(), channels.end(), [&](const Channel &n) { return n.id == c.id; }))
-            forget_channel_file(p, pd, c.id);
+    replace_channels(p, pd, std::move(channels), reset);
     pd.name = fresh.name;
     pd.description = fresh.description;
     if (fresh.protocol != pd.protocol || fresh.features != pd.features)
@@ -849,10 +940,9 @@ int puddle_ponds_info(puddle_ponds *p, const char *id, const char *info, size_t 
     pd.icon = fresh.icon;
     pd.offer = fresh.offer, pd.offer_role = fresh.offer_role;
     pd.voice = std::move(fresh.voice); /* who is in voice now: /info always says it whole */
+    pd.roles = std::move(fresh.roles);
     if (reset) /* otherwise the events since our cursor are still to come, and say what changed */
         pd.cursor = fresh.cursor;
-    pd.channels = std::move(channels);
-    sort_channels(pd.channels);
     pd.members[pd.me] = me;
     save_pond(p, pd);
     p->version++;
@@ -994,11 +1084,47 @@ int puddle_ponds_events(puddle_ponds *p, const char *id, const char *json, size_
                 continue;
             if (Channel *c = find_channel(pd, n.id)) {
                 c->name = n.name, c->topic = n.topic, c->position = n.position, c->voice = n.voice;
+                c->restricted = n.restricted, c->roles = n.roles;
             } else if (pd.channels.size() < MAX_CHANNELS) {
                 pd.channels.push_back(std::move(n));
             }
             sort_channels(pd.channels);
             pond_changed = true;
+        } else if (kind == "channels") { /* every channel we may see now, in order (protocol 9) */
+            puddle_span arr, ci;
+            std::vector<Channel> now;
+            size_t ccur = 0;
+            bool ok = member(data, "channels", &arr);
+            while (ok && puddle_json_array_next(arr, &ccur, &ci) == 1) {
+                Channel c;
+                if (parse_channel(ci, c) && now.size() < MAX_CHANNELS)
+                    now.push_back(std::move(c));
+            }
+            if (ok) {
+                replace_channels(p, pd, std::move(now), false);
+                pond_changed = voice_changed = true;
+            }
+        } else if (kind == "role") {
+            PondRole n;
+            if (parse_role(data, n)) {
+                auto r = std::find_if(pd.roles.begin(), pd.roles.end(), [&](const PondRole &x) { return x.id == n.id; });
+                if (r != pd.roles.end())
+                    r->name = n.name;
+                else if (pd.roles.size() < MAX_ROLES)
+                    pd.roles.push_back(std::move(n));
+                pond_changed = true;
+            }
+        } else if (kind == "role_deleted") { /* gone from every member and channel too */
+            int64_t rid;
+            if (get_int(data, "id", &rid)) {
+                auto drop = [rid](std::vector<int64_t> &v) { v.erase(std::remove(v.begin(), v.end(), rid), v.end()); };
+                pd.roles.erase(std::remove_if(pd.roles.begin(), pd.roles.end(), [&](const PondRole &x) { return x.id == rid; }), pd.roles.end());
+                for (auto &[mid, m] : pd.members)
+                    drop(m.roles);
+                for (auto &c : pd.channels)
+                    drop(c.roles);
+                pond_changed = members_changed = true;
+            }
         } else if (kind == "channel_deleted") {
             int64_t cid;
             if (get_int(data, "id", &cid)) {
@@ -1149,6 +1275,7 @@ static void write_summary(puddle_jw *w, const Pond &pd)
     auto me = pd.members.find(pd.me);
     puddle_jw_str(w, "role", me != pd.members.end() ? me->second.role.c_str() : "member");
     write_offer(w, pd);
+    write_roles(w, pd);
     puddle_jw_key(w, "channels");
     puddle_jw_array(w);
     for (auto &c : pd.channels) {
@@ -1156,6 +1283,8 @@ static void write_summary(puddle_jw *w, const Pond &pd)
         puddle_jw_num(w, "id", c.id);
         puddle_jw_str(w, "name", c.name.c_str());
         puddle_jw_str(w, "topic", c.topic.c_str());
+        if (c.restricted) /* who may see it: operators, administrators and these; absent for everyone */
+            write_ids(w, "roles", c.roles);
         puddle_jw_num(w, "last", c.recent.empty() ? 0 : c.recent.back().id);
         puddle_jw_str(w, "kind", c.voice ? "voice" : "text");
         if (c.voice) { /* who is in it now */

@@ -328,6 +328,25 @@ static int admin_unmute(const puddle_call *c, puddle_jw *)
 {
     return relay(c, "POST", std::string("/pond/v1/admin/members/") + puddle_param(c, "member") + "/unmute", "");
 }
+/* roles for channels, and the channels' order (the Pond's docs/design.md, "Roles for channels") */
+static int admin_role_create(const puddle_call *c, puddle_jw *) { return relay(c, "POST", "/pond/v1/admin/roles/create", objectBody(c)); }
+static int admin_role_edit(const puddle_call *c, puddle_jw *)
+{
+    return relay(c, "POST", std::string("/pond/v1/admin/roles/") + puddle_param(c, "role") + "/edit", objectBody(c));
+}
+static int admin_role_delete(const puddle_call *c, puddle_jw *)
+{
+    return relay(c, "POST", std::string("/pond/v1/admin/roles/") + puddle_param(c, "role") + "/delete", "");
+}
+static int admin_member_roles(const puddle_call *c, puddle_jw *)
+{
+    return relay(c, "POST", std::string("/pond/v1/admin/members/") + puddle_param(c, "member") + "/roles", objectBody(c));
+}
+static int admin_channel_roles(const puddle_call *c, puddle_jw *)
+{
+    return relay(c, "POST", std::string("/pond/v1/admin/channels/") + puddle_param(c, "channel") + "/roles", objectBody(c));
+}
+static int admin_channel_order(const puddle_call *c, puddle_jw *) { return relay(c, "POST", "/pond/v1/admin/channels/order", objectBody(c)); }
 static int admin_bans(const puddle_call *c, puddle_jw *) { return relay(c, "GET", "/pond/v1/admin/bans", ""); }
 static int admin_invites(const puddle_call *c, puddle_jw *) { return relay(c, "GET", "/pond/v1/admin/invites", ""); }
 static int admin_invite_create(const puddle_call *c, puddle_jw *) { return relay(c, "POST", "/pond/v1/admin/invites/create", objectBody(c)); }
@@ -494,6 +513,12 @@ const puddle_route puddle_pond_api_routes[] = {
     { "POST", POND "/admin/channels/create",                      PUDDLE_AUTH_OWNER, 4096,  admin_channel_create, NULL },
     { "POST", POND "/admin/channels/{channel:num}/edit",          PUDDLE_AUTH_OWNER, 4096,  admin_channel_edit,   NULL },
     { "POST", POND "/admin/channels/{channel:num}/delete",        PUDDLE_AUTH_OWNER, 64,    admin_channel_delete, NULL },
+    { "POST", POND "/admin/channels/{channel:num}/roles",         PUDDLE_AUTH_OWNER, 4096,  admin_channel_roles,  NULL },
+    { "POST", POND "/admin/channels/order",                       PUDDLE_AUTH_OWNER, 16384, admin_channel_order,  NULL },
+    { "POST", POND "/admin/roles/create",                         PUDDLE_AUTH_OWNER, 1024,  admin_role_create,    NULL },
+    { "POST", POND "/admin/roles/{role:num}/edit",                PUDDLE_AUTH_OWNER, 1024,  admin_role_edit,      NULL },
+    { "POST", POND "/admin/roles/{role:num}/delete",              PUDDLE_AUTH_OWNER, 64,    admin_role_delete,    NULL },
+    { "POST", POND "/admin/members/{member:id}/roles",            PUDDLE_AUTH_OWNER, 4096,  admin_member_roles,   NULL },
     { "POST", POND "/admin/members/{member:id}/remove",           PUDDLE_AUTH_OWNER, 64,    admin_remove,     NULL },
     { "POST", POND "/admin/members/{member:id}/ban",              PUDDLE_AUTH_OWNER, 2048,  admin_ban,        NULL },
     { "POST", POND "/admin/members/{member:id}/mute",             PUDDLE_AUTH_OWNER, 256,   admin_mute,       NULL },

@@ -10,6 +10,10 @@
 #include <QGuiApplication>
 #include <QDir>
 #include <QFile>
+#include <QBuffer>
+#include <QImage>
+#include <QImageReader>
+#include <QPainter>
 #include <algorithm>
 #include <QStandardPaths>
 #include <QJsonArray>
@@ -370,16 +374,25 @@ void Chats::refreshProfiles()
         const QJsonArray items = doc.object().value("items").toArray();
         for (const QJsonValue &v : items) {
             QJsonObject p = v.toObject();
+            QJsonArray tooLarge; /* pictures over the 1 MiB a Pond keeps: left out of every Pond until chosen again (smaller) */
+            for (const char *slot : { "avatar", "banner", "background" })
+                if (p.value(slot).toObject().value("size").toDouble() > 1048576)
+                    tooLarge.append(QString::fromLatin1(slot));
+            p.insert("too_large_for_ponds", tooLarge);
             p.insert("avatar", p.value("avatar").toObject().value("hash").toString());
             p.insert("default", rows.isEmpty()); // the first is how the owner sees themselves
             p.insert("place_count", p.value("places").toArray().size());
             if (rows.isEmpty()) {
                 myName_ = p.value("display_name").toString();
                 myAvatar_ = p.value("avatar").toString();
+                myProfile_ = v.toObject();
                 places_.clear();
+                placeProfiles_.clear();
             }
-            for (const QJsonValue &place : p.value("places").toArray())
+            for (const QJsonValue &place : p.value("places").toArray()) {
                 places_.insert(place.toString(), { p.value("display_name").toString(), p.value("avatar").toString() });
+                placeProfiles_.insert(place.toString(), v.toObject());
+            }
             rows.append(p);
         }
         /* the same as last time: nothing to redraw */
@@ -682,8 +695,10 @@ QVariantMap Chats::card(const QString &userId) const
             c = { { "name", m.value("name").toString() }, { "avatar", m.value("avatar").toString() } };
     if (c.isEmpty())
         c = me ? meIn(currentPlace()) : QVariantMap{ { "name", nameOf(userId) }, { "avatar", avatars_.value(userId) } };
-    const QString color = me ? QString() : colors_.value(userId);
-    c.insert("colors", color.isEmpty() ? QVariantList() : QVariantList{ color });
+    if (!me) { /* ours came whole from meIn; theirs is filled in by loadCard */
+        const QString color = colors_.value(userId);
+        c.insert("colors", color.isEmpty() ? QVariantList() : QVariantList{ color });
+    }
     c.insert("id", userId);
     c.insert("isMe", me);
     c.insert("friend", isFriend);
@@ -753,10 +768,10 @@ void Chats::refreshPeople()
                 name = shortId(id);
             names[id] = name;
             avatars[id] = profile.value("avatar").toObject().value("hash").toString();
-            colors[id] = profile.value("color").toString();
+            colors[id] = Ponds::cardOf(profile).value("colors").toList().value(0).toString(); /* one colour, or a gradient's first */
             s.insert("name", name);
             s.insert("avatar", profile.value("avatar").toObject().value("hash").toString());
-            s.insert("color", profile.value("color").toString());
+            s.insert("color", colors[id]);
             s.insert("note", s.value("message"));
             const QString state = s.value("state").toString();
             if (state == "active")
@@ -1048,7 +1063,7 @@ void Chats::renderMessages()
         m.insert("senderName", mine ? selfName(author) : !nameIn(author).isEmpty() ? nameIn(author) : nameOf(sender));
         m.insert("avatar", mine ? (!avatarIn(author).isEmpty() ? avatarIn(author) : here.value("avatar").toString())
                                 : author.isObject() ? avatarIn(author) : avatars_.value(sender));
-        m.insert("tint", mine ? QString() : colors_.value(sender));
+        m.insert("tint", mine ? here.value("colors").toList().value(0).toString() : colors_.value(sender));
         m.insert("grouped", !first && !newDay && prev.value("kind").toString() == QLatin1String("message") && prev.value("sender") == m.value("sender") &&
                                 !m.contains("reply_to") && ts - qint64(prev.value("ts").toDouble()) < 7 * 60 * 1000);
         if (m.contains("reply_to")) {
@@ -1645,7 +1660,7 @@ void Chats::rebuildMembers()
             const bool me = !self_.isEmpty() && id == self_;
             r.insert("name", me ? selfName(m.value("user")) : !nameIn(m.value("user")).isEmpty() ? nameIn(m.value("user")) : nameOf(id));
             r.insert("avatar", me ? (!avatarIn(m.value("user")).isEmpty() ? avatarIn(m.value("user")) : here.value("avatar").toString()) : avatarIn(m.value("user")));
-            r.insert("color", me ? QString() : colors_.value(id));
+            r.insert("color", me ? here.value("colors").toList().value(0).toString() : colors_.value(id));
             r.insert("state", m.value("state"));
             r.insert("isMe", me);
             r.insert("friend", friends.contains(id));
@@ -1789,7 +1804,11 @@ QVariantMap Chats::meIn(const QString &place) const
     const auto it = places_.constFind(place);
     const QString name = it != places_.cend() && !it->first.isEmpty() ? it->first : myName_;
     const QString avatar = it != places_.cend() ? it->second : myAvatar_;
-    return { { "name", name }, { "avatar", avatar } };
+    /* the rest of the profile shown there: its colours (the first is our name's), banner, pronouns, blurb */
+    QVariantMap c = Ponds::cardOf(placeProfiles_.value(place, myProfile_));
+    c.insert("name", name);
+    c.insert("avatar", avatar);
+    return c;
 }
 
 QString Chats::nameOf(const QString &userId) const
@@ -1852,6 +1871,42 @@ void Chats::deleteProfile(const QString &id)
     });
 }
 
+/* A picture made to fit where it goes: a Pond keeps none over 1 MiB (its docs/design.md, "Pictures"), so one larger, or larger
+ * on screen than it is ever shown, is scaled down and saved again (PNG when it has see-through parts and that fits, else
+ * JPEG), smaller until it fits. One that already fits is sent as it is, an animated GIF too. */
+static QByteArray fitPicture(const QByteArray &in, const QString &slot)
+{
+    constexpr qint64 most = 1 << 20;
+    const int side = slot == QLatin1String("banner") ? 1920 : slot == QLatin1String("background") ? 2048 : 1024;
+    QBuffer src;
+    src.setData(in);
+    QImageReader reader(&src);
+    const QSize size = reader.size();
+    if (in.size() <= most && (!size.isValid() || qMax(size.width(), size.height()) <= side))
+        return in;
+    QImage img = reader.read();
+    if (img.isNull())
+        return in; /* not one Qt reads: the Puddle says what it thinks of it */
+    if (qMax(img.width(), img.height()) > side)
+        img = img.scaled(side, side, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    for (int round = 0; round < 8; round++) {
+        QByteArray out;
+        QBuffer b(&out);
+        b.open(QIODevice::WriteOnly);
+        if (img.hasAlphaChannel() && img.save(&b, "PNG") && out.size() <= most)
+            return out;
+        out.clear();
+        b.seek(0);
+        QImage flat(img.size(), QImage::Format_RGB32);
+        flat.fill(Qt::white);
+        { QPainter p(&flat); p.drawImage(0, 0, img); }
+        if (flat.save(&b, "JPEG", 88 - round * 6) && out.size() <= most)
+            return out;
+        img = img.scaled(img.width() * 4 / 5, img.height() * 4 / 5, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    }
+    return in;
+}
+
 void Chats::uploadPicture(const QUrl &file, const QString &slot)
 {
     QFile f(file.isLocalFile() ? file.toLocalFile() : file.toString());
@@ -1859,7 +1914,7 @@ void Chats::uploadPicture(const QUrl &file, const QString &slot)
         return emit pictureUploaded(slot, QString(), tr("Couldn't read that file."));
     if (f.size() > 25LL * 1024 * 1024)
         return emit pictureUploaded(slot, QString(), tr("That picture is too large: the most is 25 MiB."));
-    const QByteArray bytes = f.readAll();
+    const QByteArray bytes = fitPicture(f.readAll(), slot);
     api_.postBytes(QStringLiteral("/api/v1/media/upload"), bytes, [this, slot, bytes](int status, const QJsonDocument &doc) {
         const QString hash = doc.object().value("hash").toString();
         if (status / 100 != 2 || hash.isEmpty())

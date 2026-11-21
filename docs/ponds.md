@@ -173,12 +173,24 @@ A Pond has operators and administrators who run it from the app (the Pond's desi
   (`/admin/members/{member}/mute {until?}`, `/unmute`). Every member carries `muted` (`{until}` or null), kept with the
   members. A muted owner's send is refused as `409 muted`, which the window says, and its message box says until when.
 
+- **Roles for channels** (protocol 9, feature `channel_roles`; the Pond's design, "Roles for channels"). Separate from the
+  rank above: operators and administrators make named roles, give them to members, and leave a channel to some roles;
+  they also set the channels' order, which members can't change. The Pond only tells a member about channels they may
+  see. The Puddle keeps the Pond's `roles` in `pond.json`, each member's `roles` with the members, and each channel's
+  `roles` (absent for everyone) with it. A `channels` event replaces the whole list of channels, keeping what is held of
+  each still there and forgetting the rest; `role` and `role_deleted` keep the roles. The owner's routes are
+  `/admin/roles/create`, `/admin/roles/{role}/edit`, `/delete`, `/admin/members/{member}/roles`,
+  `/admin/channels/{channel}/roles` and `/admin/channels/order`, relayed like the rest.
+
 In the app, the Pond's name drops down its menu, as Discord's server menu does: **Server Settings** (for an operator
 or administrator), **Appear as…**, **Copy my id**, and **Leave Pond**. Server Settings opens over the window, with
-sections on the left (Overview, Channels, Members, Invites, Bans) and each section's settings in groups on the right
+sections on the left (Overview, Channels, Roles, Members, Invites, Bans; Roles only where the Pond has them) and each section's settings in groups on the right
 (`shell/PondSettings.qml`). Invites makes one with an expiry (30 minutes to 7 days, or never) and a number of uses (or no
 limit), copies its link at once and shows it to copy again, and lists those that can still be used (made there or with
-`pondctl`), each with Copy link and Revoke.
+`pondctl`), each with Copy link and Revoke. Roles makes, renames and deletes roles, with how many hold each. Channels moves
+each channel up or down (for everyone), and its edit says who can see it: everyone, or only some roles. Members gives
+and takes roles from a menu beside each member, and shows the roles each holds. A channel only some roles see has a lock
+beside its name in the channel list.
 
 The Pond never calls the Puddle for any of this. A Puddle always opens the connection: the offer comes on the event
 stream it already follows.
@@ -216,6 +228,11 @@ Leaving deletes the folder.
 | `POST /api/v1/ponds/{pond}/admin/icon` | `{hash}`: a picture this Puddle holds, sent to the Pond and made its icon; `null` for none |
 | `POST /api/v1/ponds/{pond}/admin/channels/create` | `{name, topic?}` |
 | `POST /api/v1/ponds/{pond}/admin/channels/{channel}/edit`, `/delete` | `{name?, topic?}` for edit |
+| `POST /api/v1/ponds/{pond}/admin/channels/{channel}/roles` | `{roles}`: null for everyone, or role ids (protocol 9) |
+| `POST /api/v1/ponds/{pond}/admin/channels/order` | `{channels}`: every channel's id, first to last |
+| `POST /api/v1/ponds/{pond}/admin/roles/create` | `{name}`: the role made, `{id, name}` |
+| `POST /api/v1/ponds/{pond}/admin/roles/{role}/edit`, `/delete` | `{name}` for edit |
+| `POST /api/v1/ponds/{pond}/admin/members/{member}/roles` | `{roles}`: the role ids they hold now |
 | `POST /api/v1/ponds/{pond}/admin/members/{member}/remove`, `/ban` | `{reason?}` for a ban |
 | `POST /api/v1/ponds/{pond}/admin/members/{member}/mute`, `/unmute` | `{until?}` (ms) to mute; none: until unmuted |
 | `GET /api/v1/ponds/{pond}/admin/bans` | Who is banned, as the Pond says |
@@ -226,7 +243,7 @@ Leaving deletes the folder.
 
 Errors: `no_pond`, `no_channel` and `no_profile` are `404`. `bad_text` is `400`. `slow_down` is `429`.
 `invite_refused`, `removed`, `muted`, `no_file`, `files_off`, `too_large`, `no_pictures` and `no_role` are `409`. `no_picture` is `404`. The admin routes pass on
-what the Pond says: `204` when done, `400` with a `message` to show, `404 no_channel`, `409 outranked` or `not_yourself`. `unreachable`, `not_a_pond`, `certificate_changed`, `not_proven` and `failed` are `502`.
+what the Pond says: `204` when done, `400` with a `message` to show, `404 no_channel` or `unknown_role`, `409 outranked`, `not_yourself` or `channels_changed`. `unreachable`, `not_a_pond`, `certificate_changed`, `not_proven` and `failed` are `502`.
 
 ## Voice channels
 

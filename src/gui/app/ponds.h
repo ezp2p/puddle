@@ -15,8 +15,9 @@
 class Ponds : public QObject {
     Q_OBJECT
     Q_PROPERTY(QObject *list READ list CONSTANT)           // the rail: id, name, status, address, icon (a picture's hash, "" for none)
-    Q_PROPERTY(QObject *channels READ channels CONSTANT)   // of the open Pond: id, name, topic, kind (text, voice), voice (who is in it: id, name, color, avatar, muted, deafened, isMe)
-    Q_PROPERTY(QObject *members READ members CONSTANT)     // of the open Pond: id, name, color, avatar, isMe, role, muted, mutedUntil
+    Q_PROPERTY(QObject *channels READ channels CONSTANT)   // of the open Pond, in its order: id, name, topic, kind (text, voice), voice (who is in it: id, name, color, avatar, muted, deafened, isMe), restricted, roles (ids)
+    Q_PROPERTY(QObject *members READ members CONSTANT)     // of the open Pond: id, name, color, avatar, isMe, role, muted, mutedUntil, roles (ids)
+    Q_PROPERTY(QObject *roles READ roles CONSTANT)         // the open Pond's roles for channels: id, name, count (members holding it)
     Q_PROPERTY(QObject *bans READ bans CONSTANT)           // of the open Pond, once loadBans() has asked: member, name, by, byName, reason, ts
     Q_PROPERTY(QObject *invites READ invites CONSTANT)     // of the open Pond, once loadInvites() has asked: token, link, uses, maxUses, expires, created
     Q_PROPERTY(QObject *messages READ messages CONSTANT)   // the open channel, oldest first: id, author, name, tint, avatar, text, files, ts, mine, grouped, dayStart
@@ -26,6 +27,7 @@ class Ponds : public QObject {
     Q_PROPERTY(QString currentDescription READ currentDescription NOTIFY currentInfoChanged)
     Q_PROPERTY(QString currentIcon READ currentIcon NOTIFY currentInfoChanged)  // its icon, a picture's hash; "" for none
     Q_PROPERTY(bool canIcon READ canIcon NOTIFY currentInfoChanged)             // it has icons (its `features` say `pictures`)
+    Q_PROPERTY(bool canRoles READ canRoles NOTIFY currentInfoChanged)           // it has roles for channels and their order (`channel_roles`)
     Q_PROPERTY(QString channel READ channel NOTIFY channelChanged)            // the open channel's id, "" for none
     Q_PROPERTY(QString channelName READ channelName NOTIFY channelChanged)
     Q_PROPERTY(QString channelTopic READ channelTopic NOTIFY channelChanged)
@@ -63,6 +65,7 @@ public:
     QObject *list() { return &list_; }
     QObject *channels() { return &channels_; }
     QObject *members() { return &members_; }
+    QObject *roles() { return &roles_; }
     QObject *bans() { return &bans_; }
     QObject *invites() { return &invites_; }
     QString currentRole() const { return info_.value("role").toString(QStringLiteral("member")); }
@@ -79,6 +82,7 @@ public:
     QString currentDescription() const { return info_.value("description").toString(); }
     QString currentIcon() const { return info_.value("icon").toObject().value("hash").toString(); }
     bool canIcon() const { return info_.value("features").toArray().contains(QStringLiteral("pictures")); }
+    bool canRoles() const { return info_.value("features").toArray().contains(QStringLiteral("channel_roles")); }
     QString channel() const { return channel_; }
     QString channelName() const;
     QString channelTopic() const;
@@ -135,6 +139,14 @@ public:
     Q_INVOKABLE void createChannel(const QString &name, const QString &topic, const QString &kind = QStringLiteral("text"));
     Q_INVOKABLE void editChannel(const QString &channelId, const QString &name, const QString &topic);
     Q_INVOKABLE void deleteChannel(const QString &channelId);
+    // roles for channels, and the channels' order (the Pond's docs/design.md, "Roles for channels")
+    Q_INVOKABLE void createRole(const QString &name);
+    Q_INVOKABLE void renameRole(const QString &roleId, const QString &name);
+    Q_INVOKABLE void deleteRole(const QString &roleId);
+    Q_INVOKABLE QString roleName(const QString &roleId) const;
+    Q_INVOKABLE void setMemberRole(const QString &memberId, const QString &roleId, bool held); // give or take one role
+    Q_INVOKABLE void setChannelRoles(const QString &channelId, bool everyone, const QStringList &roleIds);
+    Q_INVOKABLE void moveChannel(const QString &channelId, int by); // -1 up, +1 down, for everyone
     Q_INVOKABLE void kick(const QString &memberId);
     // `seconds` 0: until unmuted
     Q_INVOKABLE void setAcceptDms(bool accept); // in the open Pond
@@ -188,7 +200,7 @@ private:
 
     ApiClient *api_;
     QTimer timer_;
-    JsonListModel list_, channels_, members_, messages_, bans_, invites_;
+    JsonListModel list_, channels_, members_, messages_, bans_, invites_, roles_;
     qint64 version_ = -1;
     QString current_, channel_, me_;
     QJsonObject info_;

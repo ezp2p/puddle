@@ -89,13 +89,24 @@ Popup {
     exit: Transition { NumberAnimation { property: "opacity"; from: 1; to: 0; duration: 90 } }
     background: Rectangle { radius: Theme.cardRadius; color: Theme.card; border.width: 1; border.color: Theme.hairline }
 
+    // Roles only where the Pond has them (protocol 9: roles for channels, and the channels' order)
     readonly property var sections: [
         { id: "overview", title: qsTr("Overview"), glyph: "settings" },
         { id: "channels", title: qsTr("Channels"), glyph: "hash" },
+        { id: "roles", title: qsTr("Roles"), glyph: "tag" },
         { id: "members", title: qsTr("Members"), glyph: "users" },
         { id: "invites", title: qsTr("Invites"), glyph: "user-plus" },
         { id: "bans", title: qsTr("Bans"), glyph: "x" }
-    ]
+    ].filter(s => s.id !== "roles" || ponds.canRoles)
+    // "Everyone", or the names of the roles that may see a channel
+    function whoSees(restricted, roleIds) {
+        if (!restricted)
+            return qsTr("Everyone")
+        const names = []
+        for (let i = 0; i < roleIds.length; i++)
+            names.push(ponds.roleName(roleIds[i]))
+        return names.length ? qsTr("Admins and %1").arg(names.join(", ")) : qsTr("Operators and administrators only")
+    }
     function titleOf(id) { for (const s of sections) if (s.id === id) return s.title; return "" }
 
     contentItem: RowLayout {
@@ -206,7 +217,7 @@ Popup {
                     x: 32
                     y: 8
                     width: scroller.width - 64
-                    currentIndex: ["overview", "channels", "members", "bans", "invites"].indexOf(settings.section)
+                    currentIndex: ["overview", "channels", "members", "bans", "invites", "roles"].indexOf(settings.section)
 
                     // ---- Overview ----
                     ColumnLayout {
@@ -358,13 +369,20 @@ Popup {
                         }
                         SettingsGroup {
                             title: qsTr("Channels")
+                            note: settings.ponds.canRoles ? qsTr("Everyone sees the channels in this order. A channel can be left to some roles: operators and administrators always see every channel.") : ""
                             Layout.fillWidth: true
                             Repeater {
+                                id: channelList
                                 model: settings.ponds.channels
                                 delegate: ColumnLayout {
                                     id: chRow
                                     required property var model
+                                    required property int index
                                     property bool editing: false
+                                    // who may see it, as being edited: everyone, or these roles
+                                    property bool editEveryone: true
+                                    property var editRoles: []
+                                    objectName: "channelRow_" + model.name
                                     Layout.fillWidth: true
                                     spacing: 6
                                     RowLayout {
@@ -373,13 +391,49 @@ Popup {
                                         spacing: 8
                                         Icon { glyph: chRow.model.kind === "voice" ? "volume" : "hash"; size: 16; opacity: 0.6 }
                                         Label { text: chRow.model.name; font.bold: true }
-                                        Label { text: chRow.model.topic; opacity: 0.6; elide: Text.ElideRight; Layout.fillWidth: true }
+                                        Icon { visible: chRow.model.restricted; glyph: "lock"; size: 14; opacity: 0.6 }
+                                        ColumnLayout {
+                                            spacing: 0
+                                            Layout.fillWidth: true
+                                            Label { visible: text !== ""; text: chRow.model.topic; opacity: 0.6; elide: Text.ElideRight; Layout.fillWidth: true }
+                                            Label {
+                                                visible: settings.ponds.canRoles
+                                                text: settings.whoSees(chRow.model.restricted, chRow.model.roles || [])
+                                                font.pixelSize: 11; opacity: 0.55; elide: Text.ElideRight; Layout.fillWidth: true
+                                            }
+                                        }
+                                        ToolButton {
+                                            objectName: "moveChannelUp_" + chRow.model.name
+                                            visible: settings.ponds.canRoles
+                                            enabled: chRow.index > 0
+                                            icon.source: Theme.icon("arrow-up"); icon.width: 16; icon.height: 16
+                                            display: AbstractButton.IconOnly
+                                            Accessible.name: qsTr("Move #%1 up").arg(chRow.model.name)
+                                            ToolTip.text: qsTr("Move up"); ToolTip.visible: hovered
+                                            onClicked: settings.ponds.moveChannel(chRow.model.id, -1)
+                                        }
+                                        ToolButton {
+                                            objectName: "moveChannelDown_" + chRow.model.name
+                                            visible: settings.ponds.canRoles
+                                            enabled: chRow.index < channelList.count - 1
+                                            icon.source: Theme.icon("arrow-down"); icon.width: 16; icon.height: 16
+                                            display: AbstractButton.IconOnly
+                                            Accessible.name: qsTr("Move #%1 down").arg(chRow.model.name)
+                                            ToolTip.text: qsTr("Move down"); ToolTip.visible: hovered
+                                            onClicked: settings.ponds.moveChannel(chRow.model.id, 1)
+                                        }
                                         ToolButton {
                                             icon.source: Theme.icon("pencil"); icon.width: 16; icon.height: 16
                                             display: AbstractButton.IconOnly
                                             Accessible.name: qsTr("Edit #%1").arg(chRow.model.name)
                                             ToolTip.text: qsTr("Edit"); ToolTip.visible: hovered
-                                            onClicked: { editName.text = chRow.model.name; editTopic.text = chRow.model.topic; chRow.editing = true }
+                                            onClicked: {
+                                                editName.text = chRow.model.name
+                                                editTopic.text = chRow.model.topic
+                                                chRow.editEveryone = !chRow.model.restricted
+                                                chRow.editRoles = (chRow.model.roles || []).slice()
+                                                chRow.editing = true
+                                            }
                                         }
                                         ToolButton {
                                             icon.source: Theme.icon("trash"); icon.width: 16; icon.height: 16; icon.color: Theme.danger
@@ -405,9 +459,63 @@ Popup {
                                         PrimaryButton {
                                             text: qsTr("Save")
                                             enabled: editName.text !== ""
-                                            onClicked: { settings.ponds.editChannel(chRow.model.id, editName.text, editTopic.text); chRow.editing = false }
+                                            onClicked: {
+                                                if (editName.text !== chRow.model.name || editTopic.text.trim() !== chRow.model.topic)
+                                                    settings.ponds.editChannel(chRow.model.id, editName.text, editTopic.text)
+                                                const was = (chRow.model.roles || []).slice().sort().join(",")
+                                                if (settings.ponds.canRoles && (chRow.editEveryone === chRow.model.restricted
+                                                                                || (!chRow.editEveryone && chRow.editRoles.slice().sort().join(",") !== was)))
+                                                    settings.ponds.setChannelRoles(chRow.model.id, chRow.editEveryone, chRow.editRoles)
+                                                chRow.editing = false
+                                            }
                                         }
                                         Button { text: qsTr("Cancel"); onClicked: chRow.editing = false }
+                                    }
+                                    // who may see it
+                                    ColumnLayout {
+                                        visible: chRow.editing && settings.ponds.canRoles
+                                        Layout.fillWidth: true
+                                        Layout.leftMargin: 4
+                                        spacing: 2
+                                        Label { text: qsTr("Who can see it"); font.bold: true; font.pixelSize: 12 }
+                                        RadioButton {
+                                            objectName: "channelEveryone_" + chRow.model.name
+                                            text: qsTr("Everyone")
+                                            checked: chRow.editEveryone
+                                            onToggled: chRow.editEveryone = true
+                                        }
+                                        RadioButton {
+                                            objectName: "channelSomeRoles_" + chRow.model.name
+                                            text: qsTr("Only these roles (and operators and administrators)")
+                                            checked: !chRow.editEveryone
+                                            onToggled: chRow.editEveryone = false
+                                        }
+                                        Flow {
+                                            visible: !chRow.editEveryone
+                                            Layout.fillWidth: true
+                                            Layout.leftMargin: 28
+                                            spacing: 4
+                                            Label {
+                                                visible: settings.ponds.roles.count === 0
+                                                text: qsTr("There are no roles yet: make them under Roles. Until then only operators and administrators see it.")
+                                                wrapMode: Text.Wrap; opacity: 0.6; font.pixelSize: 12
+                                                width: parent.width
+                                            }
+                                            Repeater {
+                                                model: settings.ponds.roles
+                                                delegate: CheckBox {
+                                                    required property var model
+                                                    text: model.name
+                                                    checked: chRow.editRoles.indexOf(model.id) >= 0
+                                                    onToggled: {
+                                                        const r = chRow.editRoles.filter(x => x !== model.id)
+                                                        if (checked)
+                                                            r.push(model.id)
+                                                        chRow.editRoles = r
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                     Rectangle { Layout.fillWidth: true; height: 1; color: Theme.hairline }
                                 }
@@ -443,6 +551,46 @@ Popup {
                                                 RoleBadge { role: mRow.model.role }
                                             }
                                             Label { text: mRow.model.id; font.pixelSize: 11; opacity: 0.5; elide: Text.ElideMiddle; Layout.fillWidth: true }
+                                            // their roles for channels
+                                            Flow {
+                                                visible: (mRow.model.roles || []).length > 0
+                                                Layout.fillWidth: true
+                                                Layout.topMargin: 2
+                                                spacing: 4
+                                                Repeater {
+                                                    model: mRow.model.roles || []
+                                                    delegate: Rectangle {
+                                                        required property var modelData
+                                                        height: 20; radius: 10
+                                                        width: chip.implicitWidth + 16
+                                                        color: Theme.tint(Theme.text, Theme.selected)
+                                                        Label { id: chip; anchors.centerIn: parent; text: settings.ponds.roleName(parent.modelData); font.pixelSize: 11 }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        Button {
+                                            objectName: "memberRoles_" + mRow.model.name
+                                            visible: settings.ponds.canRoles
+                                            text: qsTr("Roles")
+                                            icon.source: Theme.icon("chevron-down"); icon.width: 14; icon.height: 14
+                                            enabled: settings.ponds.roles.count > 0
+                                            ToolTip.text: qsTr("Make roles under Roles first."); ToolTip.visible: !enabled && rolesHover.hovered
+                                            HoverHandler { id: rolesHover }
+                                            onClicked: rolesMenu.popup()
+                                            Menu {
+                                                id: rolesMenu
+                                                Repeater {
+                                                    model: settings.ponds.roles
+                                                    delegate: MenuItem {
+                                                        required property var model
+                                                        text: model.name
+                                                        checkable: true
+                                                        checked: (mRow.model.roles || []).indexOf(model.id) >= 0
+                                                        onTriggered: settings.ponds.setMemberRole(mRow.model.id, model.id, checked)
+                                                    }
+                                                }
+                                            }
                                         }
                                         Button {
                                             text: qsTr("Remove")
@@ -609,6 +757,91 @@ Popup {
                                                                    qsTr("The link stops working at once. Anyone who joined with it stays."),
                                                                    qsTr("Revoke"), () => settings.ponds.revokeInvite(iRow.model.token))
                                         }
+                                    }
+                                    Rectangle { Layout.fillWidth: true; height: 1; color: Theme.hairline }
+                                }
+                            }
+                        }
+                    }
+
+                    // ---- Roles: roles for channels (the Pond's docs/design.md, "Roles for channels") ----
+                    ColumnLayout {
+                        spacing: 16
+                        SettingsGroup {
+                            title: qsTr("Make a role")
+                            note: qsTr("Roles say who can see a channel: give them to members under Members, and choose a channel's roles under Channels. They give no say over the Pond; operators and administrators see every channel.")
+                            Layout.fillWidth: true
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 8
+                                TextField {
+                                    id: newRole
+                                    objectName: "newRoleName"
+                                    Layout.preferredWidth: 260
+                                    placeholderText: qsTr("name, like Moderators")
+                                    maximumLength: 32
+                                    onAccepted: if (text.trim() !== "") { settings.ponds.createRole(text); text = "" }
+                                }
+                                PrimaryButton {
+                                    objectName: "createRole"
+                                    text: qsTr("Create")
+                                    enabled: newRole.text.trim() !== ""
+                                    onClicked: { settings.ponds.createRole(newRole.text); newRole.text = "" }
+                                }
+                            }
+                        }
+                        SettingsGroup {
+                            title: qsTr("Roles (%1)").arg(settings.ponds.roles.count)
+                            Layout.fillWidth: true
+                            Label { visible: settings.ponds.roles.count === 0; text: qsTr("No roles yet."); opacity: 0.6 }
+                            Repeater {
+                                model: settings.ponds.roles
+                                delegate: ColumnLayout {
+                                    id: rRow
+                                    required property var model
+                                    property bool editing: false
+                                    objectName: "roleRow_" + model.name
+                                    Layout.fillWidth: true
+                                    spacing: 6
+                                    RowLayout {
+                                        visible: !rRow.editing
+                                        Layout.fillWidth: true
+                                        spacing: 8
+                                        Icon { glyph: "tag"; size: 16; opacity: 0.6 }
+                                        Label { text: rRow.model.name; font.bold: true }
+                                        Label {
+                                            Layout.fillWidth: true
+                                            opacity: 0.6
+                                            text: rRow.model.count === 1 ? qsTr("1 member") : qsTr("%1 members").arg(rRow.model.count)
+                                        }
+                                        ToolButton {
+                                            icon.source: Theme.icon("pencil"); icon.width: 16; icon.height: 16
+                                            display: AbstractButton.IconOnly
+                                            Accessible.name: qsTr("Rename %1").arg(rRow.model.name)
+                                            ToolTip.text: qsTr("Rename"); ToolTip.visible: hovered
+                                            onClicked: { roleName.text = rRow.model.name; rRow.editing = true }
+                                        }
+                                        ToolButton {
+                                            icon.source: Theme.icon("trash"); icon.width: 16; icon.height: 16; icon.color: Theme.danger
+                                            display: AbstractButton.IconOnly
+                                            Accessible.name: qsTr("Delete %1").arg(rRow.model.name)
+                                            ToolTip.text: qsTr("Delete"); ToolTip.visible: hovered
+                                            onClicked: confirm.ask(qsTr("Delete %1?").arg(rRow.model.name),
+                                                                   qsTr("Members lose it. A channel only this role could see is then left to operators and administrators."),
+                                                                   qsTr("Delete role"), () => settings.ponds.deleteRole(rRow.model.id))
+                                        }
+                                    }
+                                    RowLayout {
+                                        visible: rRow.editing
+                                        Layout.fillWidth: true
+                                        spacing: 8
+                                        TextField { id: roleName; Layout.preferredWidth: 260; maximumLength: 32 }
+                                        PrimaryButton {
+                                            text: qsTr("Save")
+                                            enabled: roleName.text.trim() !== ""
+                                            onClicked: { settings.ponds.renameRole(rRow.model.id, roleName.text); rRow.editing = false }
+                                        }
+                                        Button { text: qsTr("Cancel"); onClicked: rRow.editing = false }
                                     }
                                     Rectangle { Layout.fillWidth: true; height: 1; color: Theme.hairline }
                                 }

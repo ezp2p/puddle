@@ -314,7 +314,7 @@ Pane {
                                 Label {
                                     id: msgName
                                     objectName: "pondMessageName"
-                                    text: msg.model.name || ""; font.bold: true; color: msg.model.tint && !msg.model.mine ? msg.model.tint : palette.text
+                                    text: msg.model.name || ""; font.bold: true; color: msg.model.tint ? msg.model.tint : palette.text /* their chosen colour, ours too */
                                     font.underline: nameHover.hovered
                                     HoverHandler { id: nameHover; cursorShape: Qt.PointingHandCursor }
                                     TapHandler { onTapped: if (page.people) page.people.showCard(msgName, msg.model.author) }

@@ -10,8 +10,9 @@ Ponds::Ponds(ApiClient *api, QObject *parent)
     : QObject(parent),
       api_(api),
       list_({ "id", "name", "status", "address", "icon" }),
-      channels_({ "id", "name", "topic", "kind", "voice" }),
-      members_({ "id", "name", "color", "avatar", "isMe", "role", "muted", "mutedUntil" }),
+      channels_({ "id", "name", "topic", "kind", "voice", "restricted", "roles" }),
+      members_({ "id", "name", "color", "avatar", "isMe", "role", "muted", "mutedUntil", "roles" }),
+      roles_({ "id", "name", "count" }),
       messages_({ "id", "author", "name", "tint", "avatar", "text", "files", "ts", "mine", "grouped", "dayStart" }),
       bans_({ "member", "name", "by", "byName", "reason", "ts" }, nullptr, QStringLiteral("member")),
       invites_({ "token", "link", "uses", "maxUses", "expires", "created" }, nullptr, QStringLiteral("token"))
@@ -76,6 +77,15 @@ QString Ponds::why(int status, const QJsonDocument &json, const QString &doing) 
 
 // A channel id comes as a number; the window keeps them as text, like every other id. A voice channel says who is in it, by
 // name, as the members list knows them.
+/* [1, 2] as ["1", "2"]: ids as QML compares them */
+static QJsonArray idStrings(const QJsonValue &v)
+{
+    QJsonArray out;
+    for (const QJsonValue &id : v.toArray())
+        out.append(QString::number(qint64(id.toDouble())));
+    return out;
+}
+
 QJsonObject Ponds::channelRow(const QJsonObject &c) const
 {
     QJsonArray in;
@@ -88,7 +98,8 @@ QJsonObject Ponds::channelRow(const QJsonObject &c) const
                                { "muted", vo.value("muted") }, { "deafened", vo.value("deafened") }, { "isMe", mid == me_ } });
     }
     return { { "id", QString::number(qint64(c.value("id").toDouble())) }, { "name", c.value("name") }, { "topic", c.value("topic") },
-             { "kind", c.value("kind").toString(QStringLiteral("text")) }, { "voice", in } };
+             { "kind", c.value("kind").toString(QStringLiteral("text")) }, { "voice", in },
+             { "restricted", c.value("roles").isArray() }, { "roles", idStrings(c.value("roles")) } };
 }
 
 void Ponds::refresh()
@@ -170,8 +181,7 @@ void Ponds::refreshPond()
             QString name = prof.value("display_name").toString();
             if (name.isEmpty())
                 name = mid.left(8);
-            const QJsonArray colors = prof.value("color").toObject().value("colors").toArray();
-            const QString color = colors.isEmpty() ? QString() : colors.first().toString();
+            const QString color = cardOf(prof).value("colors").toList().value(0).toString(); /* one colour, or a gradient's first */
             const QString avatar = prof.value("avatar").toObject().value("hash").toString();
             // muted by an operator or administrator, and not run out: until when (0: until unmuted)
             const QJsonValue mu = mo.value("muted");
@@ -181,7 +191,7 @@ void Ponds::refreshPond()
                                   { "muted", muted }, { "mutedUntil", muted ? until : -1 }, { "dms", mo.value("dms").toBool(true) } });
             members.append({ { "id", mid }, { "name", name }, { "color", color }, { "avatar", avatar }, { "isMe", mid == me_ },
                              { "muted", muted }, { "mutedUntil", muted ? until : -1 },
-                             { "role", mo.value("role").toString(QStringLiteral("member")) } });
+                             { "role", mo.value("role").toString(QStringLiteral("member")) }, { "roles", idStrings(mo.value("roles")) } });
         }
         // operators first, then administrators, then everyone else; by name within each
         auto rank = [](const QJsonObject &m) { const QString r = m.value("role").toString(); return r == "operator" ? 0 : r == "administrator" ? 1 : 2; };
@@ -191,6 +201,18 @@ void Ponds::refreshPond()
             return a.value("name").toString().compare(b.value("name").toString(), Qt::CaseInsensitive) < 0;
         });
         members_.setItems(members);
+        QList<QJsonObject> roles;
+        for (const QJsonValue &r : o.value("roles").toArray()) {
+            const QString rid = QString::number(qint64(r.toObject().value("id").toDouble()));
+            int count = 0;
+            for (const QJsonObject &m : members)
+                count += m.value("roles").toArray().contains(rid) ? 1 : 0;
+            roles.append({ { "id", rid }, { "name", r.toObject().value("name") }, { "count", count } });
+        }
+        std::stable_sort(roles.begin(), roles.end(), [](const QJsonObject &a, const QJsonObject &b) {
+            return a.value("name").toString().compare(b.value("name").toString(), Qt::CaseInsensitive) < 0;
+        });
+        roles_.setItems(roles);
         QList<QJsonObject> channels;
         for (const QJsonValue &c : o.value("channels").toArray())
             channels.append(channelRow(c.toObject()));
@@ -330,6 +352,8 @@ void Ponds::admin(const QString &path, const QJsonObject &body, const QString &d
             const QString code = o.value("error").toString();
             emit adminFailed(!o.value("message").toString().isEmpty() ? o.value("message").toString()
                              : code == QLatin1String("no_role")       ? tr("You no longer have a role in this Pond.")
+                             : code == QLatin1String("unknown_role")  ? tr("That role was deleted meanwhile.")
+                             : code == QLatin1String("channels_changed") ? tr("The channels changed meanwhile. Try again.")
                              : code == QLatin1String("outranked")     ? tr("They are your rank or above.")
                              : code == QLatin1String("not_yourself")  ? tr("You can't do that to yourself.")
                              : code == QLatin1String("too_large")     ? tr("That picture is too large for a Pond: the most is 1 MiB.")
@@ -377,12 +401,82 @@ void Ponds::deleteChannel(const QString &channelId)
     admin(QStringLiteral("channels/%1/delete").arg(channelId), {}, tr("Channel deleted."), tr("delete that channel"));
 }
 
+void Ponds::createRole(const QString &name)
+{
+    admin(QStringLiteral("roles/create"), { { "name", name.trimmed() } }, tr("Role %1 made.").arg(name.trimmed()), tr("make that role"));
+}
+
+void Ponds::renameRole(const QString &roleId, const QString &name)
+{
+    admin(QStringLiteral("roles/%1/edit").arg(roleId), { { "name", name.trimmed() } }, tr("Saved."), tr("rename that role"));
+}
+
+void Ponds::deleteRole(const QString &roleId)
+{
+    admin(QStringLiteral("roles/%1/delete").arg(roleId), {}, tr("Role deleted."), tr("delete that role"));
+}
+
+QString Ponds::roleName(const QString &roleId) const
+{
+    for (const QJsonObject &r : roles_.items())
+        if (r.value("id").toString() == roleId)
+            return r.value("name").toString();
+    return QString();
+}
+
+void Ponds::setMemberRole(const QString &memberId, const QString &roleId, bool held)
+{
+    QJsonArray now;
+    for (const QJsonObject &m : members_.items())
+        if (m.value("id").toString() == memberId)
+            now = m.value("roles").toArray();
+    QJsonArray ids;
+    for (const QJsonValue &r : now)
+        if (r.toString() != roleId)
+            ids.append(r.toString().toLongLong());
+    if (held)
+        ids.append(roleId.toLongLong());
+    const QString who = nameOf(memberId), role = roleName(roleId);
+    admin(QStringLiteral("members/%1/roles").arg(memberId), { { "roles", ids } },
+          held ? tr("%1 has %2 now.").arg(who, role) : tr("%1 no longer has %2.").arg(who, role), tr("change their roles"));
+}
+
+void Ponds::setChannelRoles(const QString &channelId, bool everyone, const QStringList &roleIds)
+{
+    QJsonArray ids;
+    for (const QString &r : roleIds)
+        ids.append(r.toLongLong());
+    QJsonObject body;
+    body.insert("roles", everyone ? QJsonValue(QJsonValue::Null) : QJsonValue(ids));
+    admin(QStringLiteral("channels/%1/roles").arg(channelId), body, tr("Saved."), tr("change who can see that channel"));
+}
+
+void Ponds::moveChannel(const QString &channelId, int by)
+{
+    // the order as we have it, with this one moved; the Pond takes it only if it has the same channels (else 409)
+    QStringList order;
+    for (const QJsonObject &c : channels_.items())
+        order << c.value("id").toString();
+    const int from = int(order.indexOf(channelId)), to = from + by;
+    if (from < 0 || to < 0 || to >= order.size())
+        return;
+    order.move(from, to);
+    QJsonArray ids;
+    for (const QString &c : order)
+        ids.append(c.toLongLong());
+    admin(QStringLiteral("channels/order"), { { "channels", ids } }, tr("Moved."), tr("move that channel"));
+}
+
 QVariantMap Ponds::cardOf(const QJsonObject &profile)
 {
-    QVariantList colors;
-    for (const QJsonValue &c : profile.value("color").toObject().value("colors").toArray())
+    QVariantList colors; /* "color": one, as "#rrggbb", or {colors, angle} for a gradient */
+    const QJsonValue color = profile.value("color");
+    if (color.isString() && !color.toString().isEmpty())
+        colors << color.toString();
+    for (const QJsonValue &c : color.toObject().value("colors").toArray())
         colors << c.toString();
     return { { "name", profile.value("display_name").toString() }, { "avatar", profile.value("avatar").toObject().value("hash").toString() },
+             { "banner", profile.value("banner").toObject().value("hash").toString() },
              { "blurb", profile.value("blurb").toString() }, { "pronouns", profile.value("pronouns").toString() }, { "colors", colors },
              { "angle", profile.value("color").toObject().value("angle").toInt(180) } };
 }

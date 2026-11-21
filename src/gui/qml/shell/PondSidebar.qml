@@ -218,6 +218,8 @@ Rectangle {
                         spacing: 6
                         Icon { glyph: row.voice ? "volume" : "hash"; size: 18; opacity: row.selected ? 1 : 0.6 }
                         Label { text: row.model.name; Layout.fillWidth: true; elide: Text.ElideRight; opacity: row.selected ? 1 : 0.8; font.bold: row.selected }
+                        // only some roles see it (Discord's lock on a private channel)
+                        Icon { visible: row.model.restricted === true; glyph: "lock"; size: 13; opacity: 0.5 }
                         // a voice channel: join its voice (nothing to answer), or leave it if we are in it
                         ToolButton {
                             objectName: "voiceJoin_" + row.model.name

@@ -345,6 +345,8 @@ private:
     QString current_;
     QHash<QString, QString> names_, avatars_, colors_;
     QHash<QString, QPair<QString, QString>> places_; // a place -> the name and picture of our profile shown there
+    QJsonObject myProfile_;                           // our default profile, as the Puddle gives it
+    QHash<QString, QJsonObject> placeProfiles_;       // a place -> our profile shown there, whole (its colours, banner, ...)
     QString currentPlace() const;                     // the place of the open conversation, "" for none
     QHash<QString, int> unread_;
     QSet<QString> requested_;
