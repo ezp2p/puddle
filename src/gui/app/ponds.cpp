@@ -181,8 +181,7 @@ void Ponds::refreshPond()
             QString name = prof.value("display_name").toString();
             if (name.isEmpty())
                 name = mid.left(8);
-            const QJsonArray colors = prof.value("color").toObject().value("colors").toArray();
-            const QString color = colors.isEmpty() ? QString() : colors.first().toString();
+            const QString color = cardOf(prof).value("colors").toList().value(0).toString(); /* one colour, or a gradient's first */
             const QString avatar = prof.value("avatar").toObject().value("hash").toString();
             // muted by an operator or administrator, and not run out: until when (0: until unmuted)
             const QJsonValue mu = mo.value("muted");
@@ -470,10 +469,14 @@ void Ponds::moveChannel(const QString &channelId, int by)
 
 QVariantMap Ponds::cardOf(const QJsonObject &profile)
 {
-    QVariantList colors;
-    for (const QJsonValue &c : profile.value("color").toObject().value("colors").toArray())
+    QVariantList colors; /* "color": one, as "#rrggbb", or {colors, angle} for a gradient */
+    const QJsonValue color = profile.value("color");
+    if (color.isString() && !color.toString().isEmpty())
+        colors << color.toString();
+    for (const QJsonValue &c : color.toObject().value("colors").toArray())
         colors << c.toString();
     return { { "name", profile.value("display_name").toString() }, { "avatar", profile.value("avatar").toObject().value("hash").toString() },
+             { "banner", profile.value("banner").toObject().value("hash").toString() },
              { "blurb", profile.value("blurb").toString() }, { "pronouns", profile.value("pronouns").toString() }, { "colors", colors },
              { "angle", profile.value("color").toObject().value("angle").toInt(180) } };
 }

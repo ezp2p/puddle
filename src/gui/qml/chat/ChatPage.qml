@@ -474,6 +474,7 @@ Pane {
                                     id: msgName
                                     objectName: "messageSenderName"
                                     text: msg.model.senderName || ""; font.bold: true
+                                    color: msg.model.tint ? msg.model.tint : palette.text /* their chosen colour, ours too */
                                     font.underline: senderHover.hovered
                                     HoverHandler { id: senderHover; cursorShape: Qt.PointingHandCursor }
                                     TapHandler { onTapped: if (page.people) page.people.showCard(msgName, msg.model.sender) }

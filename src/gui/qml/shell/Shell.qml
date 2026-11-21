@@ -567,6 +567,8 @@ Pane {
     ProfileCard {
         id: profileCard
         chats: shell.chats
+        ponds: shell.page === "pond" ? shell.ponds : null
+        menu: personMenu
         onMessageRequested: id => shell.openChat(id, "dm")
         onPondMessageRequested: (pond, id) => shell.chats.openPondDm(pond, id)
     }

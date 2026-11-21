@@ -1320,6 +1320,18 @@ int main(int argc, char **argv)
             settle(300);
             if (!shot.isEmpty())
                 win->grabWindow().save(shot + "-pond-card.png");
+            CHECK(!find("profileCardBlock") && !find("profileCardKick")); /* nothing to do to ourselves */
+            key(Qt::Key_Escape);
+            settle(200);
+            /* Bob's card: Block for anyone, and Mute, Kick and Ban for an operator; the name in his colour */
+            CHECK(clickName("pondMember_Bob"));
+            CHECK(until([&] { QQuickItem *n = find("profileCardName"); return n && n->property("text").toString() == "Bob"; }, 5000));
+            CHECK(find("profileCardBlock") && find("profileCardMute") && find("profileCardKick") && find("profileCardBan"));
+            settle(300);
+            if (!shot.isEmpty())
+                win->grabWindow().save(shot + "-pond-card-bob.png");
+            CHECK(click(find("profileCardKick")));
+            CHECK(until([&] { return find("confirmOk") != nullptr; }, 3000)); /* asks first, as the menu does */
             key(Qt::Key_Escape);
             settle(200);
 

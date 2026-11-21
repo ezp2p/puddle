@@ -4,7 +4,9 @@ import QtQuick.Layouts
 import "../theme"
 
 // Someone's card, just under their name or picture where it was clicked, as Discord pops a profile out: a band in their
-// colours, their picture, name and pronouns, their blurb, and in a Pond their role and whether they are muted. In a Puddle
+// colours (or their banner), their picture, name and pronouns, their blurb, and in a Pond their role and whether they are
+// muted. Under it Message and Block, and for an operator or administrator who outranks them in a Pond, Mute, Kick and Ban
+// (asked through the PersonMenu's dialogs, so the card and the menu ask the same way). In a Puddle
 // chat it shows what is known at once and fills in as their profile for the place on screen arrives (Chats.loadCard).
 // showFor(item, card): `card` is Ponds.card(id) or Chats.card(id).
 Popup {
@@ -12,7 +14,11 @@ Popup {
 
     objectName: "profileCard"
     property var chats
+    property var ponds: null       // in a Pond: its operators' and administrators' buttons
+    property var menu: null        // the PersonMenu, whose dialogs the buttons use (so they ask the same way)
     property var info: ({})
+    property bool canMod: false    // we outrank them in this Pond (asked as the card opens: ranks change)
+    property bool blocked: false
     signal messageRequested(string userId)
     signal pondMessageRequested(string pond, string userId) // not a friend: a direct message through the Pond (docs/pond-dms.md)
 
@@ -22,6 +28,8 @@ Popup {
     property Item anchorItem: null
     function showFor(item, data) {
         info = data
+        canMod = ponds !== null && !!data.id && data.isMe !== true && ponds.canActOn(data.id)
+        blocked = !!chats && !!data.id && chats.isBlocked(data.id)
         anchorItem = item
         place()
         open()
@@ -97,6 +105,18 @@ Popup {
                 }
                 ctx.fill()
             }
+            // their banner, when they have one: over their colours, which show while it comes
+            Avatar {
+                id: banner
+                objectName: "profileCardBanner"
+                anchors.fill: parent
+                chats: card.chats
+                hash: card.info.banner || ""
+                name: ""
+                tint: "transparent"
+                radius: Theme.radiusLarge + 4 /* the card's top corners */
+                visible: hash !== "" && ready
+            }
         }
 
         // the picture sits across the band's edge, ringed in the card's colour
@@ -169,19 +189,62 @@ Popup {
                 opacity: 0.55
                 elide: Text.ElideRight
             }
-            Button {
-                objectName: "profileCardMessage"
-                visible: (card.info.friend === true || card.info.dms === true) && card.info.isMe !== true
+            // for everyone: write to them, or block them
+            RowLayout {
+                visible: card.info.isMe !== true
                 Layout.fillWidth: true
                 Layout.topMargin: 8
-                text: qsTr("Message")
-                icon.source: Theme.icon("message")
-                onClicked: {
-                    card.close()
-                    if (card.info.friend === true)
-                        card.messageRequested(card.info.id)
-                    else
-                        card.pondMessageRequested(card.info.pond, card.info.id)
+                spacing: 6
+                Button {
+                    objectName: "profileCardMessage"
+                    visible: card.info.friend === true || card.info.dms === true
+                    Layout.fillWidth: true
+                    text: qsTr("Message")
+                    icon.source: Theme.icon("message")
+                    onClicked: {
+                        card.close()
+                        if (card.info.friend === true)
+                            card.messageRequested(card.info.id)
+                        else
+                            card.pondMessageRequested(card.info.pond, card.info.id)
+                    }
+                }
+                Button {
+                    objectName: "profileCardBlock"
+                    visible: card.menu !== null
+                    Layout.fillWidth: true
+                    text: card.blocked ? qsTr("Unblock") : qsTr("Block")
+                    icon.source: Theme.icon("x")
+                    palette.buttonText: card.blocked ? palette.buttonText : Theme.danger
+                    onClicked: { card.close(); card.menu.askBlock(card.info) }
+                }
+            }
+            // an operator or administrator who outranks them, in the Pond
+            RowLayout {
+                visible: card.canMod && card.menu !== null
+                Layout.fillWidth: true
+                spacing: 6
+                Button {
+                    objectName: card.info.muted === true ? "profileCardUnmute" : "profileCardMute"
+                    visible: card.ponds !== null && card.ponds.canMute
+                    Layout.fillWidth: true
+                    text: card.info.muted === true ? qsTr("Unmute") : qsTr("Mute")
+                    icon.source: Theme.icon(card.info.muted === true ? "microphone" : "microphone-off")
+                    onClicked: { card.close(); card.info.muted === true ? card.menu.unmute(card.info) : card.menu.askMute(card.info) }
+                }
+                Button {
+                    objectName: "profileCardKick"
+                    Layout.fillWidth: true
+                    text: qsTr("Kick")
+                    palette.buttonText: Theme.danger
+                    onClicked: { card.close(); card.menu.askKick(card.info) }
+                }
+                Button {
+                    objectName: "profileCardBan"
+                    Layout.fillWidth: true
+                    text: qsTr("Ban")
+                    palette.buttonText: Theme.danger
+                    onClicked: { card.close(); card.menu.askBan(card.info) }
                 }
             }
         }

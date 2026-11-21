@@ -27,13 +27,33 @@ Item {
     property bool dmBlocked: false // their direct messages through Ponds are dropped
     property bool blocked: false   // the Puddle's block
 
-    function popup(item, x, y, data) {
+    function take(data) {
         info = data
         canMod = ponds !== null && !!data.id && ponds.canActOn(data.id)
         dmBlocked = !!chats && !!data.id && chats.isDmBlocked(data.id)
         blocked = !!chats && !!data.id && chats.isBlocked(data.id)
+    }
+    function popup(item, x, y, data) {
+        take(data)
         menu.popup(item, x, y)
     }
+    // the same actions, from someone's card (ProfileCard): each asks first, as the menu does
+    function askBlock(data) {
+        take(data)
+        if (blocked)
+            chats.unblock(userId)
+        else
+            confirm.ask(qsTr("Block %1?").arg(name), qsTr("Nothing more is sent to them or taken from them, and they are never told. Their messages are hidden in Ponds too."),
+                        qsTr("Block"), (id => () => pm.chats.block(id))(userId))
+    }
+    function askMute(data) { take(data); muteDialog.ask() }
+    function unmute(data) { take(data); ponds.unmute(userId) }
+    function askKick(data) {
+        take(data)
+        confirm.ask(qsTr("Kick %1?").arg(name), qsTr("They leave the Pond now. They can come back with an invite."), qsTr("Kick"),
+                    (id => () => pm.ponds.kick(id))(userId))
+    }
+    function askBan(data) { take(data); banDialog.ask() }
 
     Menu {
         id: menu
@@ -58,8 +78,8 @@ Item {
         MenuItem {
             objectName: "personBlock"
             text: pm.blocked ? qsTr("Unblock") : qsTr("Block")
-            visible: !pm.mine && pm.info.friend !== true; height: visible ? implicitHeight : 0
-            onTriggered: pm.blocked ? pm.chats.unblock(pm.userId) : pm.chats.block(pm.userId)
+            visible: !pm.mine; height: visible ? implicitHeight : 0
+            onTriggered: pm.askBlock(pm.info)
         }
         MenuSeparator { visible: pm.canMod; height: visible ? implicitHeight : 0 }
         MenuItem {
