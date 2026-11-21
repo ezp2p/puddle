@@ -1349,6 +1349,57 @@ int main(int argc, char **argv)
             CHECK(!find("personKick") && !find("personMute"));
             key(Qt::Key_Escape);
             settle(200);
+
+            /* roles for channels, and the channels' order (the Pond's docs/design.md, "Roles for channels"): a role made in
+             * Server Settings; a channel left to it disappears for Bob, appears again once he holds it, and moves for him too
+             * when an operator moves it */
+            CHECK(P.canRoles());
+            auto *roles = static_cast<JsonListModel *>(P.roles());
+            auto *chansA = static_cast<JsonListModel *>(P.channels()), *chansB = static_cast<JsonListModel *>(PB.channels());
+            auto place = [](JsonListModel *m, const QString &name) {
+                for (int i = 0; i < m->rowCount(); i++)
+                    if (m->at(i).value("name").toString() == name)
+                        return i;
+                return -1;
+            };
+            CHECK(clickName("pondHeader"));
+            CHECK(clickName("serverSettings"));
+            CHECK(clickName("settingsSection_roles"));
+            CHECK(until([&] { return find("newRoleName") != nullptr; }, 3000));
+            find("newRoleName")->setProperty("text", "Frog Wranglers");
+            CHECK(clickName("createRole"));
+            CHECK(until([&] { return roles->rowCount() == 1; }, 10000));
+            const QString roleId = roles->at(0).value("id").toString();
+            CHECK(P.roleName(roleId) == "Frog Wranglers");
+            P.createChannel("wranglers", "");
+            CHECK(until([&] { return place(chansB, "wranglers") >= 0; }, 10000)); /* open to everyone at first */
+            const QString wid = row(chansA, "name", "wranglers").value("id").toString();
+            P.setChannelRoles(wid, false, { roleId });
+            CHECK(until([&] { return place(chansB, "wranglers") < 0; }, 10000)); /* gone for Bob */
+            CHECK(until([&] { return row(chansA, "name", "wranglers").value("restricted").toBool(); }, 5000)); /* still there for us */
+            const QString bobId = row(members, "name", "Bob").value("id").toString();
+            CHECK(clickName("settingsSection_members"));
+            CHECK(until([&] { return find("memberRoles_Bob") != nullptr; }, 3000));
+            P.setMemberRole(bobId, roleId, true);
+            CHECK(until([&] { return place(chansB, "wranglers") >= 0; }, 10000)); /* back for Bob, with the role */
+            CHECK(until([&] { return row(members, "name", "Bob").value("roles").toArray().contains(roleId); }, 5000));
+            CHECK(until([&] { return roles->rowCount() == 1 && roles->at(0).value("count").toInt() == 1; }, 5000));
+            /* the order: moved up with its button, for everyone */
+            CHECK(clickName("settingsSection_channels"));
+            const int was = place(chansA, "wranglers");
+            CHECK(was > 0 && until([&] { return find("moveChannelUp_wranglers") != nullptr; }, 3000));
+            settle(300);
+            if (!shot.isEmpty())
+                win->grabWindow().save(shot + "-pond-channels.png");
+            CHECK(click(find("moveChannelUp_wranglers")));
+            CHECK(until([&] { return place(chansA, "wranglers") == was - 1; }, 10000));
+            CHECK(until([&] { return place(chansB, "wranglers") == place(chansB, chansA->at(was).value("name").toString()) - 1; }, 10000));
+            /* the role deleted: the channel is left to operators and administrators */
+            P.deleteRole(roleId);
+            CHECK(until([&] { return roles->rowCount() == 0 && place(chansB, "wranglers") < 0; }, 10000));
+            CHECK(place(chansA, "wranglers") >= 0);
+            key(Qt::Key_Escape);
+            settle(200);
         }
         /* ---- a direct message through the Pond (docs/pond-dms.md): "Bob @ <Pond>", sealed from one Puddle to the other, with a
          * banner saying so; Bob offers to be friends ---- */

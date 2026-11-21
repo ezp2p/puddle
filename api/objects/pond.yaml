@@ -43,7 +43,11 @@ properties:
     oneOf:
       - { type: object, properties: { id: { type: integer }, role: { enum: [operator, administrator] } } }
       - { type: "null" }
-  channels: { type: array, items: { $ref: "#/$defs/Channel" } }
+  roles:
+    type: array
+    description: "The Pond's roles for channels (a Pond of protocol 9; docs/ponds.md, \"Roles for channels\"), made by its operators and administrators"
+    items: { type: object, properties: { id: { type: integer }, name: { type: string, maxLength: 32 } } }
+  channels: { type: array, items: { $ref: "#/$defs/Channel" }, description: "The channels we may see, in the order the Pond's admins set" }
   me: { $ref: "../wire/ids.yaml#/$defs/UserId", description: The owner's member id (their user id) }
   members: { type: array, items: { $ref: "#/$defs/Member" } }
 x-methods:
@@ -62,6 +66,7 @@ $defs:
       topic: { type: string, maxLength: 1024 }
       last: { type: integer, description: The newest message id kept; 0 for none }
       kind: { enum: [text, voice], description: "A voice channel (docs/ponds.md, \"Voice channels\") takes messages too" }
+      roles: { type: array, items: { type: integer }, description: "Present when it is not open to everyone: operators, administrators and members with one of these roles see it" }
       voice:
         type: array
         description: A voice channel's people now, as the Pond last said
@@ -86,6 +91,7 @@ $defs:
           - { type: object, properties: { until: { oneOf: [{ type: integer }, { type: "null" }] } } }
           - type: "null"
       role: { enum: [operator, administrator, member] }
+      roles: { type: array, items: { type: integer }, description: "The roles for channels they hold (a Pond of protocol 9)" }
       dms: { type: boolean, description: "Present, and false, when they take no direct messages in this Pond (protocol 8)" }
   Message:
     type: object

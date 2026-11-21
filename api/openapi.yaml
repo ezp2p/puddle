@@ -522,6 +522,44 @@ paths:
   /api/v1/ponds/{pond}/admin/channels/{channel}/delete:
     parameters: [{ $ref: "#/components/parameters/Pond" }, { $ref: "#/components/parameters/Channel" }]
     post: { tags: [ponds], summary: Delete a channel, responses: { "204": { description: Deleted } } }
+  /api/v1/ponds/{pond}/admin/channels/{channel}/roles:
+    parameters: [{ $ref: "#/components/parameters/Pond" }, { $ref: "#/components/parameters/Channel" }]
+    post:
+      tags: [ponds]
+      summary: "Who may see a channel (a Pond of protocol 9): everyone (`roles: null`), or operators, administrators and members with one of `roles`"
+      requestBody: { content: { application/json: { schema: { type: object, required: [roles], properties: { roles: { type: [array, "null"], items: { type: integer } } } } } } }
+      responses: { "204": { description: Done } }
+  /api/v1/ponds/{pond}/admin/channels/order:
+    parameters: [{ $ref: "#/components/parameters/Pond" }]
+    post:
+      tags: [ponds]
+      summary: "The order of the channels, for everyone: every channel's id, first to last (a Pond of protocol 9). `409 channels_changed` if one was made or deleted meanwhile"
+      requestBody: { content: { application/json: { schema: { type: object, required: [channels], properties: { channels: { type: array, items: { type: integer } } } } } } }
+      responses: { "204": { description: Done } }
+  /api/v1/ponds/{pond}/admin/roles/create:
+    parameters: [{ $ref: "#/components/parameters/Pond" }]
+    post:
+      tags: [ponds]
+      summary: "Make a role for channels (a Pond of protocol 9)"
+      requestBody: { content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string, maxLength: 32 } } } } } }
+      responses: { "200": { description: "{id, name}" } }
+  /api/v1/ponds/{pond}/admin/roles/{role}/edit:
+    parameters: [{ $ref: "#/components/parameters/Pond" }, { name: role, in: path, required: true, schema: { type: integer } }]
+    post:
+      tags: [ponds]
+      summary: Rename a role for channels
+      requestBody: { content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string, maxLength: 32 } } } } } }
+      responses: { "204": { description: Done } }
+  /api/v1/ponds/{pond}/admin/roles/{role}/delete:
+    parameters: [{ $ref: "#/components/parameters/Pond" }, { name: role, in: path, required: true, schema: { type: integer } }]
+    post: { tags: [ponds], summary: "Delete a role for channels; a channel that asked for it alone is left to operators and administrators", responses: { "204": { description: Deleted } } }
+  /api/v1/ponds/{pond}/admin/members/{member}/roles:
+    parameters: [{ $ref: "#/components/parameters/Pond" }, { name: member, in: path, required: true, schema: { $ref: "wire/ids.yaml#/$defs/UserId" } }]
+    post:
+      tags: [ponds]
+      summary: "The roles for channels a member holds: these, and no others (a Pond of protocol 9)"
+      requestBody: { content: { application/json: { schema: { type: object, required: [roles], properties: { roles: { type: array, items: { type: integer } } } } } } }
+      responses: { "204": { description: Done } }
   /api/v1/ponds/{pond}/admin/members/{member}/remove:
     parameters: [{ $ref: "#/components/parameters/Pond" }, { name: member, in: path, required: true, schema: { $ref: "wire/ids.yaml#/$defs/UserId" } }]
     post: { tags: [ponds], summary: "Remove a member; they may come back with an invite", responses: { "204": { description: Removed } } }
