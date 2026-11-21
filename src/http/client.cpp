@@ -1,5 +1,8 @@
 #include "http/client.h"
 
+#include "core/levee.h"
+#include "base/log.h"
+
 #include "platform/clock.h"
 #include "base/hash.h"
 #include "http/reqsig.h"
@@ -116,6 +119,23 @@ static puddle_sock dial(const puddle_address *addr, int connect_s, int io_s, int
 
 /* ---- the call ---- */
 
+/* The value of the header `name` ("x-name:", lower case) in the head [raw, raw+hend), trimmed, into `out`; "" if absent. */
+static void header_value(const char *raw, size_t hend, const char *name, char *out, size_t cap)
+{
+    size_t nl = strlen(name);
+    for (const char *l = strchr(raw, '\n'); l && l < raw + hend; l = strchr(l + 1, '\n'))
+        if (!puddle_ascii_ncasecmp(l + 1, name, nl)) {
+            const char *v = l + 1 + nl;
+            while (*v == ' ' || *v == '\t')
+                v++;
+            size_t k = 0;
+            while (v < raw + hend && *v != '\r' && *v != '\n' && k + 1 < cap)
+                out[k++] = *v++;
+            out[k] = '\0';
+            return;
+        }
+}
+
 static int ssl_send_all(SSL *ssl, const char *p, size_t n)
 {
     while (n) {
@@ -160,10 +180,21 @@ void puddle_net_request(const puddle_address *addr, const char *method, const ch
         why(out, PUDDLE_NET_FAILED, "cannot sign the request");
         return;
     }
-    char receipt[PUDDLE_RECEIPT_MAX];
-    receipt[0] = '\0';
+    char receipt[PUDDLE_RECEIPT_MAX], custody[PP_CUSTODY_MAX], levee_status[8], levee_error[40];
+    receipt[0] = custody[0] = levee_status[0] = levee_error[0] = '\0';
 
-    puddle_sock sock = dial(addr, connect_s, io_s, deadline, out);
+    /* behind a Levee, everything goes out through it (spec/06, "Going out"), signed for it on the outside */
+    puddle_levee_state lv;
+    int via = !o.direct && puddle_levee_current(&lv);
+    char outer[PP_REQSIG_MAX];
+    if (via && puddle_reqsig_sign(me, "POST", "/levee/v1/send", body, body ? body_len : 0, lv.id, 0, outer, sizeof outer) != 0) {
+        puddle_sealed_request_free(&sealed);
+        why(out, PUDDLE_NET_FAILED, "cannot sign the request for our Levee");
+        return;
+    }
+    const puddle_address *to = via ? &lv.address : addr;
+
+    puddle_sock sock = dial(to, connect_s, io_s, deadline, out);
     if (sock == PUDDLE_SOCK_NONE) {
         puddle_sealed_request_free(&sealed);
         return;
@@ -187,7 +218,7 @@ void puddle_net_request(const puddle_address *addr, const char *method, const ch
     }
     /* Name the host we want (SNI) when it is a name, not a number: a reverse proxy serving several sites on one address picks the
      * site by it, and refuses one that doesn't match the Host header (Apache's 421). It only routes; nothing is checked. */
-    if (!is_ip(addr->host) && SSL_set_tlsext_host_name(ssl, addr->host) != 1) {
+    if (!is_ip(to->host) && SSL_set_tlsext_host_name(ssl, to->host) != 1) {
         why(out, PUDDLE_NET_FAILED, "cannot start TLS");
         goto done;
     }
@@ -196,21 +227,26 @@ void puddle_net_request(const puddle_address *addr, const char *method, const ch
         char eb[120] = "";
         if (e)
             ERR_error_string_n(e, eb, sizeof eb);
-        why(out, PUDDLE_NET_FAILED, "something at %s answered, but it isn't a Puddle (no TLS handshake%s%s)", addr->address, e ? ": " : "", eb);
+        why(out, PUDDLE_NET_FAILED, "something at %s answered, but it isn't a Puddle (no TLS handshake%s%s)", to->address, e ? ": " : "", eb);
         goto done;
     }
 
     /* whatever certificate it showed: TLS only carries this, and nothing here depends on which one (spec/09) */
 
     {
-        char head[1600], seal_line[200] = "";
+        char head[4000], seal_line[200] = "", levee_lines[1600] = "";
         if (o.seal_pub)
             snprintf(seal_line, sizeof seal_line, "X-Puddle-Seal: %s\r\n", sealed.seal);
+        if (via)
+            snprintf(levee_lines, sizeof levee_lines,
+                     "X-Levee-Signature: %s\r\nX-Levee-To: %s\r\nX-Levee-Method: %s\r\nX-Levee-Target: %s\r\nX-Levee-Timeout: %d\r\n", outer,
+                     addr->address, method, target, total_s > 60 ? 60 : total_s);
         int hn = snprintf(head, sizeof head,
-                          "%s %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: puddle\r\nX-Puddle-Signature: %s\r\n%s"
+                          "%s %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: puddle\r\n%s%s: %s\r\n%s%s"
                           "Content-Type: %s\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n",
-                          method, target, addr->address, sig, seal_line, o.seal_pub ? PUDDLE_SEALED_TYPE : "application/json",
-                          body ? body_len : 0);
+                          via ? "POST" : method, via ? "/levee/v1/send" : target, to->address, levee_lines,
+                          o.sig_header ? o.sig_header : "X-Puddle-Signature", sig, seal_line, o.extra_headers ? o.extra_headers : "",
+                          o.content_type ? o.content_type : o.seal_pub ? PUDDLE_SEALED_TYPE : "application/json", body ? body_len : 0);
         if (hn <= 0 || (size_t)hn >= sizeof head || ssl_send_all(ssl, head, (size_t)hn) != 0 ||
             (body && body_len && ssl_send_all(ssl, (const char *)body, body_len) != 0)) {
             why(out, PUDDLE_NET_FAILED, "could not send the request to %s", addr->address);
@@ -259,16 +295,12 @@ void puddle_net_request(const puddle_address *addr, const char *method, const ch
                 for (const char *l = strchr(raw, '\n'); l && l < raw + hend; l = strchr(l + 1, '\n'))
                     if (!puddle_ascii_ncasecmp(l + 1, "content-length:", 15))
                         cl = l + 16;
-                for (const char *l = strchr(raw, '\n'); l && l < raw + hend; l = strchr(l + 1, '\n'))
-                    if (!puddle_ascii_ncasecmp(l + 1, "x-puddle-receipt:", 17)) {
-                        const char *v = l + 18;
-                        while (*v == ' ' || *v == '\t')
-                            v++;
-                        size_t k = 0;
-                        while (v < raw + hend && *v != '\r' && *v != '\n' && k + 1 < sizeof receipt)
-                            receipt[k++] = *v++;
-                        receipt[k] = '\0';
-                    }
+                header_value(raw, hend, "x-puddle-receipt:", receipt, sizeof receipt);
+                header_value(raw, hend, "x-puddle-custody:", custody, sizeof custody);
+                if (via) {
+                    header_value(raw, hend, "x-levee-status:", levee_status, sizeof levee_status);
+                    header_value(raw, hend, "x-levee-error:", levee_error, sizeof levee_error);
+                }
                 for (const char *l = strchr(raw, '\n'); l && l < raw + hend; l = strchr(l + 1, '\n'))
                     if (!puddle_ascii_ncasecmp(l + 1, "content-type:", 13)) {
                         const char *v = l + 14;
@@ -299,8 +331,26 @@ void puddle_net_request(const puddle_address *addr, const char *method, const ch
         why(out, PUDDLE_NET_FAILED, "something at %s answered, but it isn't a Puddle (no HTTP)", addr->address);
         goto done;
     }
+    if (via) { /* the Levee's own answer says what theirs was */
+        int theirs = atoi(levee_status);
+        if (status != 200 || !levee_status[0]) {
+            why(out, PUDDLE_NET_OFFLINE, "our Levee at %s couldn't take it (HTTP %d)", lv.address.address, status);
+            goto done;
+        }
+        if (theirs == 0) {
+            why(out, PUDDLE_NET_OFFLINE, "cannot reach %s through our Levee (%s)", addr->address, levee_error[0] ? levee_error : "unreachable");
+            goto done;
+        }
+        if (theirs < 100 || theirs > 599) {
+            why(out, PUDDLE_NET_FAILED, "our Levee at %s answered oddly", lv.address.address);
+            goto done;
+        }
+        status = theirs;
+    }
     out->result = PUDDLE_NET_OK;
     out->status = status;
+    puddle_log(PUDDLE_LOG_DEBUG, "%s %s at %s%s: %d%s%s", method, target, addr->address, via ? " (through our Levee)" : "", status,
+               custody[0] ? ", with a custody receipt" : "", receipt[0] ? ", signed" : "");
     size_t bl; bl = len - hend;
     if (want >= 0 && (size_t)want < bl)
         bl = (size_t)want;
@@ -317,6 +367,22 @@ void puddle_net_request(const puddle_address *addr, const char *method, const ch
     if (o.peer_pub) { /* only their signature makes this an answer from them */
         out->checked = 1;
         out->proof = puddle_receipt_verify(receipt, peer_id, o.peer_pub, mine.nonce, status, raw + hend, bl);
+        /* away, and their Levee took it for them: delivered (spec/06), if it is the Levee their address record names */
+        if (out->proof == PUDDLE_RECEIPT_MISSING && status == 202 && custody[0] && o.peer_levee_id && o.peer_levee_key) {
+            char bh[65];
+            pp_sha256_hex(body ? body : "", body ? body_len : 0, bh);
+            pp_receipt_check cc = pp_custody_verify(custody, peer_id, o.peer_levee_id, o.peer_levee_key, mine.nonce, bh);
+            if (cc == PP_RECEIPT_OK) {
+                out->proof = PUDDLE_RECEIPT_OK;
+                out->custody = 1;
+            } else {
+                puddle_log(PUDDLE_LOG_WARN, "a custody receipt from %s didn't check out (%d), so it isn't the Levee %.12s… names", addr->address, (int)cc,
+                           peer_id);
+            }
+        } else if (status == 202 || custody[0]) {
+            puddle_log(PUDDLE_LOG_DEBUG, "202 from %s: custody %s, their Levee %s", addr->address, custody[0] ? "given" : "none",
+                       o.peer_levee_id ? "known" : "unknown");
+        }
         if (out->proof != PUDDLE_RECEIPT_OK) {
             out->result = PUDDLE_NET_NOT_PROVEN;
             switch (out->proof) {
@@ -338,7 +404,8 @@ void puddle_net_request(const puddle_address *addr, const char *method, const ch
             }
         }
     }
-    if (o.seal_pub && (out->result == PUDDLE_NET_OK || out->result == PUDDLE_NET_NOT_PROVEN) && out->body && status != 204) {
+    /* a custody receipt's 202 is the Levee's, with nothing in it to seal (spec/06) */
+    if (o.seal_pub && (out->result == PUDDLE_NET_OK || out->result == PUDDLE_NET_NOT_PROVEN) && out->body && status != 204 && !out->custody) {
         /* Opened whether or not it was signed for (an answer to everyone alike, such as access/status, never is; `result` still
          * says so). Something sealed to us that won't open is not an answer at all. A 204 has no body, so nothing to seal. */
         if (!strcmp(out->content_type, PUDDLE_SEALED_TYPE)) {

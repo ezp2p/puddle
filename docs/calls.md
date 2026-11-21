@@ -11,8 +11,8 @@ Decided with the owner:
 - **WebRTC, through libdatachannel.** Standard ICE, DTLS-SRTP and RTP, Opus for voice. A small C++ library (MPL-2.0)
   that builds on Linux, macOS, Windows and Android.
 - **Own addresses only.** No STUN or TURN server run by anyone else: a call uses the addresses the two Puddles already
-  advertise, so nobody outside learns who calls whom. A Puddle that can't be reached waits for the Levee relay
-  (`levee.md`, "Voice and video").
+  advertise, so nobody outside learns who calls whom. A Puddle behind a Levee goes through its Levee's relay, which is
+  its owner's own (`levee.md`, "What joining changes").
 - **First version:** one to one calls in the window, then on the phone, then group calls, then video.
 - **Group calls are a mesh:** a connection between each pair of the people in the call, over the connections the group
   already has. No Puddle carries anyone else's call, so it suits small groups (up to 8 in a call).

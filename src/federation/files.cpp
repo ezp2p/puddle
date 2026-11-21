@@ -1,5 +1,7 @@
 #include "federation/files.h"
 
+#include "base/encoding.h"
+
 #include "federation/groupflow.h"
 #include "federation/sender.h"
 #include "core/group.h"
@@ -466,6 +468,18 @@ int puddle_file_request(puddle_ctx *ctx, const char *chat, const char *message, 
 void puddle_file_finished(void *user, const char *file, const char *chat, const char *message)
 {
     puddle_ctx *ctx = (puddle_ctx *)user;
+    if (ctx->levee_file_fetched) { /* it waited at the sender's Levee: tell it we have it, so it can go (spec/06, "Files") */
+        puddle_file_ref *lrefs;
+        size_t ln;
+        char lsender[PUDDLE_USER_ID_LEN + 1], me[PUDDLE_USER_ID_LEN + 1];
+        if (files_of(ctx, chat, message, &lrefs, &ln, lsender) == 0) {
+            const puddle_file_ref *r = find_ref(lrefs, ln, file);
+            my_id(ctx, me);
+            if (r && r->key[0] && strcmp(lsender, me) != 0)
+                ctx->levee_file_fetched(ctx, lsender, file);
+            free(lrefs);
+        }
+    }
     char pre[100];
     snprintf(pre, sizeof pre, "asked %s %s ", chat, message);
     if (!ctx->files || puddle_files_note_remove(ctx->files, file, pre) <= 0)
@@ -492,9 +506,35 @@ int puddle_file_answer(puddle_ctx *ctx, const char *chat, const char *message, c
     if (!yes)
         return 0; /* they are not told: a no looks like nobody answering (docs/files.md) */
     snprintf(line, sizeof line, "grant %s %lld", peer, (long long)(puddle_ctx_now_ms(ctx) + GRANT_MS));
+    unsigned char key[32];
+    if (ctx->levee_offer_file && puddle_file_key(ctx, chat, message, file, key)) /* left at our Levee again, for them alone */
+        ctx->levee_offer_file(ctx, file, key, &peer, 1);
     if (puddle_files_note_add(ctx->files, file, line) != 0 || tell(ctx, peer, file, "granted", chat, message, 0) != 0) {
         *code = "internal";
         return 500;
     }
     return 0;
+}
+
+int puddle_file_key(puddle_ctx *ctx, const char *chat, const char *message, const char *file, unsigned char key[32])
+{
+    puddle_file_ref *refs;
+    size_t n;
+    char sender[PUDDLE_USER_ID_LEN + 1];
+    if (!ctx->store || files_of(ctx, chat, message, &refs, &n, sender) != 0)
+        return 0;
+    const puddle_file_ref *r = find_ref(refs, n, file);
+    unsigned char raw[40];
+    size_t rl = 0;
+    int ok = r && r->key[0] && puddle_base64_decode(r->key, raw, sizeof raw, &rl) == 0 && rl == 32;
+    if (ok)
+        memcpy(key, raw, 32);
+    free(refs);
+    return ok;
+}
+
+void puddle_file_note_delivered(puddle_ctx *ctx, const char *file, const char *peer)
+{
+    if (ctx->files && puddle_file_id_valid(file))
+        delivered(ctx, file, peer);
 }

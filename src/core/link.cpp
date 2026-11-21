@@ -1,5 +1,7 @@
 #include "core/link.h"
 
+#include "core/levee.h"
+
 #include "core/config.h"
 #include "base/encoding.h"
 
@@ -305,6 +307,13 @@ int puddle_link_format(const char *address, const unsigned char *key, const char
 int puddle_my_address(const puddle_config *cfg, char *out, size_t cap)
 {
     char where[PUDDLE_ADDR_MAX];
+    puddle_levee_state lv;
+    if (puddle_levee_current(&lv)) { /* behind a Levee, its address is ours (spec/06) */
+        if (strlen(lv.address.address) >= cap)
+            return 0;
+        memcpy(out, lv.address.address, strlen(lv.address.address) + 1);
+        return 1;
+    }
     if (cfg->advertise[0]) {
         snprintf(where, sizeof where, "%s", cfg->advertise);
     } else if (!strcmp(cfg->address, "::") || !strcmp(cfg->address, "0.0.0.0")) {

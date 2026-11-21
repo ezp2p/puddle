@@ -139,8 +139,10 @@ void Chats::refresh()
     /* the profiles too, now and then: they can be changed from another device (a phone, the app on another computer) */
     if (!profilesLoaded_ || ++profileTicks_ % 5 == 0)
         refreshProfiles();
-    if (!api_.isDevice())
+    if (!api_.isDevice()) {
         refreshDevices();
+        refreshLevee();
+    }
     if (pairingLink_.size() && pairingExpires_ <= QDateTime::currentMSecsSinceEpoch()) {
         pairingLink_.clear(); /* it has run out: nobody can use it, so it is not shown */
         emit pairingChanged();
@@ -220,6 +222,59 @@ void Chats::stopPairing()
 {
     pairingLink_.clear();
     emit pairingChanged();
+}
+
+// ---- the Levee (docs/levee.md) ----
+
+void Chats::refreshLevee()
+{
+    if (leveeLoading_)
+        return;
+    leveeLoading_ = true;
+    api_.get(QStringLiteral("/api/v1/levee"), [this](int status, const QJsonDocument &doc) {
+        leveeLoading_ = false;
+        if (status != 200 || !doc.isObject() || doc.object() == levee_)
+            return;
+        levee_ = doc.object();
+        emit leveeChanged();
+    });
+}
+
+void Chats::joinLevee(const QString &link)
+{
+    if (leveeBusy_)
+        return;
+    leveeBusy_ = true;
+    leveeError_.clear();
+    emit leveeChanged();
+    api_.post(QStringLiteral("/api/v1/levee/join"), QJsonObject{ { "link", link.trimmed() } }, [this](int status, const QJsonDocument &doc) {
+        leveeBusy_ = false;
+        if (status == 200 && doc.isObject()) {
+            levee_ = doc.object();
+        } else {
+            const QJsonObject o = doc.object();
+            leveeError_ = o.value("error").toString() == QLatin1String("bad_link")
+                              ? tr("That isn't a Levee's join link. On the Levee, run: leveectl join")
+                              : o.value("message").toString().isEmpty() ? tr("The Levee couldn't be joined.") : o.value("message").toString();
+        }
+        emit leveeChanged();
+    });
+}
+
+void Chats::leaveLevee()
+{
+    if (leveeBusy_)
+        return;
+    leveeBusy_ = true;
+    emit leveeChanged();
+    api_.post(QStringLiteral("/api/v1/levee/leave"), QJsonObject{}, [this](int status, const QJsonDocument &) {
+        leveeBusy_ = false;
+        if (status == 204)
+            levee_ = QJsonObject{ { "joined", false } };
+        else
+            emit failed(tr("Could not leave the Levee."));
+        emit leveeChanged();
+    });
 }
 
 void Chats::acceptDevice(const QString &id) { post(path("devices", id, "accept"), QJsonObject{}, tr("Could not let that phone in.")); }

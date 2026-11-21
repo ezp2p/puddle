@@ -2,6 +2,7 @@
 
 #include "http/client.h"
 #include "base/encoding.h"
+#include "base/hash.h"
 #include "events/message.h"
 #include "wire/wireprofile.h"
 #include "federation/flow.h"
@@ -58,6 +59,19 @@ int puddle_peer_parse(const char *obj, size_t len, puddle_peer_info *p)
     if (string_member(o, "address", addr, sizeof addr) != 0 || puddle_address_parse(addr, &pa) != 0 || !puddle_net_host_plausible(pa.host))
         return -1;
     snprintf(p->address, sizeof p->address, "%s", pa.address);
+    puddle_span lvv;
+    if (puddle_json_member(obj, len, "levee", &lvv) == 0) { /* behind a Levee: its id, the hash of its key (spec/06) */
+        char key64[64], want[PP_ID_LEN + 1];
+        unsigned char key[40];
+        size_t kl = 0;
+        if (string_member(lvv, "id", p->levee_id, sizeof p->levee_id) != 0 || string_member(lvv, "key", key64, sizeof key64) != 0 ||
+            puddle_base64_decode(key64, key, sizeof key, &kl) != 0 || kl != 32)
+            return -1;
+        pp_key_id_b32(PP_LABEL_LEVEE, key, want);
+        if (strcmp(want, p->levee_id) != 0)
+            return -1;
+        puddle_hex_encode(key, 32, p->levee_key);
+    }
     int prc = puddle_json_member(obj, len, "profile", &prof);
     if (prc < 0)
         return -1;
@@ -190,6 +204,8 @@ static int apply_request(void *user, puddle_stream *st, int exists)
     st->addr_seq = 0;
     st->naddr = 0;
     puddle_stream_add_address(st, a->r->peer.address);
+    snprintf(st->levee_id, sizeof st->levee_id, "%s", a->r->peer.levee_id);
+    snprintf(st->levee_key, sizeof st->levee_key, "%s", a->r->peer.levee_key);
     if (puddle_stream_set_chain(st, a->r->peer.chain, a->r->peer.chain_len) != 0)
         return -1;
     return 0;
@@ -220,6 +236,8 @@ static int apply_scoped(void *user, puddle_stream *st, int exists)
         st->addr_seq = 0;
         st->naddr = 0;
         puddle_stream_add_address(st, a->r->peer.address);
+        snprintf(st->levee_id, sizeof st->levee_id, "%s", a->r->peer.levee_id);
+        snprintf(st->levee_key, sizeof st->levee_key, "%s", a->r->peer.levee_key);
         if (puddle_stream_set_chain(st, a->r->peer.chain, a->r->peer.chain_len) != 0)
             return -1;
         a->stranger = 1;

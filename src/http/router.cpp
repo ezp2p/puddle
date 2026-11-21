@@ -506,7 +506,7 @@ size_t puddle_router_handle_big(const puddle_router *r, const puddle_request *re
                                     : device ? (rt->auth == PUDDLE_AUTH_OWNER ? puddle_devices_key : puddle_devices_key_any)
                                     : (ctx->peer_key ? ctx->peer_key : no_peer);
         void *user = chain ? (void *)&cl : device ? (void *)ctx->devices : ctx->peer_key_user;
-        int64_t now = puddle_ctx_now_ms(ctx);
+        int64_t now = req->received_ms ? req->received_ms : puddle_ctx_now_ms(ctx);
         puddle_reqsig sig;
         /* the signature covers the body as sent: sealed, when it is */
         puddle_authn a = puddle_reqsig_authenticate(req->signature, req->method, req->target, body, body_len, me,

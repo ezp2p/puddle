@@ -293,6 +293,15 @@ int puddle_file_refs_parse(const char *json, size_t len, puddle_file_ref **out, 
         int p = puddle_json_member(item.p, item.len, "preview", &v);
         if (p < 0 || (p == 0 && puddle_json_string(v, f->preview, sizeof f->preview) != 0))
             goto bad;
+        int k = puddle_json_member(item.p, item.len, "key", &v);
+        if (k < 0 || (k == 0 && puddle_json_string(v, f->key, sizeof f->key) != 0))
+            goto bad;
+        if (f->key[0]) {
+            unsigned char raw[40];
+            size_t rl = 0;
+            if (puddle_base64_decode(f->key, raw, sizeof raw, &rl) != 0 || rl != 32)
+                goto bad;
+        }
         if (!puddle_file_ref_ok(f))
             goto bad;
         count++;
@@ -325,6 +334,8 @@ void puddle_file_refs_write(puddle_jw *w, const puddle_file_ref *files, size_t n
             puddle_jw_num(w, "duration_ms", f->duration_ms);
         if (f->preview[0])
             puddle_jw_str(w, "preview", f->preview);
+        if (f->key[0])
+            puddle_jw_str(w, "key", f->key);
         puddle_jw_end_object(w);
     }
     puddle_jw_end_array(w);

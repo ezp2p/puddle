@@ -1,6 +1,8 @@
 /* Calls between friends (docs/calls.md). See federation/calls.h. */
 #include "federation/calls.h"
 
+#include "core/levee.h"
+
 #include "base/encoding.h"
 #include "base/log.h"
 #include "core/devices.h"
@@ -147,7 +149,7 @@ bool callsx::tell(puddle_calls *cs, const std::string &peer, const char *path, s
     return ok;
 }
 
-static std::string body_of(const std::string &id, const char *key, const std::string &value, int udp = 0)
+static std::string body_of(const std::string &id, const char *key, const std::string &value, int udp = -1)
 {
     std::string buf(value.size() * 2 + 256, '\0');
     puddle_jw w;
@@ -155,7 +157,7 @@ static std::string body_of(const std::string &id, const char *key, const std::st
     puddle_jw_object(&w);
     puddle_jw_str(&w, "call", id.c_str());
     puddle_jw_str(&w, key, value.c_str());
-    if (udp)
+    if (udp >= 0)
         puddle_jw_num(&w, "udp", udp);
     puddle_jw_end_object(&w);
     size_t n = puddle_jw_finish(&w);
@@ -486,12 +488,26 @@ static void setup_track(puddle_calls *cs, const std::weak_ptr<Call> &weak, const
 rtc::Configuration callsx::pc_config(puddle_calls *cs)
 {
     rtc::Configuration conf; /* no ICE servers: only the two Puddles' own addresses (docs/calls.md, "Finding a path") */
-    conf.enableIceUdpMux = true;
     conf.disableAutoNegotiation = true; /* the answer waits until each track says its SSRC (answer_when_ready) */
+    puddle_levee_state lv;
+    if (puddle_levee_current(&lv) && lv.turn_port) {
+        /* behind a Levee nothing reaches us by UDP either: everything goes through its relay, and only the relay's addresses are
+         * offered, so ours stays private (spec/06, "Calls: the relay"). The relay is our own Levee's, nobody else's. */
+        conf.iceServers.emplace_back(lv.address.host, (uint16_t)lv.turn_port, lv.turn_user, lv.turn_pass, rtc::IceServer::RelayType::TurnUdp);
+        conf.iceTransportPolicy = rtc::TransportPolicy::Relay;
+        return conf;
+    }
+    conf.enableIceUdpMux = true;
     conf.portRangeBegin = conf.portRangeEnd = cs->port;
     if (!cs->bind.empty())
         conf.bindAddress = cs->bind;
     return conf;
+}
+
+int callsx::our_udp(puddle_calls *cs)
+{
+    puddle_levee_state lv;
+    return puddle_levee_current(&lv) && lv.turn_port ? 0 : (int)cs->port;
 }
 
 static std::shared_ptr<rtc::PeerConnection> make_pc(puddle_calls *cs, const CallPtr &call)
@@ -569,6 +585,8 @@ std::string callsx::answer_when_ready(const std::shared_ptr<rtc::PeerConnection>
 /* The friend's advertised addresses, at the UDP port they said, as candidates beside the ones their description lists. */
 void callsx::add_their_addresses(puddle_calls *cs, const std::shared_ptr<rtc::PeerConnection> &pc, const std::string &peer, int udp)
 {
+    if (udp <= 0) /* behind a Levee: their description's relayed candidates are all there is (spec/08) */
+        return;
     puddle_address addrs[4];
     int n = cs->hooks.addresses ? cs->hooks.addresses(cs->hooks.user, peer.c_str(), addrs, 4) : 0;
     for (int i = 0; i < n; i++) {
@@ -926,7 +944,7 @@ int puddle_call_start(puddle_ctx *ctx, const char *peer, const char *device, cha
     }
     int status = 0;
     std::string answer;
-    if (!tell(cs, call->peer, "/stream/v1/call/offer", body_of(call->id, "sdp", sdp, cs->port), &status, &answer)) {
+    if (!tell(cs, call->peer, "/stream/v1/call/offer", body_of(call->id, "sdp", sdp, our_udp(cs)), &status, &answer)) {
         finish(cs, call, "unreachable", nullptr);
         return 0;
     }
@@ -995,7 +1013,7 @@ int puddle_call_accept(puddle_ctx *ctx, const char *id, const char *device, cons
         return 0;
     }
     int status = 0;
-    if (!tell(cs, call->peer, "/stream/v1/call/answer", body_of(call->id, "sdp", sdp, cs->port), &status) || status != 204)
+    if (!tell(cs, call->peer, "/stream/v1/call/answer", body_of(call->id, "sdp", sdp, our_udp(cs)), &status) || status != 204)
         finish(cs, call, "failed", nullptr); /* they gave up meanwhile, or can't be reached: they find out themselves */
     return 0;
 }
@@ -1112,7 +1130,7 @@ int puddle_call_media(puddle_ctx *ctx, const char *id, const char *device, const
         cs->version++;
     }
     *answer_out = strdup(sdp.c_str());
-    *udp_out = cs->port;
+    *udp_out = our_udp(cs);
     if (!*answer_out)
         return *code = "internal", -1;
     puddle_log(PUDDLE_LOG_INFO, "calls: %s: the phone %.12s… set up its leg", id, device);
@@ -1350,7 +1368,7 @@ static bool read_body(const puddle_call *c, char id[PUDDLE_CALL_ID_LEN + 2], con
     value->assign(buf.c_str());
     if (udp) {
         int64_t p;
-        if (puddle_json_member(b, c->body_len, "udp", &v) != 0 || puddle_json_int64(v, &p) != 0 || p < 1 || p > 65535)
+        if (puddle_json_member(b, c->body_len, "udp", &v) != 0 || puddle_json_int64(v, &p) != 0 || p < 0 || p > 65535)
             return false;
         *udp = (int)p;
     }

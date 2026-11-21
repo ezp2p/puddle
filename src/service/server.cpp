@@ -1,5 +1,8 @@
 #include "service/server.h"
 
+#include "core/levee.h"
+#include "service/levee.h"
+
 #include "core/auth.h"
 #include "http/http.h"
 #include "core/identity.h"
@@ -80,6 +83,7 @@ struct puddle_server {
     puddle_ponds *ponds;
     std::unique_ptr<puddle::pdm::Store> pond_dms; /* direct messages through Ponds (core/pond_dms.hpp) */
     puddle_outbox_hooks fetch_hooks; /* how downloads reach other Puddles: as the outbox does */
+    puddle_levee_fetcher levee_fetcher; /* and from a sender's Levee, when a file waits there (service/levee.h) */
     puddle_bucket *anon_bucket;
     puddle_keyed *access_limit;
     puddle_replay *replay;
@@ -161,6 +165,11 @@ static int ob_seal_key(void *user, const char *peer, unsigned char pub[32])
     return puddle_streams_seal_key(((puddle_server *)user)->streams, peer, pub);
 }
 
+static int ob_peer_levee(void *user, const char *peer, char id[53], unsigned char key[32])
+{
+    return puddle_streams_levee(((puddle_server *)user)->streams, peer, id, key);
+}
+
 static void ob_done(void *user, const puddle_ob_item *it, puddle_ob_outcome outcome, const puddle_net_reply *reply)
 {
     puddle_flow_done(&((puddle_server *)user)->ctx, it, outcome, reply);
@@ -218,6 +227,8 @@ puddle_server *puddle_server_create(const puddle_config *cfg, char *err, size_t 
     s->assignments = puddle_assignments_open(cfg->data_dir, err, errlen);
     if (!s->assignments)
         goto fail;
+    if (puddle_levee_load(cfg->data_dir) < 0) /* behind a Levee: our address is its (core/levee.h) */
+        puddle_log(PUDDLE_LOG_WARN, "state/levee.json is damaged: not using a Levee until one is joined again");
     s->streams = puddle_streams_open(cfg->data_dir, err, errlen);
     if (!s->streams)
         goto fail;
@@ -253,13 +264,15 @@ puddle_server *puddle_server_create(const puddle_config *cfg, char *err, size_t 
     }
     {
         puddle_outbox_hooks hooks = { .send = puddle_federation_send, .identity = s->identity, .addresses = ob_addresses, .peer_key = ob_peer_key,
-                                      .seal_key = ob_seal_key, .done = ob_done, .user = s };
+                                      .seal_key = ob_seal_key, .peer_levee = ob_peer_levee, .done = ob_done, .user = s };
         s->outbox = puddle_outbox_open(cfg->data_dir, &hooks, err, errlen);
         if (!s->outbox)
             goto fail;
         s->fetch_hooks = hooks;
         s->fetch_hooks.done = NULL;
-        puddle_transfer_hooks th = { .get = puddle_federation_fetch, .user = &s->fetch_hooks, .now_ms = NULL,
+        s->levee_fetcher.ctx = &s->ctx;
+        s->levee_fetcher.hooks = &s->fetch_hooks;
+        puddle_transfer_hooks th = { .get = puddle_levee_fetch, .user = &s->levee_fetcher, .now_ms = NULL,
                                      .finished = puddle_file_finished, .finished_user = &s->ctx };
         s->transfers = puddle_transfers_open(cfg->data_dir, s->files, &th, err, errlen);
         if (!s->transfers)
@@ -400,6 +413,7 @@ void puddle_server_destroy(puddle_server *s)
     puddle_roll_slot_free(s->roll_slot);
     puddle_pond_followers_stop(s->ctx.pond_followers); /* if it ran and was not stopped */
     puddle_pdm_stop(&s->ctx);
+    puddle_levee_worker_stop(&s->ctx);
     puddle_calls_stop(s->ctx.calls);
     puddle_ponds_close(s->ponds);
     puddle_transfers_close(s->transfers); /* stops its worker, which uses the streams and the files */
@@ -555,6 +569,7 @@ int puddle_server_run(puddle_server *s)
         puddle_log(PUDDLE_LOG_ERROR, "cannot start the outbox; nothing will be sent to other Puddles");
     s->ctx.pond_followers = puddle_pond_followers_start(&s->ctx);
     puddle_pdm_start(&s->ctx);
+    puddle_levee_worker_start(&s->ctx, &s->router); /* attached to our Levee, if we are behind one */
     {
         char cerr[200];
         s->ctx.calls = puddle_calls_start(&s->ctx, &s->fetch_hooks, cerr, sizeof cerr);
@@ -643,6 +658,7 @@ int puddle_server_run(puddle_server *s)
     puddle_pond_followers_stop(s->ctx.pond_followers); /* ends their requests that are waiting on the Ponds */
     s->ctx.pond_followers = NULL;
     puddle_pdm_stop(&s->ctx);
+    puddle_levee_worker_stop(&s->ctx);
     puddle_calls *calls = s->ctx.calls; /* a call going on ends, and the friend is told */
     s->ctx.calls = NULL;
     puddle_calls_stop(calls);

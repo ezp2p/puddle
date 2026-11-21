@@ -234,6 +234,10 @@ static char *encode(const puddle_stream *st, size_t *out_len)
     }
     puddle_jw_str(&w, "addresses", addrs);
     puddle_jw_num(&w, "addr_seq", st->addr_seq);
+    if (st->levee_id[0]) {
+        puddle_jw_str(&w, "levee_id", st->levee_id);
+        puddle_jw_str(&w, "levee_key", st->levee_key);
+    }
     if (st->chain) {
         puddle_jw_key(&w, "chain");
         puddle_jw_string_n(&w, st->chain, st->chain_len);
@@ -306,8 +310,14 @@ static int decode(const char *json, size_t len, const char *expect_id, puddle_st
         unsigned char raw[16];
         if (trc < 0 || (trc == 0 && (puddle_json_string(tv, st->ticket, sizeof st->ticket) != 0 || puddle_hex_decode(st->ticket, raw, 16) != 0)))
             return -1;
-        int krc = puddle_json_member(json, len, "link_key", &tv);
         unsigned char key[32];
+        if (puddle_json_member(json, len, "levee_id", &tv) == 0) {
+            puddle_span kv;
+            if (puddle_json_string(tv, st->levee_id, sizeof st->levee_id) != 0 || puddle_json_member(json, len, "levee_key", &kv) != 0 ||
+                puddle_json_string(kv, st->levee_key, sizeof st->levee_key) != 0 || puddle_hex_decode(st->levee_key, key, 32) != 0)
+                st->levee_id[0] = st->levee_key[0] = '\0'; /* damaged: as if they had named none */
+        }
+        int krc = puddle_json_member(json, len, "link_key", &tv);
         if (krc < 0 || (krc == 0 && (puddle_json_string(tv, st->link_key, sizeof st->link_key) != 0 ||
                                      puddle_hex_decode(st->link_key, key, 32) != 0)))
             return -1;
@@ -1078,6 +1088,18 @@ int puddle_streams_current_key(void *streams, const char *id, unsigned char sign
         return 1;
     }
     return 0;
+}
+
+int puddle_streams_levee(void *streams, const char *id, char levee_id[53], unsigned char key[32])
+{
+    puddle_stream st;
+    if (!streams || puddle_streams_get((puddle_streams *)streams, id, &st) != 0)
+        return 0;
+    int ok = st.levee_id[0] && puddle_hex_decode(st.levee_key, key, 32) == 0;
+    if (ok)
+        memcpy(levee_id, st.levee_id, 53);
+    puddle_stream_free(&st);
+    return ok;
 }
 
 int puddle_streams_seal_key(void *streams, const char *id, unsigned char enc_pub[32])

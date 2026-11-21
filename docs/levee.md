@@ -1,112 +1,60 @@
 # Levee
 
-*Design draft. Nothing here is built yet; the open questions at the end are still to be settled with the owner.*
+A **Levee** is the public side of one Puddle: a small daemon (`ezp2p/levee`) its owner runs on a server with a public
+address, usually behind a reverse proxy. The Puddle connects **out** to it and needs no open ports. The wire is the
+protocol's part 06 (`third_party/protocol/spec/06-levee.md`); this page is Puddle's side of it.
 
-A **Levee** is a relay a Puddle can sit behind. It runs on a server somewhere with a public address; the Puddle
-connects out to it, and from then on the Puddle needs no open ports and makes no direct connections to anyone:
-everything it sends goes out through the Levee, and everything sent to it arrives there and waits until the Puddle
-collects it.
+Built 2026-11-21. Decided with the owner:
 
-A Levee is **not a service for ordinary users**. It has no GUI and no app. It is a headless daemon, configured by a file,
-for someone reasonably competent to run on a server (a VPS, a home server with a public address, a friend's box): the
-same sort of person who would run a mail relay or a TURN server. The Puddle and its app only need to know a Levee's
-address and the credentials to use it.
+| Question | Decision |
+|---|---|
+| Who runs it | One Levee per Puddle, run by its owner, like an extension of the Puddle in a DMZ. It may know the owner's friends (their public keys), never their messages. |
+| Joining | `leveectl join` on the Levee makes a `levee://` link, good once; the owner pastes it in Settings, "Levee". |
+| Live or mailbox | Both: requests pass straight through while the Puddle is attached; the one-way ones are spooled while it is not, with a custody receipt to the sender. |
+| What goes out | Everything, through the Levee: nobody the Puddle talks to learns its home address. |
+| Strangers | The Levee knows the Puddle's friends and phones (`peers`, sealed to it) and refuses anyone else, except first contacts (a stream request, a phone pairing), which are rate-limited. |
+| Files | Left at the Levee, sealed under a key only the message carries, until each friend has fetched them; then deleted. Asking again is answered by putting it there again. |
+| Calls | Through a TURN relay on the Levee, in the first build. Its UDP ports are published directly, beside the proxy. |
+| Storage | Plain files in the Levee's data folder; no database. |
 
-## What it is for
+## In the app
 
-- **No open ports.** A Puddle behind NAT, CGNAT, a phone hotspot or a strict firewall can still be reached, because it
-  only ever connects out.
-- **Offline delivery.** What friends send while the Puddle is off waits at the Levee instead of waiting in each friend's
-  outbox, and arrives as soon as the Puddle reconnects.
-- **A stable address.** The Puddle's address is the Levee's, so it stays the same when the Puddle's own network changes.
-  This also covers the case `docs/streams.md` accepts as a limit today: two Puddles that both move while offline can no
-  longer find each other, but they can if either is reachable through a Levee.
+Settings, "Levee": paste the link and Join. The section then says where friends reach the Puddle and whether it is
+connected now, and offers to leave. The owner API: `GET /api/v1/levee`, `POST /api/v1/levee/join {link}`,
+`POST /api/v1/levee/leave` (`api/openapi.yaml`, "Levee").
 
-## What it is not
+## What joining changes
 
-- **It decrypts nothing and signs nothing.** Messages between Puddles are already end-to-end encrypted, and every request
-  is already signed by the sending Puddle's key. The Levee stores and passes on what it is given, byte for byte. It cannot
-  read messages, forge them, or change them without the change being caught.
-- **It is not a Puddle and not a Pond.** It hosts no chats and has no members, profiles or history of its own. A Pond is
-  a place people gather; a Levee is plumbing for one Puddle (or a few, see below).
-- **It does not hide metadata.** It sees who sends to its Puddle, how much, and when, and which Puddles its Puddle
-  sends to. Whoever runs a Levee should be someone the owner trusts with that.
+- **The address.** `puddle_my_address` says the Levee's (`core/levee.h` keeps the join in `state/levee.json`): links,
+  phone pairing links, the self sent with stream requests and answers, and the address record, which now also names the
+  Levee (`levee: {id, key}`) so friends believe its custody receipts. Friends are told at once (`puddle_sync_resume`).
+- **Coming in.** `service/levee.cpp` keeps the Puddle attached: it attaches, sends `peers` whenever they change, holds a
+  request on the Levee's `inbox`, and runs each item through the router as if it had come directly, posting the answer
+  back. A spooled request's clock is checked against when the Levee took it (`puddle_request.received_ms`).
+- **Going out.** `http/client.cpp` sends every request to the Levee's `send` while joined, signed for the Levee on the
+  outside (`X-Levee-Signature`); the receipt inside is checked as always. The Puddle's own requests to its Levee go
+  direct (`opts.direct`).
+- **Custody.** Sending to a friend behind a Levee: a `202` with that Levee's custody receipt (`X-Puddle-Custody`) counts as
+  delivered. The friend's Levee is kept on their stream record (`levee_id`, `levee_key`), from their self or address record.
+- **Files.** Each file in a message sent from behind a Levee gets a key (`files[].key`, in the signed event); the worker
+  seals its hashes and chunks under it and leaves them at the Levee for the chat's members. A download asks the sender's
+  Levee first when the file has a key (`puddle_levee_fetch`), and says `done` there when it is whole.
+- **Calls.** With a relay, ICE uses only it (`iceTransportPolicy: relay`), so nothing shows the Puddle's own address, and
+  offers and answers say `udp: 0`; a friend then adds no candidates of their own making.
 
-## How it works
+Leaving: the Levee forgets the Puddle and everything it kept for it, and friends are told the Puddle's own address again
+(or none, if it has no `advertise` and listens everywhere).
 
-### Attaching
+## Tests
 
-1. The owner tells their Puddle the Levee's address and a credential the operator gave them (see the open questions).
-2. The Puddle connects out to the Levee and authenticates with its identity key: the Levee learns which user id it
-   serves, and that this Puddle holds that id's current key.
-3. The Puddle keeps that connection open. Whatever the Levee holds for it is handed over, and new arrivals follow as they
-   come.
+The Levee repository's `tests/e2e_test.cpp` runs a real `puddled` behind a real `leveed` and befriends another: joining,
+talking both ways, a call through the relay, a message taken while the Puddle is away and handed over when it is back, a
+file fetched from the Levee while its sender is off, and leaving. Puddle's `ui_test` checks the Settings section.
 
-### Addresses
+## Not yet
 
-Adding a Levee is an **address change**, and Puddles already know how to announce one: the signed address record
-(`POST /stream/v1/address`, docs/streams.md, "Telling friends about a new address").
-
-- **Adding a Levee:** the Puddle publishes a new address record (a higher `seq`) whose address is the Levee's. It goes
-  to every friend directly, or through the Levee if the Puddle is already behind one. A friend who is offline finds it
-  waiting at their own Levee, or in the sender's outbox, as today.
-- **Removing a Levee:** the Puddle publishes a record with its own address again (or a new Levee's), the same way.
-- **Links:** a Puddle behind a Levee gives out links with the Levee's address, so new friends reach it there from the
-  start.
-- **Several Puddles behind one Levee:** they share its address, so requests carry the recipient's user id (they already
-  do: request signatures name the recipient) and the Levee files them by it. A first request to someone known only by an
-  address, which today may be signed for no recipient (`*`), needs the link to say which Puddle at that address is meant.
-
-### Sending and receiving
-
-- **Outgoing:** the Puddle hands each request to the Levee, which makes it on the Puddle's behalf and hands back the
-  answer. The request is signed by the Puddle, so the receiver checks it exactly as now.
-- **Incoming:** a request for the Puddle arrives at the Levee.
-  - **While the Puddle is connected**, the Levee passes it straight through and returns the Puddle's answer: nothing in
-    the stream protocol changes, including the calls that need an answer at once (fetching a picture, `access/status`,
-    syncing chat history).
-  - **While it is not**, the Levee keeps what is one-way (messages, group events, profile pushes, address records,
-    requests for a stream) and answers `202`, and the Puddle collects them when it reconnects. A call that needs an
-    answer fails as it would today against an offline Puddle, and the sender's outbox tries again later.
-
-Because Puddles talk to the Levee's TLS certificate, not the Puddle's, a Puddle behind a Levee is recognised by its
-signed requests and end-to-end encryption, not by pinning its certificate (see the open questions).
-
-### Voice and video
-
-Live calls need a relay too when neither side can be reached directly. That would be a Levee's job as well, much like a
-TURN server: it forwards encrypted media between the two ends and sees only its size and timing. It is a separate piece,
-built after messaging works through a Levee.
-
-### Phones
-
-A phone client reaching its own Puddle through the Levee (so the Puddle needs no open port for its owner either) is a
-separate discussion: how the owner token is protected on the way, and whether the Levee may tell an owner's phone apart
-from a peer.
-
-## Running one
-
-- A daemon, `levee` (proposed: its own code base, like Pond's; to confirm), with one config file (YAML, like Puddle's): the address to listen
-  on, its certificate, the data folder, which Puddles it serves and what each may use.
-- It keeps one folder per Puddle it serves: what waits for that Puddle, and what it is allowed.
-- It logs to stdout or a file for the operator; there is no app and no web page.
-- Limits per Puddle (how much it may hold, for how long, how fast strangers may send to it) are the operator's to set.
-
-## Open questions
-
-1. **Mailbox or live tunnel.** The draft above is both: a live pass-through while the Puddle is connected, a mailbox for
-   one-way traffic while it is not. A pure mailbox would turn every call that needs an answer into two one-way messages,
-   which changes the stream protocol a great deal. Confirm the hybrid.
-2. **Certificate pinning.** Today a friend pins the Puddle's TLS certificate (`tls_fp`). Through a Levee they meet the
-   Levee's certificate instead. Is it enough to rest who-you-are on the signed requests and the end-to-end encryption,
-   and pin (or CA-check) the Levee's certificate only as a transport? What does "trust the new certificate" mean then?
-3. **Strangers and spam.** Requests for a stream must reach the Puddle, so the Levee cannot accept only friends. Either
-   the Puddle tells the Levee who its friends are (a privacy cost: the operator learns the friend list), or the Levee
-   rate-limits unknown senders and holds their requests apart from friends' traffic.
-4. **Who runs it.** One Levee per person, or one shared by a group of friends (or a community)? This decides how a
-   Puddle authenticates to it, how the operator admits Puddles (an invite token, a list of user ids), and the limits.
-5. **How long it holds things.** How much and for how long a Levee keeps what waits for an offline Puddle, and what the
-   sender is told when it gives up.
-6. **Several Levees.** May a Puddle use two at once (for redundancy), and how would its address record list them?
-7. **Direct and Levee together.** When a Puddle behind a Levee can also be reached directly, should friends prefer the
-   direct address (faster, less for the Levee to see) or always go through the Levee (one path, simpler)?
+- **Holding what goes out** for a friend who is away and has no Levee: the Puddle's outbox keeps trying, which needs it on.
+- **Several Levees**, or a Levee and a direct address at once.
+- **Voice over HTTPS** for networks that block UDP.
+- **Phones through the Levee** work like friends (their requests are signed and sealed to the Puddle), but a phone's own
+  calls leg still offers its host candidates.

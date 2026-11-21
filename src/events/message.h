@@ -59,8 +59,9 @@ size_t puddle_message_build(const char *chat, const char *sender, int64_t ts, co
 
 /* ---- files in a message (docs/files.md) ----
  * A message may carry up to ten files, each named by its id (storage/files.h) with what a reader needs before it arrives.
- * In the event: "files": [{"id","name","mime","size","w"?,"h"?,"duration_ms"?,"preview"?}, ...]. Members a reader does
- * not know are left alone, so later Puddles can add some. */
+ * In the event: "files": [{"id","name","mime","size","w"?,"h"?,"duration_ms"?,"preview"?,"key"?}, ...]. Members a reader does
+ * not know are left alone, so later Puddles can add some. `key`: sent from behind a Levee, the file waits there sealed under it
+ * (the protocol's spec/06, "Files"), base64 of 32 bytes. */
 #define PUDDLE_MESSAGE_MAX_FILES 10
 #define PUDDLE_FILE_NAME_MAX 255     /* bytes */
 #define PUDDLE_FILE_MIME_MAX 127
@@ -74,6 +75,7 @@ typedef struct {
     int w, h;                             /* 0 if not said; else 1 to 100000 */
     int64_t duration_ms;                  /* 0 if not said */
     char preview[1400];                   /* base64 of a tiny image, at most PUDDLE_FILE_PREVIEW_MAX bytes; "" if none */
+    char key[48];                         /* the key it waits at the sender's Levee under, base64; "" if none */
 } puddle_file_ref;
 
 /* Does `f` keep the rules above? 1 or 0. */

@@ -2,7 +2,8 @@
 #define PUDDLE_REQSIG_H
 
 /* Request signatures: how Alice's Puddle proves to Bob's that a request is from Alice, on every
- * request. Rules in docs/streams.md ("Request signatures"). The header is
+ * request. Rules in docs/streams.md ("Request signatures"); the bytes are libpuddle-proto's (third_party/protocol/lib), and
+ * this is Puddle's face on them: signing with its identity. The header is
  *
  *   X-Puddle-Signature: v1 id=<sender id>; kid=<key id>; ts=<ms>; nonce=<base64>; sig=<base64>
  *
@@ -12,6 +13,8 @@
 #include "core/delivery.h"
 #include "core/identity.h"
 
+#include <puddle_proto.h>
+
 #include <stddef.h>
 #include <stdint.h>
 
@@ -19,15 +22,9 @@
 extern "C" {
 #endif
 
-#define PUDDLE_SIG_WINDOW_MS (5 * 60 * 1000)
+#define PUDDLE_SIG_WINDOW_MS PP_SIG_WINDOW_MS
 
-typedef struct {
-    char id[PUDDLE_USER_ID_LEN + 1];
-    char kid[65];
-    int64_t ts;
-    char nonce[48];
-    unsigned char sig[64];
-} puddle_reqsig;
+typedef pp_reqsig puddle_reqsig;
 
 /* The recipient to sign for when the sender does not know who lives at an address yet (a first request, see streams.md). Only a
  * route that says it takes such requests accepts one; everywhere else it is the usual 404. */
@@ -54,14 +51,7 @@ int puddle_reqsig_sign_as(const char *signer_id, const unsigned char sign_pub[32
  * The body is sealed (base/seal.h) to the recipient's key with info "puddle-seal-v1\n<sender>\n<recipient>\n<nonce>" and aad
  * "<METHOD>\n<target>", and the signature covers the sealed bytes. The answer comes back in records under `answer_key`. */
 
-typedef struct {
-    char signature[800];        /* X-Puddle-Signature */
-    char seal[160];             /* X-Puddle-Seal */
-    char nonce[32];
-    unsigned char *body;        /* the sealed body, malloc'd; NULL when there was none */
-    size_t body_len;
-    unsigned char answer_key[32];
-} puddle_sealed_request;
+typedef pp_sealed_request puddle_sealed_request; /* signature, seal, nonce, body (malloc'd), body_len, answer_key */
 
 int puddle_seal_request(puddle_identity *me, const char *method, const char *target, const void *body, size_t body_len,
                         const char *recipient_id, const unsigned char seal_pub[32], int64_t now_ms, puddle_sealed_request *out);
@@ -77,23 +67,22 @@ size_t puddle_seal_aad(const char *method, const char *target, char *out, size_t
 /* The recipient's side: parse X-Puddle-Seal. 0 or -1. */
 int puddle_seal_header_parse(const char *header, char kid[65], unsigned char enc[PUDDLE_SEAL_ENC_LEN]);
 
-#define PUDDLE_SEALED_TYPE "application/puddle-sealed"
+#define PUDDLE_SEALED_TYPE PP_SEALED_TYPE
 
 /* Strictly parse a header value: exact field order, exact formats, nothing extra. 0 or -1. */
 int puddle_reqsig_parse(const char *header, puddle_reqsig *out);
 
 /* Remembers nonces for ten minutes so a captured request can't be replayed. */
-typedef struct puddle_replay puddle_replay;
+typedef struct pp_replay puddle_replay;
 puddle_replay *puddle_replay_new(size_t capacity); /* a power of two >= 8; 0 = 65536 */
 void puddle_replay_free(puddle_replay *r);
 
-typedef enum {
-    PUDDLE_AUTHN_OK = 0,
-    PUDDLE_AUTHN_REJECT = 1,   /* not authenticated: answer as if the path did not exist */
-    PUDDLE_AUTHN_SKEW = 2,     /* authenticated, but ts is off by more than five minutes */
-    PUDDLE_AUTHN_REPLAYED = 3, /* authenticated, but this exact request was already seen */
-    PUDDLE_AUTHN_BUSY = 4      /* authenticated, but the nonce memory is full */
-} puddle_authn;
+typedef pp_authn puddle_authn;
+#define PUDDLE_AUTHN_OK PP_AUTHN_OK             /* authenticated */
+#define PUDDLE_AUTHN_REJECT PP_AUTHN_REJECT     /* not authenticated: answer as if the path did not exist */
+#define PUDDLE_AUTHN_SKEW PP_AUTHN_SKEW         /* authenticated, but ts is off by more than five minutes */
+#define PUDDLE_AUTHN_REPLAYED PP_AUTHN_REPLAYED /* authenticated, but this exact request was already seen */
+#define PUDDLE_AUTHN_BUSY PP_AUTHN_BUSY         /* authenticated, but the nonce memory is full */
 
 /* Look up the sender's *current* signing key. `kid` is the key id the request names. Return 1 and fill
  * `sign_pub` only if `sender_id` is someone we know and `kid` is their current key; a retired key must
@@ -116,7 +105,7 @@ puddle_authn puddle_reqsig_authenticate(const char *header, const char *method, 
  * `sig` is an Ed25519 signature over "puddle-receipt-v2", the responder's id, the request's nonce, the status and the hex
  * SHA-256 of the answer's body exactly as sent (sealed, when it is), one per line. No certificate: TLS is transport only. */
 
-#define PUDDLE_RECEIPT_MAX 320 /* room for the header value */
+#define PUDDLE_RECEIPT_MAX PP_RECEIPT_MAX /* room for the header value */
 
 /* Sign for the answer to the request with `nonce`. 0 or -1. */
 int puddle_receipt_sign(puddle_identity *me, const char *nonce, int status, const void *body, size_t body_len, char *out, size_t cap);

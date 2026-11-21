@@ -60,7 +60,8 @@ or looks like it conflicts with this list, ask rather than guess.
 - `docs/roadmap.md`: the step-by-step plan for keys and streams; work through it in order, one step at a time
 - `docs/discuss-later.md`: open questions parked on purpose; don't raise them unprompted
 - `docs/hardening.md`: what junk and floods cost a Puddle (and a Pond), and the gaps still open
-- `docs/protocol.md`: which parts of the Puddle Protocol (`ezp2p/protocol`, checked out beside this repository as `../protocol`) Puddle implements. The protocol is what Pond, Levee and phone clients rely on: change the wire there first, then here
-- Build and test: `scripts/build.sh`
+- `docs/protocol.md`: which parts of the Puddle Protocol (`ezp2p/protocol`, the submodule `third_party/protocol`) Puddle implements. The protocol is what Pond, Levee and phone clients rely on: change the wire there first, then here
+- Build and test: `scripts/build.sh` (after `git submodule update --init`)
+- `third_party/protocol`: the protocol repository as a submodule; its `lib/` is libpuddle-proto (ids, chains, signatures, receipts, sealing), which `base/encoding.h`, `base/hash.h`, `base/seal.h` and `http/reqsig.h` put Puddle's names on
 - `.github/workflows/build.yml`: every platform built and tested; a push to `dev` replaces the `dev-build` prerelease, a tag makes a release; `scripts/package-*.sh` package them. See `docs/releases.md`
 - `Dockerfile`, `dist/docker-entrypoint.sh`: the `puddled` image, published to ghcr by `.github/workflows/docker.yml` (`:dev` on a push to dev, the version on a release tag); see `docs/docker.md`. `compose.yaml` (with `.env.example`) is the quick start for running one; `compose.test.yaml` is two Puddles for testing only

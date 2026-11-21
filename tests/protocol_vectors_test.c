@@ -1,6 +1,6 @@
 /* The Puddle Protocol's test vectors (ezp2p/protocol, vectors/): fixed inputs and the answer every implementation must give.
  *
- * By default this checks Puddle against them: it looks for the protocol checkout beside this one (../protocol, or
+ * By default this checks Puddle against them: it looks for the protocol in the submodule (third_party/protocol, or
  * $PUDDLE_PROTOCOL_DIR) and skips if there is none, as Pond's end-to-end test does without a Puddle. With
  * PUDDLE_WRITE_VECTORS=<dir> it writes them instead, from Puddle's own code, which is the reference
  * (protocol/decisions.md). Writing them again makes new signatures (new nonces, a new identity), so do that only when the
@@ -363,7 +363,7 @@ int main(void)
     }
     char dir[1100];
     const char *env = getenv("PUDDLE_PROTOCOL_DIR");
-    snprintf(dir, sizeof dir, "%s/vectors", env && *env ? env : PUDDLE_SOURCE_DIR "/../protocol");
+    snprintf(dir, sizeof dir, "%s/vectors", env && *env ? env : PUDDLE_SOURCE_DIR "/third_party/protocol");
     struct stat st;
     if (stat(dir, &st) != 0) {
         printf("no protocol checkout at %s: skipped (set PUDDLE_PROTOCOL_DIR)\n", dir);

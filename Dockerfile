@@ -20,6 +20,7 @@ RUN git clone --depth 1 --branch v0.24.5 --recurse-submodules --shallow-submodul
 WORKDIR /src
 COPY CMakeLists.txt ./
 COPY src src
+COPY third_party third_party
 COPY tests tests
 RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DPUDDLE_BUILD_GUI=OFF \
  && cmake --build build --parallel 4 --target puddled \

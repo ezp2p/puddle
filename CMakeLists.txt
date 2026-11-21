@@ -33,6 +33,13 @@ endif()
 find_package(OpenSSL 3.0 REQUIRED)
 find_package(Threads REQUIRED)
 
+# libpuddle-proto: the protocol's bytes (ids, chains, signatures, receipts, sealing), shared with Pond and Levee. A git
+# submodule: `git submodule update --init` after cloning.
+if(NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/third_party/protocol/lib/CMakeLists.txt)
+  message(FATAL_ERROR "third_party/protocol is missing: run git submodule update --init")
+endif()
+add_subdirectory(third_party/protocol/lib EXCLUDE_FROM_ALL)
+
 add_compile_options(-Wall -Wextra)
 # Paths are built as "<data_dir>/<name>" in PUDDLE_PATH_MAX buffers; data_dir is capped at
 # PUDDLE_DATA_DIR_MAX when the config is read, so gcc's worst-case truncation warnings are noise.
@@ -64,13 +71,10 @@ target_include_directories(puddle_platform PUBLIC src)
 
 # base: what every layer uses: hashing, JSON, encoding, logging, cleaning text
 add_library(puddle_base STATIC
-  src/base/encoding.cpp
-  src/base/hash.cpp
-  src/base/seal.cpp
   src/base/json.cpp
   src/base/log.cpp
   src/base/text.cpp)
-target_link_libraries(puddle_base PUBLIC puddle_platform OpenSSL::Crypto Threads::Threads)
+target_link_libraries(puddle_base PUBLIC puddle_platform puddle_proto OpenSSL::Crypto Threads::Threads)
 
 # storage: the chat logs and media on disk
 add_library(puddle_storage STATIC
@@ -89,6 +93,7 @@ add_library(puddle_core STATIC
   src/core/delivery.cpp
   src/core/group.cpp
   src/core/identity.cpp
+  src/core/levee.cpp
   src/core/link.cpp
   src/core/outbox.cpp
   src/core/people.cpp
@@ -146,6 +151,7 @@ add_library(puddle_api STATIC
   src/api/calls.cpp
   src/api/conversations.cpp
   src/api/devices.cpp
+  src/api/levee.cpp
   src/api/files.cpp
   src/api/groups.cpp
   src/api/ponds.cpp
@@ -190,6 +196,7 @@ endif()
 
 # service: the assembled Puddle (server.cpp) and every route together
 add_library(puddle_service STATIC
+  src/service/levee.cpp
   src/service/main.cpp
   src/service/routes.cpp
   src/service/server.cpp)
@@ -484,7 +491,7 @@ foreach(t http json seal backup store storage files transfers people conversatio
 endforeach()
 # call and groupcall skip (77) when built without libdatachannel
 set_tests_properties(call groupcall PROPERTIES SKIP_RETURN_CODE 77)
-# The Puddle Protocol's vectors, from a checkout of ezp2p/protocol beside this one (skipped without one)
+# The Puddle Protocol's vectors, from the submodule third_party/protocol (or PUDDLE_PROTOCOL_DIR)
 target_compile_definitions(protocol_vectors_test PRIVATE PUDDLE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 endif()
 
