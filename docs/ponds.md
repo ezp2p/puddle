@@ -192,6 +192,16 @@ A Pond has operators and administrators who run it from the app (the Pond's desi
   only those sections, and shows on someone's card and menu only the actions it may take on them. The owner's route for
   the order is `/admin/roles/order`.
 
+- **Pages and the banner** (protocol 11, feature `pages`; the Pond's design, "Pages"). A Pond shows pages above its
+  channels: markdown for now (`kind`), with files. The Puddle keeps the list of pages (`pages`: id, title, kind, updated)
+  with the Pond, in its order, and follows `page`, `page_deleted` and `page_order`; it keeps the `banner` as it keeps the
+  icon, and fetches its picture the same way. A page's body is asked of the Pond when it is opened
+  (`GET /api/v1/ponds/{pond}/pages/{page}`), and its files are given as a message's are, with what is here of each; those
+  up to `files.auto_download` are fetched then by themselves, and a larger one with
+  `/pages/{page}/files/{file}/download`. They are kept a week, as files asked for are. The owner's routes are
+  `/admin/pages/create`, `/admin/pages/{page}/edit`, `/delete`, `/admin/pages/order` and `/admin/banner`; a page's files
+  that are here whole are sent to the Pond before the page names them.
+
 In the app, the Pond's name drops down its menu, as Discord's server menu does: **Server Settings** (for an operator
 or administrator), **Appear as…**, **Copy my id**, and **Leave Pond**. Server Settings opens over the window, with
 sections on the left (Overview, Channels, Roles, Members, Invites, Bans; Roles only where the Pond has them) and each section's settings in groups on the right
@@ -200,7 +210,15 @@ limit), copies its link at once and shows it to copy again, and lists those that
 `pondctl`), each with Copy link and Revoke. Roles makes, edits and deletes roles, with how many hold each, and moves them up and down; its editor sets a role's name,
 colour, whether it is shown apart, and its permissions (only those the owner has themselves can be added). The member list
 puts members under their highest role that is shown apart, with a heading for each, then everyone else under Members.
-Someone's card shows the roles they hold, each with its colour, and a + to give or take roles for whoever may. Channels moves
+Someone's card shows the roles they hold, each with its colour, and a + to give or take roles for whoever may. Overview
+sets the Pond's banner, beside its icon.
+
+A Pond's pages are listed above its channels in the channel list, under a line of their own, with a + for whoever may
+manage pages (it asks for a title, and the new page opens). A page shows where a channel's messages would be
+(`chat/PageView.qml`): its markdown, where #channel-name is a link that opens that channel, and its files under it, as a
+message's. Its header has Edit, Move up, Move down and Delete for whoever may manage pages; editing it is its title, its
+markdown, the files it carries (each can be taken off) and new ones from the paperclip. The banner shows over the Pond's
+name. Channels moves
 each channel up or down (for everyone), and its edit says who can see it: everyone, or only some roles. Members gives
 and takes roles from a menu beside each member, and shows the roles each holds. A channel only some roles see has a lock
 beside its name in the channel list.

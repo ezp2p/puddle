@@ -543,6 +543,43 @@ paths:
       summary: "Make a role (a Pond of protocol 9; color, hoist and permissions from protocol 10), at the bottom of the order"
       requestBody: { content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string, maxLength: 32 }, color: { type: [string, "null"] }, hoist: { type: boolean }, permissions: { type: array, items: { type: string } } } } } } }
       responses: { "200": { description: "{id, name, color, hoist, permissions}" } }
+  /api/v1/ponds/{pond}/pages/{page}:
+    parameters: [{ $ref: "#/components/parameters/Pond" }, { name: page, in: path, required: true, schema: { type: integer } }]
+    get:
+      tags: [ponds]
+      summary: "One of the Pond's pages, asked of the Pond (a Pond of protocol 11): {id, title, kind, body, updated, updated_by, files}, each file a File with what is here of it"
+      responses: { "200": { description: The page }, "404": { description: "`no_page`" } }
+  /api/v1/ponds/{pond}/pages/{page}/files/{file}/download:
+    parameters: [{ $ref: "#/components/parameters/Pond" }, { name: page, in: path, required: true, schema: { type: integer } }, { name: file, in: path, required: true, schema: { type: string } }]
+    post: { tags: [ponds], summary: "Fetch a file a page carries that did not come by itself", responses: { "204": { description: Asked } } }
+  /api/v1/ponds/{pond}/admin/pages/create:
+    parameters: [{ $ref: "#/components/parameters/Pond" }]
+    post:
+      tags: [ponds]
+      summary: "Make a page (a Pond of protocol 11): {title, kind?, body?, files?}, files as a message's; each here whole is sent to the Pond first"
+      responses: { "200": { description: "{id, title, kind, updated}" } }
+  /api/v1/ponds/{pond}/admin/pages/{page}/edit:
+    parameters: [{ $ref: "#/components/parameters/Pond" }, { name: page, in: path, required: true, schema: { type: integer } }]
+    post:
+      tags: [ponds]
+      summary: "Change a page: {title?, kind?, body?, files?}; files replaces what it carried (those sent before are named as the page gave them)"
+      responses: { "204": { description: Done } }
+  /api/v1/ponds/{pond}/admin/pages/{page}/delete:
+    parameters: [{ $ref: "#/components/parameters/Pond" }, { name: page, in: path, required: true, schema: { type: integer } }]
+    post: { tags: [ponds], summary: Delete a page, responses: { "204": { description: Deleted } } }
+  /api/v1/ponds/{pond}/admin/pages/order:
+    parameters: [{ $ref: "#/components/parameters/Pond" }]
+    post:
+      tags: [ponds]
+      summary: "The order of the pages, first to last. `409 pages_changed` if one was made or deleted meanwhile"
+      requestBody: { content: { application/json: { schema: { type: object, required: [pages], properties: { pages: { type: array, items: { type: integer } } } } } } }
+      responses: { "204": { description: Done } }
+  /api/v1/ponds/{pond}/admin/banner:
+    parameters: [{ $ref: "#/components/parameters/Pond" }]
+    post:
+      tags: [ponds]
+      summary: "The Pond's banner, as its icon: {hash} of a picture this Puddle holds, or {hash: null} (a Pond of protocol 11; `409 no_pages` for an older one)"
+      responses: { "204": { description: Done } }
   /api/v1/ponds/{pond}/admin/roles/order:
     parameters: [{ $ref: "#/components/parameters/Pond" }]
     post:

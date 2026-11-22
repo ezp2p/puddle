@@ -5,7 +5,8 @@ import "../components"
 import "../theme"
 
 // The left-hand list while a Pond is open: its name, which drops down the Pond's menu (Server Settings for an operator or
-// administrator, how you appear there, your id, leaving), a role the Pond offers you if it does, then its channels. A voice
+// administrator, how you appear there, your id, leaving), a role the Pond offers you if it does, then its pages (the Pond's
+// docs/design.md, "Pages": its rules, a guide; a line under them) and its channels. Its banner, if it has one, is over its name. A voice
 // channel (docs/ponds.md, "Voice channels") has a speaker, and who is in it underneath, lit while they talk; clicking it shows
 // its messages, like any channel, and the phone beside it joins its voice (nothing to answer), or leaves it. While you are in
 // one, the voice panel above your own row says which, with its controls (VoicePanel.qml); your row has the app's Settings.
@@ -38,6 +39,28 @@ Rectangle {
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
+
+        // its banner (protocol 11): a picture over its name
+        Item {
+            objectName: "pondBannerBox"
+            visible: bar.ponds.currentBanner !== ""
+            Layout.fillWidth: true
+            Layout.preferredHeight: visible ? Math.round(width * 0.4) : 0
+            // a plain band while the picture comes
+            Rectangle { anchors.fill: parent; radius: Theme.cardRadius; color: Theme.tint(Theme.text, Theme.hover) }
+            Avatar {
+                id: pondBanner
+                objectName: "pondBanner"
+                anchors.fill: parent
+                size: width
+                chats: bar.chats
+                hash: bar.ponds.currentBanner
+                name: ""
+                tint: "transparent"
+                radius: Theme.cardRadius
+                opacity: ready ? 1 : 0
+            }
+        }
 
         // the name: a click drops the Pond's menu down from it, as Discord's server menu does
         Rectangle {
@@ -165,6 +188,63 @@ Rectangle {
             }
         }
 
+        // its pages, above the channels and set off from them by a line, as Discord's server guide is
+        RowLayout {
+            visible: bar.ponds.canPages && (bar.ponds.pages.count > 0 || bar.ponds.canManagePages)
+            Layout.fillWidth: true
+            Layout.leftMargin: 16
+            Layout.rightMargin: 10
+            Layout.topMargin: 14
+            Label { text: qsTr("PAGES"); font.pixelSize: 11; font.bold: true; opacity: 0.55; Layout.fillWidth: true }
+            ToolButton {
+                objectName: "newPage"
+                visible: bar.ponds.canManagePages
+                implicitWidth: 22; implicitHeight: 22; padding: 3
+                icon.source: Theme.icon("plus"); icon.width: 14; icon.height: 14
+                display: AbstractButton.IconOnly
+                Accessible.name: qsTr("New page")
+                ToolTip.text: qsTr("New page"); ToolTip.visible: hovered; ToolTip.delay: 300
+                onClicked: newPageDialog.ask()
+            }
+        }
+        Repeater {
+            model: bar.ponds.canPages ? bar.ponds.pages : null
+            delegate: Rectangle {
+                id: pageRow
+                required property var model
+                readonly property bool selected: bar.ponds.page === model.id
+                objectName: "page_" + model.title
+                Layout.fillWidth: true
+                Layout.leftMargin: 8
+                Layout.rightMargin: 8
+                implicitHeight: 34
+                radius: Theme.radius
+                color: selected ? Theme.tint(Theme.text, Theme.selected) : pageHover.hovered ? Theme.tint(Theme.text, Theme.hover) : "transparent"
+                HoverHandler { id: pageHover; cursorShape: Qt.PointingHandCursor }
+                TapHandler { onTapped: bar.ponds.openPage(pageRow.model.id) }
+                Accessible.role: Accessible.Button
+                Accessible.name: pageRow.model.title
+                Accessible.onPressAction: bar.ponds.openPage(pageRow.model.id)
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.leftMargin: 10
+                    anchors.rightMargin: 10
+                    spacing: 6
+                    Icon { glyph: "file-text"; size: 18; opacity: pageRow.selected ? 1 : 0.6 }
+                    Label { text: pageRow.model.title; Layout.fillWidth: true; elide: Text.ElideRight; opacity: pageRow.selected ? 1 : 0.8; font.bold: pageRow.selected }
+                }
+            }
+        }
+        Rectangle {
+            visible: bar.ponds.canPages && (bar.ponds.pages.count > 0 || bar.ponds.canManagePages)
+            Layout.fillWidth: true
+            Layout.leftMargin: 16
+            Layout.rightMargin: 16
+            Layout.topMargin: 8
+            height: 1
+            color: Theme.hairline
+        }
+
         Label {
             Layout.fillWidth: true
             Layout.leftMargin: 16
@@ -189,7 +269,7 @@ Rectangle {
                 id: row
                 required property var model
                 required property int index
-                readonly property bool selected: model.id === bar.ponds.channel
+                readonly property bool selected: model.id === bar.ponds.channel && bar.ponds.page === ""
                 readonly property bool voice: model.kind === "voice"
                 readonly property var people: model.voice || []
                 // we are in this one's voice (connecting, or connected)
@@ -331,5 +411,34 @@ Rectangle {
                 }
             }
         }
+    }
+
+    // a new page: its title, then it opens to be written
+    Dialog {
+        id: newPageDialog
+        function ask() { pageTitle.text = ""; open(); pageTitle.forceActiveFocus() }
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        modal: true
+        width: Math.min(400, parent ? parent.width - 24 : 400)
+        title: qsTr("New page")
+        ColumnLayout {
+            width: newPageDialog.availableWidth
+            spacing: 8
+            Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: qsTr("Pages show above the channels, for everyone here: rules, a guide, links.") }
+            TextField {
+                id: pageTitle
+                objectName: "newPageTitle"
+                Layout.fillWidth: true
+                placeholderText: qsTr("Title, like Rules")
+                maximumLength: 64
+                onAccepted: if (text.trim() !== "") newPageDialog.accept()
+            }
+        }
+        footer: DialogButtonBox {
+            Button { text: qsTr("Cancel"); DialogButtonBox.buttonRole: DialogButtonBox.RejectRole }
+            Button { objectName: "createPage"; text: qsTr("Create"); enabled: pageTitle.text.trim() !== ""; DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole }
+        }
+        onAccepted: if (pageTitle.text.trim() !== "") bar.ponds.createPage(pageTitle.text)
     }
 }

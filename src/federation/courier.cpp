@@ -55,4 +55,6 @@ const puddle_courier puddle_federation_courier = {
     puddle_pdm_befriend,
     puddle_pdm_retry,
     puddle_pdm_accept,
+    puddle_pond_upload,
+    puddle_pond_page_fetch,
 };

@@ -1,6 +1,7 @@
 #include "ponds.h"
 
 #include <QDateTime>
+#include <QRegularExpression>
 
 #include <climits>
 
@@ -17,7 +18,8 @@ Ponds::Ponds(ApiClient *api, QObject *parent)
       messages_({ "id", "author", "name", "tint", "avatar", "text", "files", "ts", "mine", "grouped", "dayStart" }),
       bans_({ "member", "name", "by", "byName", "reason", "ts" }, nullptr, QStringLiteral("member")),
       invites_({ "token", "link", "uses", "maxUses", "expires", "created" }, nullptr, QStringLiteral("token")),
-      roles_({ "id", "name", "count", "color", "hoist", "permissions", "editable" })
+      roles_({ "id", "name", "count", "color", "hoist", "permissions", "editable" }),
+      pages_({ "id", "title", "kind", "updated" })
 {
     timer_.setInterval(1000);
     connect(&timer_, &QTimer::timeout, this, &Ponds::refresh);
@@ -107,6 +109,16 @@ QJsonObject Ponds::channelRow(const QJsonObject &c) const
 void Ponds::refresh()
 {
     refreshVoice();
+    // the open page has files on their way: look again every few seconds, until they are here
+    if (!page_.isEmpty() && ++pageTicks_ % 3 == 0) {
+        for (const QVariant &f : pageData_.value("files").toList()) {
+            const QString st = f.toMap().value("state").toString();
+            if (st == QLatin1String("downloading") || st == QLatin1String("waiting")) {
+                loadPage();
+                break;
+            }
+        }
+    }
     if (busyList_ || !api_->ready())
         return;
     busyList_ = true;
@@ -246,6 +258,22 @@ void Ponds::refreshPond()
         for (const QJsonValue &c : o.value("channels").toArray())
             channels.append(channelRow(c.toObject()));
         channels_.setItems(channels);
+        // the pages, in the Pond's order; the open one again if it changed, or the first channel if it went
+        QList<QJsonObject> pages;
+        bool pageThere = false;
+        for (const QJsonValue &pv : o.value("pages").toArray()) {
+            const QJsonObject po = pv.toObject();
+            const QString pid = QString::number(qint64(po.value("id").toDouble()));
+            pages.append({ { "id", pid }, { "title", po.value("title") }, { "kind", po.value("kind") }, { "updated", po.value("updated") } });
+            if (pid == page_) {
+                pageThere = true;
+                if (!pageData_.isEmpty() && qint64(po.value("updated").toDouble()) != qint64(pageData_.value("updated").toDouble()))
+                    loadPage();
+            }
+        }
+        pages_.setItems(pages);
+        if (!page_.isEmpty() && !pageThere)
+            closePage();
         info_ = o;
         // which roles we may change, give and move: below our highest, unless we have a rank
         const int mine = topOf(me_);
@@ -774,6 +802,8 @@ void Ponds::open(const QString &pondId)
     bans_.clear();
     invites_.clear();
     members_.clear();
+    pages_.clear();
+    closePage();
     generation_++;
     emit currentChanged();
     emit currentInfoChanged();
@@ -784,6 +814,7 @@ void Ponds::open(const QString &pondId)
 
 void Ponds::openChannel(const QString &channelId)
 {
+    closePage();
     if (channelId == channel_)
         return;
     channel_ = channelId;
@@ -804,6 +835,185 @@ void Ponds::openChannel(const QString &channelId)
 void Ponds::close()
 {
     open(QString());
+}
+
+// ---- pages ----
+
+void Ponds::openPage(const QString &pageId)
+{
+    if (pageId == page_)
+        return;
+    page_ = pageId;
+    pageData_.clear();
+    pageGen_++;
+    emit pageChanged();
+    emit pageDataChanged();
+    loadPage();
+}
+
+void Ponds::closePage()
+{
+    if (page_.isEmpty())
+        return;
+    page_.clear();
+    pageData_.clear();
+    pageGen_++;
+    emit pageChanged();
+    emit pageDataChanged();
+}
+
+void Ponds::loadPage()
+{
+    if (page_.isEmpty() || current_.isEmpty())
+        return;
+    const int gen = pageGen_;
+    api_->get(QStringLiteral("/api/v1/ponds/%1/pages/%2").arg(current_, page_), [this, gen](int status, const QJsonDocument &json) {
+        if (gen != pageGen_)
+            return;
+        if (status != 200) {
+            if (status == 404)
+                closePage();
+            return;
+        }
+        QVariantMap d = json.object().toVariantMap();
+        d.insert("id", QString::number(qint64(json.object().value("id").toDouble())));
+        d.insert("markdown", pageMarkdown(d.value("body").toString()));
+        d.insert("updatedBy", nameOf(d.value("updated_by").toString()));
+        pageData_ = d;
+        emit pageDataChanged();
+    });
+}
+
+QString Ponds::pageMarkdown(const QString &body) const
+{
+    QHash<QString, QString> ids;
+    for (const QJsonObject &c : channels_.items())
+        ids.insert(c.value("name").toString(), c.value("id").toString());
+    // a channel's name after # where a word can't go on: not a heading ("# Title"), not inside a word or a link
+    static const QRegularExpression name(QStringLiteral("(^|[\\s(,;:!?])#([a-z0-9-]{1,32})(?![a-z0-9-])"));
+    QStringList out;
+    bool fence = false;
+    for (const QString &line : body.split(u'\n')) {
+        if (line.trimmed().startsWith(QLatin1String("```"))) {
+            fence = !fence;
+            out << line;
+            continue;
+        }
+        if (fence) {
+            out << line;
+            continue;
+        }
+        // between backticks it stays as written
+        const QStringList parts = line.split(u'`');
+        QStringList done;
+        for (int i = 0; i < parts.size(); i++) {
+            QString part = parts.at(i);
+            if (i % 2 == 0) {
+                QString linked;
+                qsizetype at = 0;
+                auto it = name.globalMatch(part);
+                while (it.hasNext()) {
+                    const QRegularExpressionMatch m = it.next();
+                    const QString id = ids.value(m.captured(2));
+                    linked += part.mid(at, m.capturedStart(2) - 1 - at);
+                    linked += id.isEmpty() ? QStringLiteral("#") + m.captured(2) : QStringLiteral("[#%1](channel:%2)").arg(m.captured(2), id);
+                    at = m.capturedEnd(2);
+                }
+                part = linked + part.mid(at);
+            }
+            done << part;
+        }
+        out << done.join(u'`');
+    }
+    return out.join(u'\n');
+}
+
+void Ponds::createPage(const QString &title)
+{
+    const QString id = current_, t = title.trimmed();
+    if (id.isEmpty() || t.isEmpty())
+        return;
+    api_->post(QStringLiteral("/api/v1/ponds/%1/admin/pages/create").arg(id), QJsonObject{ { "title", t }, { "body", QString() } },
+               [this, id](int status, const QJsonDocument &json) {
+                   if (status != 200) {
+                       emit adminFailed(why(status, json, tr("make that page")));
+                       return;
+                   }
+                   emit adminDone(tr("Page made."));
+                   refreshPond();
+                   if (id == current_)
+                       openPage(QString::number(qint64(json.object().value("id").toDouble())));
+               });
+}
+
+void Ponds::savePage(const QString &pageId, const QString &title, const QString &body, const QVariantList &files)
+{
+    QJsonArray list;
+    for (const QVariant &f : files) {
+        const QVariantMap m = f.toMap();
+        QJsonObject o{ { "id", m.value("id").toString() }, { "name", m.value("name").toString() }, { "mime", m.value("mime").toString() },
+                       { "size", m.value("size").toDouble() } };
+        if (m.value("w").toInt() > 0 && m.value("h").toInt() > 0) {
+            o.insert("w", m.value("w").toInt());
+            o.insert("h", m.value("h").toInt());
+        }
+        list.append(o);
+    }
+    const QString id = current_;
+    api_->post(QStringLiteral("/api/v1/ponds/%1/admin/pages/%2/edit").arg(id, pageId),
+               QJsonObject{ { "title", title.trimmed() }, { "body", body }, { "files", list } }, [this, id](int status, const QJsonDocument &json) {
+                   if (status < 200 || status > 299) {
+                       emit adminFailed(json.object().value("message").toString().isEmpty() ? why(status, json, tr("save that page"))
+                                                                                           : json.object().value("message").toString());
+                       return;
+                   }
+                   emit adminDone(tr("Page saved."));
+                   if (id == current_) {
+                       emit pageSaved();
+                       loadPage();
+                       refreshPond();
+                   }
+               });
+}
+
+void Ponds::deletePage(const QString &pageId)
+{
+    admin(QStringLiteral("pages/%1/delete").arg(pageId), {}, tr("Page deleted."), tr("delete that page"));
+}
+
+void Ponds::movePage(const QString &pageId, int by)
+{
+    QStringList order;
+    for (const QJsonObject &p : pages_.items())
+        order << p.value("id").toString();
+    const int from = int(order.indexOf(pageId)), to = from + by;
+    if (from < 0 || to < 0 || to >= order.size())
+        return;
+    order.move(from, to);
+    QJsonArray ids;
+    for (const QString &p : order)
+        ids.append(p.toLongLong());
+    admin(QStringLiteral("pages/order"), { { "pages", ids } }, tr("Moved."), tr("move that page"));
+}
+
+void Ponds::fetchPageFile(const QString &fileId)
+{
+    if (page_.isEmpty() || current_.isEmpty())
+        return;
+    api_->post(QStringLiteral("/api/v1/ponds/%1/pages/%2/files/%3/download").arg(current_, page_, fileId), QJsonObject{},
+               [this](int status, const QJsonDocument &json) {
+                   if (status != 204 && status != 200)
+                       emit failed(why(status, json, tr("fetch that file")));
+                   else
+                       loadPage();
+               });
+}
+
+void Ponds::setBanner(const QString &hash)
+{
+    QJsonObject body;
+    body.insert("hash", hash.isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue(hash));
+    admin(QStringLiteral("banner"), body, hash.isEmpty() ? tr("Banner removed.") : tr("Banner set."), tr("change the banner"));
 }
 
 void Ponds::send(const QString &text)

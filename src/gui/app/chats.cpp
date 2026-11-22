@@ -1263,6 +1263,8 @@ struct Chats::FileSend {
     QString path;              // where the message goes, if not to `conversation` (a Pond channel)
     QVariantList files;        // as sendFiles was given them
     QStringList ids;           // each one's id, once uploaded
+    QJsonObject extra;         // the rest of the body, instead of `text` (a Pond page)
+    QJsonArray keep;           // files sent before, carried first (a Pond page)
 };
 
 static constexpr qint64 kChunk = 1 << 20; // the Puddle's chunk size (storage/files.h)
@@ -1287,6 +1289,17 @@ void Chats::sendFilesTo(const QString &path, const QString &text, const QVariant
     job->path = path;
     job->text = text.trimmed();
     job->files = files;
+    uploadFile(job, 0);
+}
+
+void Chats::sendFilesWith(const QString &path, const QVariantList &files, const QVariantMap &extra, const QVariantList &keep)
+{
+    auto job = std::make_shared<FileSend>();
+    job->path = path;
+    job->files = files;
+    job->extra = QJsonObject::fromVariantMap(extra);
+    for (const QVariant &k : keep)
+        job->keep.append(QJsonObject::fromVariantMap(k.toMap()));
     uploadFile(job, 0);
 }
 
@@ -1373,7 +1386,7 @@ void Chats::uploadChunk(std::shared_ptr<FileSend> job, int index, const QString 
 
 void Chats::sendWithFiles(std::shared_ptr<FileSend> job)
 {
-    QJsonArray files;
+    QJsonArray files = job->keep;
     for (int i = 0; i < job->files.size(); i++) {
         const QVariantMap f = job->files.at(i).toMap();
         QJsonObject o{ { "id", job->ids.at(i) }, { "name", f.value("name").toString() }, { "mime", f.value("mime").toString() } };
@@ -1387,14 +1400,15 @@ void Chats::sendWithFiles(std::shared_ptr<FileSend> job)
             o.insert("preview", f.value("preview").toString());
         files.append(o);
     }
-    QJsonObject o{ { "files", files } };
+    QJsonObject o = job->extra;
+    o.insert("files", files);
     if (!job->text.isEmpty())
         o.insert("body", job->text);
     if (!job->replyTo.isEmpty())
         o.insert("reply_to", job->replyTo);
     const QString to = job->path.isEmpty() ? path("conversations", job->conversation, "messages/send") : job->path;
     api_.post(to, o, [this, job](int status, const QJsonDocument &doc) {
-        if (status != 201 && status != 200) {
+        if (status != 201 && status != 200 && status != 204) {
             const QString code = doc.object().value("error").toString();
             emit filesFailed(code == QLatin1String("no_stream")   ? tr("You are not connected to them right now.")
                              : code == QLatin1String("too_large") ? tr("The Pond does not take files that large.")

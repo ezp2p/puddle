@@ -18,6 +18,14 @@ class Ponds : public QObject {
     Q_PROPERTY(QObject *channels READ channels CONSTANT)   // of the open Pond, in its order: id, name, topic, kind (text, voice), voice (who is in it: id, name, color, avatar, muted, deafened, isMe), restricted, roles (ids)
     Q_PROPERTY(QObject *members READ members CONSTANT)     // of the open Pond: id, name, color, avatar, isMe, role, muted, mutedUntil, roles (ids), group (the heading they are under: their highest role shown apart, or "Members"; "" when no role is shown apart)
     Q_PROPERTY(QObject *roles READ roles CONSTANT)         // the open Pond's roles, highest first: id, name, count (members holding it), color ("" none), hoist, permissions (names), editable (we may change, give and move it)
+    Q_PROPERTY(QObject *pages READ pages CONSTANT)         // the open Pond's pages, in its order: id, title, kind, updated (the Pond's docs/design.md, "Pages")
+    Q_PROPERTY(QString page READ page NOTIFY pageChanged)  // the open page's id; "" while a channel is shown
+    // the open page as the Pond gives it: id, title, kind, body, markdown (the body with #channel-name as links to "channel:<id>"),
+    // files (as a message's), updated, updatedBy (a name); empty until it comes
+    Q_PROPERTY(QVariantMap pageData READ pageData NOTIFY pageDataChanged)
+    Q_PROPERTY(bool canPages READ canPages NOTIFY currentInfoChanged)           // it has pages and a banner (`pages`)
+    Q_PROPERTY(bool canManagePages READ canManagePages NOTIFY currentInfoChanged)
+    Q_PROPERTY(QString currentBanner READ currentBanner NOTIFY currentInfoChanged) // its banner, a picture's hash; "" for none
     Q_PROPERTY(QObject *bans READ bans CONSTANT)           // of the open Pond, once loadBans() has asked: member, name, by, byName, reason, ts
     Q_PROPERTY(QObject *invites READ invites CONSTANT)     // of the open Pond, once loadInvites() has asked: token, link, uses, maxUses, expires, created
     Q_PROPERTY(QObject *messages READ messages CONSTANT)   // the open channel, oldest first: id, author, name, tint, avatar, text, files, ts, mine, grouped, dayStart
@@ -75,6 +83,12 @@ public:
     QObject *channels() { return &channels_; }
     QObject *members() { return &members_; }
     QObject *roles() { return &roles_; }
+    QObject *pages() { return &pages_; }
+    QString page() const { return page_; }
+    QVariantMap pageData() const { return pageData_; }
+    bool canPages() const { return info_.value("features").toArray().contains(QStringLiteral("pages")); }
+    bool canManagePages() const { return canPages() && may("manage_pages"); }
+    QString currentBanner() const { return info_.value("banner").toObject().value("hash").toString(); }
     QObject *bans() { return &bans_; }
     QObject *invites() { return &invites_; }
     QString currentRole() const { return info_.value("role").toString(QStringLiteral("member")); }
@@ -158,6 +172,17 @@ public:
     Q_INVOKABLE void editChannel(const QString &channelId, const QString &name, const QString &topic);
     Q_INVOKABLE void deleteChannel(const QString &channelId);
     // roles for channels, and the channels' order (the Pond's docs/design.md, "Roles for channels")
+    // ---- pages (the Pond's docs/design.md, "Pages") ----
+    Q_INVOKABLE void openPage(const QString &pageId);       // shown instead of the channel, until a channel is opened
+    Q_INVOKABLE void createPage(const QString &title);      // opened once made, to be written
+    // its title, its markdown, and the files it carries: those it had ({id, name, mime, size, ...}) and new ones from the composer
+    Q_INVOKABLE void savePage(const QString &pageId, const QString &title, const QString &body, const QVariantList &files);
+    Q_INVOKABLE void deletePage(const QString &pageId);
+    Q_INVOKABLE void movePage(const QString &pageId, int by); // -1 up, +1 down
+    Q_INVOKABLE void fetchPageFile(const QString &fileId);   // one of the open page's that did not come by itself
+    Q_INVOKABLE void setBanner(const QString &hash);        // a picture sent to our Puddle first; "" for none
+    // a page's markdown as shown: each #channel-name (a channel we see) a link to "channel:<id>", outside code
+    Q_INVOKABLE QString pageMarkdown(const QString &body) const;
     Q_INVOKABLE void createRole(const QString &name);
     Q_INVOKABLE void renameRole(const QString &roleId, const QString &name);
     // change what is in `changes`: name, color ("#rrggbb", "" for none), hoist, permissions (names)
@@ -211,6 +236,9 @@ signals:
     void adminFailed(const QString &why);
     void inviteMade(const QString &link);
     void listChanged();   // the rail's list was read again (names, icons)
+    void pageChanged();
+    void pageDataChanged();
+    void pageSaved();     // a save of the open page went through
 
 private:
     QSet<QString> blocked_;
@@ -225,12 +253,17 @@ private:
     QSet<QString> myPermissions() const;           // what our roles let us do there (not counting rank)
     int topOf(const QString &memberId) const;      // where their highest role is in the order: 0 the highest; INT_MAX none
     QString memberRole(const QString &memberId) const;
+    void loadPage();
+    void closePage();
+    QString page_;
+    QVariantMap pageData_;
+    int pageGen_ = 0, pageTicks_ = 0;
     void admin(const QString &path, const QJsonObject &body, const QString &done, const QString &doing, bool reloadBans = false,
                bool reloadInvites = false);
 
     ApiClient *api_;
     QTimer timer_;
-    JsonListModel list_, channels_, members_, messages_, bans_, invites_, roles_;
+    JsonListModel list_, channels_, members_, messages_, bans_, invites_, roles_, pages_;
     qint64 version_ = -1;
     QString current_, channel_, me_;
     QJsonObject info_;

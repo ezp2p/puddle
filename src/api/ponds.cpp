@@ -276,13 +276,13 @@ static int decline_offer(const puddle_call *c, puddle_jw *) { return answer_offe
 static int admin_pond(const puddle_call *c, puddle_jw *) { return relay(c, "POST", "/pond/v1/admin/pond", objectBody(c)); }
 /* {"hash": a picture this Puddle holds (POST /api/v1/media/upload), or null}: the Pond's icon. The picture is sent to the Pond
  * first (the Pond's docs/design.md, "Pictures"), then named as its icon. */
-static int admin_icon(const puddle_call *c, puddle_jw *)
+static int set_picture(const puddle_call *c, const std::string &target)
 {
     Body b(c);
     if (!b.has("hash"))
         throw Error::badRequest();
     if (b.isNull("hash"))
-        return relay(c, "POST", "/pond/v1/admin/icon", "{\"hash\":null}");
+        return relay(c, "POST", target, "{\"hash\":null}");
     std::string hash = b.string("hash", 64);
     if (!puddle_media_hash_valid(hash.c_str()))
         throw Error::badRequest();
@@ -301,8 +301,126 @@ static int admin_icon(const puddle_call *c, puddle_jw *)
     int status = ask(c, "POST", "/pond/v1/pictures", sent, said);
     if (status != 200)
         throw Error(502, "failed");
-    return relay(c, "POST", "/pond/v1/admin/icon", "{\"hash\":\"" + hash + "\"}");
+    return relay(c, "POST", target, "{\"hash\":\"" + hash + "\"}");
 }
+static int admin_icon(const puddle_call *c, puddle_jw *) { return set_picture(c, "/pond/v1/admin/icon"); }
+/* the same for its banner (a Pond of protocol 11; the Pond's docs/design.md, "Pages") */
+static int admin_banner(const puddle_call *c, puddle_jw *)
+{
+    if (!puddle_ponds_has_feature(pondsOf(c), puddle_param(c, "pond"), "pages"))
+        throw Error(409, "no_pages");
+    return set_picture(c, "/pond/v1/admin/banner");
+}
+
+/* ---- pages (the Pond's docs/design.md, "Pages") ---- */
+
+/* The page as the Pond gives it, asked each time it is opened: {id, title, kind, body, updated, updated_by, files}, each file a
+ * File with what is here of it. Files up to files.auto_download that are not here yet are fetched by themselves. */
+static int get_page(const puddle_call *c, puddle_jw *)
+{
+    const char *pond = puddle_param(c, "pond"), *page = puddle_param(c, "page");
+    if (!puddle_ponds_has_feature(pondsOf(c), pond, "pages"))
+        throw Error::notFound("no_page");
+    std::string text;
+    int status = ask(c, "GET", std::string("/pond/v1/pages/") + page, "", text);
+    if (status == 404)
+        throw Error::notFound("no_page");
+    if (status != 200 || !puddle_json_valid_object(text.data(), text.size()))
+        throw Error(502, "failed");
+    puddle_span all = {text.data(), text.size()}, files, v;
+    puddle_file_ref *refs = nullptr;
+    size_t n = 0;
+    if (puddle_json_member(all.p, all.len, "files", &files) == 0)
+        puddle_file_refs_parse(files.p, files.len, &refs, &n);
+    const int64_t autodl = puddle_files_auto_download(c->ctx->config), pid = strtoll(page, nullptr, 10);
+    for (size_t i = 0; i < n; i++) {
+        int64_t size = 0;
+        const char *code = "";
+        if (c->ctx->files && puddle_files_state(c->ctx->files, refs[i].id, &size, nullptr) != PUDDLE_FILE_WHOLE && refs[i].size <= autodl &&
+            c->ctx->courier && c->ctx->courier->pond_page_fetch)
+            c->ctx->courier->pond_page_fetch(c->ctx, pond, pid, refs[i].id, refs[i].size, &code);
+    }
+    int r = big_json(c, 200, [&](puddle_jw *w) {
+        puddle_jw_object(w);
+        for (const char *key : {"id", "title", "kind", "body", "updated", "updated_by"})
+            if (puddle_json_member(all.p, all.len, key, &v) == 0) {
+                puddle_jw_key(w, key);
+                puddle_jw_raw(w, v.p, v.len); /* from the Pond, valid JSON */
+            }
+        puddle_jw_key(w, "files");
+        puddle_jw_array(w);
+        for (size_t i = 0; i < n; i++)
+            File::of(c->ctx, refs[i]).write(w);
+        puddle_jw_end_array(w);
+        puddle_jw_end_object(w);
+        return 0;
+    });
+    free(refs);
+    return r;
+}
+
+/* Fetch a file a page carries that did not come by itself (over files.auto_download): the page says its size. */
+static int fetch_page_file(const puddle_call *c, puddle_jw *)
+{
+    const char *pond = puddle_param(c, "pond"), *page = puddle_param(c, "page"), *file = puddle_param(c, "file"), *code = "internal";
+    std::string text;
+    if (ask(c, "GET", std::string("/pond/v1/pages/") + page, "", text) != 200)
+        throw Error::notFound("no_page");
+    puddle_span files;
+    puddle_file_ref *refs = nullptr;
+    size_t n = 0;
+    int64_t size = 0;
+    if (puddle_json_member(text.data(), text.size(), "files", &files) == 0 && puddle_file_refs_parse(files.p, files.len, &refs, &n) == 0)
+        for (size_t i = 0; i < n; i++)
+            if (!strcmp(refs[i].id, file))
+                size = refs[i].size;
+    free(refs);
+    if (size <= 0)
+        throw Error::notFound("no_file");
+    if (size > puddle_files_max_size(c->ctx->config))
+        throw Error(409, "too_large");
+    if (!c->ctx->courier || !c->ctx->courier->pond_page_fetch ||
+        c->ctx->courier->pond_page_fetch(c->ctx, pond, strtoll(page, nullptr, 10), file, size, &code) != 0)
+        throw failure(code);
+    return 204;
+}
+
+/* {title?, kind?, body?, files?}: files as a message's (each here whole is sent to the Pond first; one that is not, the Pond
+ * should have already, from before) */
+static int page_write(const puddle_call *c, const std::string &target)
+{
+    const char *pond = puddle_param(c, "pond"), *code = "internal";
+    if (!puddle_ponds_has_feature(pondsOf(c), pond, "pages"))
+        throw Error(409, "no_pages");
+    std::string body = objectBody(c);
+    puddle_span files;
+    if (puddle_json_member(body.data(), body.size(), "files", &files) == 0) {
+        std::vector<puddle_file_ref> refs = filesOf(files), here;
+        for (auto &f : refs)
+            if (c->ctx->files && puddle_files_state(c->ctx->files, f.id, &f.size, nullptr) == PUDDLE_FILE_WHOLE)
+                here.push_back(f);
+        if (!here.empty()) {
+            std::string buf(here.size() * 4096 + 64, '\0');
+            puddle_jw fw;
+            puddle_jw_init(&fw, buf.data(), buf.size());
+            puddle_file_refs_write(&fw, here.data(), here.size());
+            const std::string list = buf.substr(0, puddle_jw_finish(&fw));
+            if (!c->ctx->courier || !c->ctx->courier->pond_upload || c->ctx->courier->pond_upload(c->ctx, pond, list.data(), list.size(), &code) != 0)
+                throw failure(code);
+        }
+    }
+    return relay(c, "POST", target, body);
+}
+static int admin_page_create(const puddle_call *c, puddle_jw *) { return page_write(c, "/pond/v1/admin/pages/create"); }
+static int admin_page_edit(const puddle_call *c, puddle_jw *)
+{
+    return page_write(c, std::string("/pond/v1/admin/pages/") + puddle_param(c, "page") + "/edit");
+}
+static int admin_page_delete(const puddle_call *c, puddle_jw *)
+{
+    return relay(c, "POST", std::string("/pond/v1/admin/pages/") + puddle_param(c, "page") + "/delete", "");
+}
+static int admin_page_order(const puddle_call *c, puddle_jw *) { return relay(c, "POST", "/pond/v1/admin/pages/order", objectBody(c)); }
 static int admin_channel_create(const puddle_call *c, puddle_jw *) { return relay(c, "POST", "/pond/v1/admin/channels/create", objectBody(c)); }
 static int admin_channel_edit(const puddle_call *c, puddle_jw *)
 {
@@ -511,6 +629,13 @@ const puddle_route puddle_pond_api_routes[] = {
     { "POST", POND "/offer/decline",                              PUDDLE_AUTH_OWNER, 64,    decline_offer,    NULL },
     { "POST", POND "/admin/pond",                                 PUDDLE_AUTH_OWNER, 8192,  admin_pond,       NULL },
     { "POST", POND "/admin/icon",                                 PUDDLE_AUTH_OWNER, 256,   admin_icon,       NULL },
+    { "POST", POND "/admin/banner",                               PUDDLE_AUTH_OWNER, 256,   admin_banner,     NULL },
+    { "GET",  POND "/pages/{page:num}",                           PUDDLE_AUTH_OWNER, 0,     get_page,         NULL },
+    { "POST", POND "/pages/{page:num}/files/{file:event}/download", PUDDLE_AUTH_OWNER, 64,  fetch_page_file,  NULL },
+    { "POST", POND "/admin/pages/create",                         PUDDLE_AUTH_OWNER, 300000, admin_page_create, NULL },
+    { "POST", POND "/admin/pages/order",                          PUDDLE_AUTH_OWNER, 4096,  admin_page_order, NULL },
+    { "POST", POND "/admin/pages/{page:num}/edit",                PUDDLE_AUTH_OWNER, 300000, admin_page_edit, NULL },
+    { "POST", POND "/admin/pages/{page:num}/delete",              PUDDLE_AUTH_OWNER, 64,    admin_page_delete, NULL },
     { "POST", POND "/admin/channels/create",                      PUDDLE_AUTH_OWNER, 4096,  admin_channel_create, NULL },
     { "POST", POND "/admin/channels/{channel:num}/edit",          PUDDLE_AUTH_OWNER, 4096,  admin_channel_edit,   NULL },
     { "POST", POND "/admin/channels/{channel:num}/delete",        PUDDLE_AUTH_OWNER, 64,    admin_channel_delete, NULL },

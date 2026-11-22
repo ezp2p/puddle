@@ -1467,6 +1467,64 @@ int main(int argc, char **argv)
             CHECK(place(chansA, "wranglers") >= 0);
             key(Qt::Key_Escape);
             settle(200);
+
+            /* pages (the Pond's docs/design.md, "Pages"): made from the + over the channels, written in markdown where #general
+             * becomes a link, with a file sent through our Puddle; Bob reads it, and its file comes to his Puddle. The banner,
+             * over the Pond's name. */
+            CHECK(P.canPages() && P.canManagePages() && !PB.canManagePages());
+            auto *pagesA = static_cast<JsonListModel *>(P.pages()), *pagesB = static_cast<JsonListModel *>(PB.pages());
+            CHECK(clickName("newPage"));
+            CHECK(until([&] { return find("newPageTitle") != nullptr; }, 3000));
+            find("newPageTitle")->setProperty("text", "Rules");
+            CHECK(clickName("createPage"));
+            CHECK(until([&] { return pagesA->rowCount() == 1 && !P.page().isEmpty() && find("pageEdit") && find("pageEdit")->isEnabled(); }, 10000));
+            const QString pageId = P.page();
+            CHECK(click(find("pageEdit")));
+            CHECK(until([&] { return find("pageBodyField") != nullptr; }, 3000));
+            if (find("pageBodyField"))
+                find("pageBodyField")->setProperty("text", "# Rules\n\nBe kind, and say hello in #general.\n\n`#general` stays as written.");
+            CHECK(clickName("pageSave"));
+            CHECK(until([&] { return P.pageData().value("markdown").toString().contains("[#general](channel:"); }, 10000));
+            CHECK(P.pageData().value("markdown").toString().contains("`#general` stays"));
+            CHECK(until([&] { QQuickItem *t = find("pageText"); return t && t->property("text").toString().contains("Be kind"); }, 5000));
+            /* a file with it, as the page's composer sends one */
+            {
+                QFile guide(home.path() + "/guide.txt");
+                CHECK(guide.open(QIODevice::WriteOnly) && guide.write("how to frog, a short guide") > 0);
+                guide.close();
+                QSignalSpy sent(&A, &Chats::filesSent);
+                A.sendFilesWith(QStringLiteral("/api/v1/ponds/%1/admin/pages/%2/edit").arg(pondId, pageId),
+                                { QVariantMap{ { "key", "g1" }, { "name", "guide.txt" }, { "mime", "text/plain" }, { "path", guide.fileName() } } },
+                                { { "title", "Rules" }, { "body", P.pageData().value("body").toString() } }, {});
+                CHECK(until([&] { return sent.count() == 1; }, 15000));
+            }
+            CHECK(until([&] { return pagesB->rowCount() == 1; }, 10000));
+            PB.openPage(pageId);
+            CHECK(until([&] {
+                const QVariantList f = PB.pageData().value("files").toList();
+                return f.size() == 1 && f.at(0).toMap().value("name").toString() == "guide.txt" && f.at(0).toMap().value("state").toString() == "available";
+            }, 20000));
+            /* the link opens the channel */
+            CHECK(until([&] { QQuickItem *t = find("pageText"); return t && t->property("text").toString().contains("Be kind"); }, 10000));
+            settle(300);
+            if (!shot.isEmpty())
+                win->grabWindow().save(shot + "-pond-page.png");
+            const QString general = row(chansA, "name", "general").value("id").toString();
+            QMetaObject::invokeMethod(find("pageText"), "linkActivated", Q_ARG(QString, "channel:" + general));
+            CHECK(until([&] { return P.page().isEmpty() && P.channel() == general; }, 3000));
+            /* the banner */
+            P.setBanner(icon);
+            CHECK(until([&] { return PB.currentBanner() == icon; }, 15000));
+            CHECK(until([&] { QQuickItem *b = find("pondBanner"); return b && b->property("ready").toBool(); }, 15000));
+            P.openPage(pageId);
+            settle(500);
+            CHECK(until([&] { QQuickItem *b = find("pondBanner"); return b && b->property("ready").toBool(); }, 15000));
+            if (!shot.isEmpty())
+                win->grabWindow().save(shot + "-pond-banner.png");
+            P.setBanner("");
+            CHECK(until([&] { return P.currentBanner().isEmpty(); }, 10000));
+            P.deletePage(pageId);
+            CHECK(until([&] { return pagesA->rowCount() == 0 && P.page().isEmpty(); }, 10000));
         }
         /* ---- a direct message through the Pond (docs/pond-dms.md): "Bob @ <Pond>", sealed from one Puddle to the other, with a
          * banner saying so; Bob offers to be friends ---- */

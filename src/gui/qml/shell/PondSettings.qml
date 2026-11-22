@@ -30,14 +30,22 @@ Popup {
         nameFilters: [qsTr("Pictures (*.png *.jpg *.jpeg *.gif *.webp)")]
         onAccepted: { settings.iconBusy = true; settings.chats.uploadPicture(selectedFile, "pond-icon") }
     }
+    FileDialog {
+        id: bannerPicker
+        title: qsTr("Choose a banner")
+        nameFilters: [qsTr("Pictures (*.png *.jpg *.jpeg *.gif *.webp)")]
+        onAccepted: { settings.iconBusy = true; settings.chats.uploadPicture(selectedFile, "pond-banner") }
+    }
     Connections {
         target: settings.chats
         function onPictureUploaded(slot, hash, error) {
-            if (slot !== "pond-icon")
+            if (slot !== "pond-icon" && slot !== "pond-banner")
                 return
             settings.iconBusy = false
             if (error !== "")
                 settings.say(error, true)
+            else if (slot === "pond-banner")
+                settings.ponds.setBanner(hash)
             else
                 settings.ponds.setIcon(hash)
         }
@@ -113,8 +121,9 @@ Popup {
         { id: "manage_invites", title: qsTr("Manage invites"), note: qsTr("See, make and revoke invites.") },
         { id: "kick_members", title: qsTr("Kick members"), note: qsTr("Remove members below them, who can come back with an invite.") },
         { id: "ban_members", title: qsTr("Ban members"), note: qsTr("Ban members below them, see the bans, and unban.") },
-        { id: "mute_members", title: qsTr("Mute members"), note: qsTr("Mute members below them, for a while or until unmuted.") }
-    ]
+        { id: "mute_members", title: qsTr("Mute members"), note: qsTr("Mute members below them, for a while or until unmuted.") },
+        { id: "manage_pages", title: qsTr("Manage pages"), note: qsTr("Make, edit, order and delete the pages above the channels.") }
+    ].filter(p => p.id !== "manage_pages" || ponds.canPages)
     function permissionTitles(ids) {
         const out = []
         for (const p of permissionList)
@@ -300,6 +309,54 @@ Popup {
                                             text: qsTr("Remove")
                                             enabled: settings.ponds.currentIcon !== "" && !settings.iconBusy
                                             onClicked: settings.ponds.setIcon("")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // the banner (protocol 11): over the Pond's name, above its pages and channels
+                        SettingsGroup {
+                            title: qsTr("Banner")
+                            Layout.fillWidth: true
+                            visible: settings.ponds.canPages
+                            RowLayout {
+                                spacing: 16
+                                Rectangle {
+                                    width: 160; height: 64; radius: Theme.radius
+                                    color: Theme.tint(Theme.text, Theme.selected)
+                                    Avatar {
+                                        id: bannerNow
+                                        objectName: "pondSettingsBanner"
+                                        anchors.fill: parent
+                                        chats: settings.chats
+                                        name: ""
+                                        hash: settings.ponds.currentBanner
+                                        tint: "transparent"
+                                        radius: parent.radius
+                                        visible: hash !== "" && ready
+                                    }
+                                    Icon { visible: !bannerNow.visible; anchors.centerIn: parent; glyph: "photo"; size: 22; opacity: 0.5 }
+                                }
+                                ColumnLayout {
+                                    spacing: 6
+                                    Label {
+                                        text: qsTr("Shown over the Pond's name, above its pages and channels. A wide picture works best (about 5 by 2).")
+                                        wrapMode: Text.Wrap; opacity: 0.7; font.pixelSize: 12
+                                        Layout.fillWidth: true; Layout.maximumWidth: 360
+                                    }
+                                    RowLayout {
+                                        spacing: 8
+                                        PrimaryButton {
+                                            objectName: "changePondBanner"
+                                            text: settings.iconBusy ? qsTr("Sending…") : qsTr("Change banner")
+                                            enabled: !settings.iconBusy
+                                            onClicked: bannerPicker.open()
+                                        }
+                                        Button {
+                                            objectName: "removePondBanner"
+                                            text: qsTr("Remove")
+                                            enabled: settings.ponds.currentBanner !== "" && !settings.iconBusy
+                                            onClicked: settings.ponds.setBanner("")
                                         }
                                     }
                                 }
