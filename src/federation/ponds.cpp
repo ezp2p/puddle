@@ -805,9 +805,11 @@ static int ask_follower(puddle_ctx *ctx, const char *id, bool profile)
 
 /* ---------------------------------------------------------------- what the owner does */
 
-int puddle_pond_join(puddle_ctx *ctx, const puddle_link *link, const char *profile_id, char out_id[PUDDLE_USER_ID_LEN + 1],
-                     const char **code)
+int puddle_pond_join(puddle_ctx *ctx, const puddle_link *link, const char *profile_id, const char *answers, char out_id[PUDDLE_USER_ID_LEN + 1],
+                     const char **code, char **detail)
 {
+    if (detail)
+        *detail = NULL;
     if (!ctx->ponds || !link->invite[0]) {
         *code = "failed";
         return -1;
@@ -835,10 +837,36 @@ int puddle_pond_join(puddle_ctx *ctx, const puddle_link *link, const char *profi
         *code = "bad_link"; /* an invite names the Pond by its sealing key; without it the join could be read on the way */
         return -1;
     }
+    puddle_net_reply r;
+    /* an entry form answered (the Pond's docs/design.md, "Entry form"): the application goes first, then the join says where it is */
+    if (answers) {
+        std::string apply = body.substr(0, n - 1) + ",\"answers\":" + answers + "}";
+        Call ac;
+        ac.seal_key = link->key;
+        pond_call(ctx, &link->address, PUDDLE_RECIPIENT_ANY, "POST", "/pond/v1/apply", apply, 1u << 20, 30, &ac, &r);
+        const int st = r.status;
+        if (r.result == PUDDLE_NET_OK && (st == 400 || (st == 409 && r.body && !strstr(r.body, "application_pending")))) {
+            *code = st == 400 ? "bad_answers" : "application_refused";
+            if (detail && r.body)
+                *detail = strndup(r.body, r.body_len);
+            puddle_net_reply_free(&r);
+            return -1;
+        }
+        puddle_net_reply_free(&r);
+    }
     Call call; /* first contact: sealed to the key the invite gave; its signing key comes in the answer */
     call.seal_key = link->key;
-    puddle_net_reply r;
     pond_call(ctx, &link->address, PUDDLE_RECIPIENT_ANY, "POST", "/pond/v1/join", body.substr(0, n), 1u << 20, 30, &call, &r);
+    if (r.result == PUDDLE_NET_OK && r.status == 409 && r.body) { /* it asks for an application, or has one */
+        for (const char *c : {"application_required", "application_pending", "application_declined"})
+            if (memmem(r.body, r.body_len, c, strlen(c))) {
+                *code = c;
+                if (detail)
+                    *detail = strndup(r.body, r.body_len);
+                puddle_net_reply_free(&r);
+                return -1;
+            }
+    }
     int rc = -1;
     if (r.result != PUDDLE_NET_OK || (r.status != 200 && r.status != 404))
         puddle_log(PUDDLE_LOG_WARN, "joining the pond at %s: %s%s(HTTP %d)", link->address.address, r.reason, r.reason[0] ? " " : "",
@@ -1131,7 +1159,8 @@ int puddle_pond_admin(puddle_ctx *ctx, const char *pond, const char *method, con
                       int *status, char **reply, size_t *reply_len, const char **code)
 {
     if (strncmp(target, "/pond/v1/admin/", 15) != 0 && strcmp(target, "/pond/v1/roles/answer") != 0 && strcmp(target, "/pond/v1/pictures") != 0 &&
-        strncmp(target, "/pond/v1/pages/", 15) != 0 && strcmp(target, "/pond/v1/role_color") != 0) {
+        strncmp(target, "/pond/v1/pages/", 15) != 0 && strcmp(target, "/pond/v1/role_color") != 0 && strcmp(target, "/pond/v1/orders") != 0 &&
+        strncmp(target, "/pond/v1/voice/members/", 23) != 0) {
         *code = "failed";
         return -1;
     }

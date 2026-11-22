@@ -39,12 +39,19 @@ struct Msg {
     std::string files; /* the cleaned "files" array, or "" for none */
 };
 
+/* What a channel allows and denies one role, or everyone (role 0): permission names (the Pond's docs/design.md, "Permissions") */
+struct ChannelOverride {
+    int64_t role = 0;
+    std::vector<std::string> allow, deny;
+};
+
 struct Channel {
     int64_t id = 0, position = 0;
     std::string name, topic;
     bool voice = false;     /* a voice channel (the Pond's docs/voice.md); text otherwise, and before protocol 4 */
     bool restricted = false;    /* not open to everyone: operators, administrators and those with one of `roles` (protocol 9) */
     std::vector<int64_t> roles; /* the roles for channels that may see it */
+    std::vector<ChannelOverride> overrides; /* what it allows and denies each role, 0 everyone (protocol 13) */
     std::deque<Msg> recent; /* oldest first */
     bool filled = false;    /* the newest messages are held (so new ones can simply be added) */
     bool complete = false;  /* everything back to the channel's first message is held */
@@ -77,6 +84,8 @@ struct PondPage {
     int64_t id = 0;
     std::string title, kind;
     int64_t updated = 0;
+    bool restricted = false;    /* for some roles only (protocol 13) */
+    std::vector<int64_t> roles;
 };
 #define MAX_PAGES 50
 #define PAGE_TITLE_MAX 64
@@ -87,6 +96,7 @@ struct InVoice {
     int64_t channel = 0, slot = 0;
     std::string member;
     bool muted = false, deafened = false, camera = false, screen = false;
+    bool server_muted = false, speak = true, video = true; /* by a moderator; what the channel lets them do (protocol 13) */
 };
 
 struct Pond {
@@ -110,6 +120,12 @@ struct Pond {
     std::vector<InVoice> voice;
     std::vector<PondRole> roles; /* protocol 9 */
     std::vector<PondPage> pages; /* protocol 11, in the Pond's order */
+    std::vector<std::string> everyone; /* what everyone may do (protocol 13); empty with `everyone_said` false: it doesn't say */
+    bool everyone_said = false;
+    int shop_payments = -1;      /* the shop takes payments: 1, 0, -1 it doesn't say (protocol 13) */
+    bool shop_test = true;
+    int64_t voice_kicks = 0;     /* times a moderator disconnected us from voice, since this Puddle started */
+    std::string voice_kicked_by;
 };
 
 } // namespace
@@ -187,6 +203,97 @@ static void write_ids(puddle_jw *w, const char *key, const std::vector<int64_t> 
     puddle_jw_end_array(w);
 }
 
+/* `key`: permission names ([a-z_], up to 32 each, up to 32 of them), into `out`; false if it is not an array */
+static bool get_names(puddle_span obj, const char *key, std::vector<std::string> &out)
+{
+    puddle_span arr, item;
+    out.clear();
+    if (!member(obj, key, &arr) || !arr.len || *arr.p != '[')
+        return false;
+    size_t cur = 0;
+    while (puddle_json_array_next(arr, &cur, &item) == 1 && out.size() < 32) {
+        char name[33];
+        if (puddle_json_string(item, name, sizeof name) == 0 && name[0] &&
+            std::all_of(name, name + strlen(name), [](char c) { return (c >= 'a' && c <= 'z') || c == '_'; }))
+            out.push_back(name);
+    }
+    return true;
+}
+
+static void write_names(puddle_jw *w, const char *key, const std::vector<std::string> &names)
+{
+    puddle_jw_key(w, key);
+    puddle_jw_array(w);
+    for (auto &n : names)
+        puddle_jw_string(w, n.c_str());
+    puddle_jw_end_array(w);
+}
+
+static void parse_overrides(puddle_span v, std::vector<ChannelOverride> &out)
+{
+    puddle_span arr, item;
+    out.clear();
+    size_t cur = 0;
+    if (!member(v, "overrides", &arr) || !arr.len || *arr.p != '[')
+        return;
+    while (puddle_json_array_next(arr, &cur, &item) == 1 && out.size() <= MAX_ROLES) {
+        ChannelOverride o;
+        if (get_int(item, "role", &o.role) && o.role >= 0) {
+            get_names(item, "allow", o.allow);
+            get_names(item, "deny", o.deny);
+            out.push_back(std::move(o));
+        }
+    }
+}
+
+static void write_overrides(puddle_jw *w, const std::vector<ChannelOverride> &list)
+{
+    puddle_jw_key(w, "overrides");
+    puddle_jw_array(w);
+    for (auto &o : list) {
+        puddle_jw_object(w);
+        puddle_jw_num(w, "role", o.role);
+        write_names(w, "allow", o.allow);
+        write_names(w, "deny", o.deny);
+        puddle_jw_end_object(w);
+    }
+    puddle_jw_end_array(w);
+}
+
+static bool get_flag(puddle_span obj, const char *key);
+static bool get_flag_false(puddle_span obj, const char *key);
+
+/* the pond's `everyone` and `shop` (protocol 13) */
+static void parse_everyone(puddle_span pond, Pond &pd)
+{
+    puddle_span e, sh;
+    pd.everyone_said = member(pond, "everyone", &e) && e.len && *e.p == '{' && get_names(e, "permissions", pd.everyone);
+    if (!pd.everyone_said)
+        pd.everyone.clear();
+    pd.shop_payments = -1;
+    if (member(pond, "shop", &sh) && sh.len && *sh.p == '{') {
+        pd.shop_payments = get_flag(sh, "payments") ? 1 : 0;
+        pd.shop_test = !get_flag_false(sh, "test");
+    }
+}
+
+static void write_everyone(puddle_jw *w, const Pond &pd)
+{
+    if (pd.everyone_said) {
+        puddle_jw_key(w, "everyone");
+        puddle_jw_object(w);
+        write_names(w, "permissions", pd.everyone);
+        puddle_jw_end_object(w);
+    }
+    if (pd.shop_payments >= 0) {
+        puddle_jw_key(w, "shop");
+        puddle_jw_object(w);
+        puddle_jw_flag(w, "payments", pd.shop_payments);
+        puddle_jw_flag(w, "test", pd.shop_test);
+        puddle_jw_end_object(w);
+    }
+}
+
 /* "roles": [{id, name, color, hoist, permissions}] as /info says them, or a `role` event's */
 static bool parse_role(puddle_span v, PondRole &r)
 {
@@ -255,6 +362,7 @@ static bool parse_channel(puddle_span v, Channel &c)
     std::string kind;
     c.voice = get_text(v, "kind", 8, 0, kind) && kind == "voice"; /* anything else, or none, is text */
     c.restricted = get_ids(v, "roles", c.roles); /* null or none: open to everyone */
+    parse_overrides(v, c.overrides);
     return get_int(v, "id", &c.id) && c.id > 0 && get_text(v, "name", CHANNEL_NAME_MAX, 0, c.name) && channel_name_ok(c.name) &&
            get_text(v, "topic", TOPIC_MAX_CHARS, 0, c.topic) && get_int(v, "position", &c.position);
 }
@@ -276,6 +384,7 @@ static bool parse_in_voice(puddle_span v, InVoice &out)
 {
     out.muted = get_flag(v, "muted"), out.deafened = get_flag(v, "deafened"), out.camera = get_flag(v, "camera"),
     out.screen = get_flag(v, "screen");
+    out.server_muted = get_flag(v, "server_muted"), out.speak = !get_flag_false(v, "speak"), out.video = !get_flag_false(v, "video");
     return get_int(v, "channel", &out.channel) && out.channel > 0 && get_text(v, "member", PUDDLE_USER_ID_LEN, 0, out.member) &&
            puddle_id_valid(out.member.c_str()) && get_int(v, "slot", &out.slot) && out.slot > 0 && out.slot <= 65535;
 }
@@ -429,6 +538,7 @@ static bool parse_page(puddle_span v, PondPage &pg)
         !get_text(v, "kind", 16, 0, pg.kind) || pg.kind.empty())
         return false;
     get_int(v, "updated", &pg.updated);
+    pg.restricted = get_ids(v, "roles", pg.roles);
     return std::all_of(pg.kind.begin(), pg.kind.end(), [](char c) { return (c >= 'a' && c <= 'z') || c == '_'; });
 }
 
@@ -455,6 +565,8 @@ static void write_pages(puddle_jw *w, const Pond &pd)
         puddle_jw_str(w, "title", pg.title.c_str());
         puddle_jw_str(w, "kind", pg.kind.c_str());
         puddle_jw_num(w, "updated", pg.updated);
+        if (pg.restricted)
+            write_ids(w, "roles", pg.roles);
         puddle_jw_end_object(w);
     }
     puddle_jw_end_array(w);
@@ -542,6 +654,7 @@ static bool parse_info(puddle_ponds *p, const char *json, size_t len, Pond &pd, 
     parse_files_max(pond, pd);
     parse_dms(pond, pd);
     parse_role_colors(pond, pd);
+    parse_everyone(pond, pd);
     parse_icon(pond, pd);
     parse_offer(all, pd);
     parse_roles(all, pd);
@@ -644,6 +757,8 @@ static void write_channel(puddle_jw *w, const Channel &c)
         puddle_jw_str(w, "kind", "voice");
     if (c.restricted)
         write_ids(w, "roles", c.roles);
+    if (!c.overrides.empty())
+        write_overrides(w, c.overrides);
     puddle_jw_end_object(w);
 }
 
@@ -781,6 +896,7 @@ static void save_pond(puddle_ponds *p, const Pond &pd)
         write_dms(w, pd);
         if (pd.role_colors_enforced)
             puddle_jw_str(w, "role_colors", "enforced");
+        write_everyone(w, pd);
         if (!pd.icon.empty()) {
             puddle_jw_key(w, "icon");
             puddle_jw_raw(w, pd.icon.c_str(), pd.icon.size());
@@ -1047,6 +1163,8 @@ int puddle_ponds_info(puddle_ponds *p, const char *id, const char *info, size_t 
     pd.files_max = fresh.files_max;
     pd.dms = fresh.dms, pd.dm_files_max = fresh.dm_files_max;
     pd.role_colors_enforced = fresh.role_colors_enforced;
+    pd.everyone = fresh.everyone, pd.everyone_said = fresh.everyone_said;
+    pd.shop_payments = fresh.shop_payments, pd.shop_test = fresh.shop_test;
     pd.icon = fresh.icon;
     pd.banner = fresh.banner;
     pd.pages = std::move(fresh.pages);
@@ -1236,6 +1354,11 @@ int puddle_ponds_events(puddle_ponds *p, const char *id, const char *json, size_
                     pd.pages.push_back(std::move(n));
                 pond_changed = true;
             }
+        } else if (kind == "pages") { /* every page we see now, in order (protocol 13) */
+            parse_pages(data, pd);
+            pond_changed = true;
+        } else if (kind == "order" || kind == "orders" || kind == "applications") { /* the app looks again */
+            pond_changed = true;
         } else if (kind == "page_deleted") {
             int64_t pid;
             if (get_int(data, "id", &pid)) {
@@ -1320,6 +1443,9 @@ int puddle_ponds_events(puddle_ponds *p, const char *id, const char *json, size_
             std::string mid;
             int64_t cid;
             if (get_text(data, "member", PUDDLE_USER_ID_LEN, 0, mid) && get_int(data, "channel", &cid)) {
+                std::string by;
+                if (mid == pd.me && get_text(data, "by", PUDDLE_USER_ID_LEN, 0, by) && puddle_id_valid(by.c_str())) /* a moderator's doing */
+                    pd.voice_kicks++, pd.voice_kicked_by = by;
                 pd.voice.erase(std::remove_if(pd.voice.begin(), pd.voice.end(),
                                               [&](const InVoice &v) { return v.member == mid && v.channel == cid; }),
                                pd.voice.end());
@@ -1340,6 +1466,7 @@ int puddle_ponds_events(puddle_ponds *p, const char *id, const char *json, size_
             parse_files_max(data, pd);
             parse_dms(data, pd);
             parse_role_colors(data, pd);
+            parse_everyone(data, pd);
             parse_icon(data, pd);
             pond_changed = true;
         }
@@ -1429,6 +1556,7 @@ static void write_summary(puddle_jw *w, const Pond &pd)
     write_files_max(w, pd);
     write_dms(w, pd);
     puddle_jw_str(w, "role_colors", pd.role_colors_enforced ? "enforced" : "choice");
+    write_everyone(w, pd);
     puddle_jw_key(w, "icon");
     if (pd.icon.empty())
         puddle_jw_null(w);
@@ -1467,6 +1595,9 @@ static void write_summary(puddle_jw *w, const Pond &pd)
                     puddle_jw_flag(w, "deafened", v.deafened);
                     puddle_jw_flag(w, "camera", v.camera);
                     puddle_jw_flag(w, "screen", v.screen);
+                    puddle_jw_flag(w, "server_muted", v.server_muted);
+                    puddle_jw_flag(w, "speak", v.speak);
+                    puddle_jw_flag(w, "video", v.video);
                     puddle_jw_end_object(w);
                 }
             puddle_jw_end_array(w);
@@ -1581,6 +1712,13 @@ int puddle_ponds_has_feature(puddle_ponds *p, const char *id, const char *featur
     std::lock_guard<std::mutex> g(p->mu);
     auto it = p->ponds.find(id);
     return it != p->ponds.end() && std::find(it->second.features.begin(), it->second.features.end(), feature) != it->second.features.end();
+}
+
+int64_t puddle_ponds_voice_kicks(puddle_ponds *p, const char *id)
+{
+    std::lock_guard<std::mutex> g(p->mu);
+    auto it = p->ponds.find(id);
+    return it == p->ponds.end() ? 0 : it->second.voice_kicks;
 }
 
 int puddle_ponds_voice_member(puddle_ponds *p, const char *id, int64_t channel, int slot, char out[PUDDLE_USER_ID_LEN + 1])

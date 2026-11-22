@@ -96,11 +96,40 @@ static int join_pond(const puddle_call *c, puddle_jw *)
     char err[160];
     if (puddle_pond_link_parse(text.c_str(), &link, err, sizeof err) != 0)
         throw Error::badRequest("bad_link", err);
+    /* an entry form's answers (the Pond's docs/design.md, "Entry form"): {question id: text, or [choices]} */
+    std::string answers;
+    if (b.has("answers") && !b.isNull("answers")) {
+        puddle_span v = b.raw("answers");
+        if (!v.len || *v.p != '{' || v.len > 200000)
+            throw Error::badRequest("bad_answers");
+        answers.assign(v.p, v.len);
+    }
     char id[PUDDLE_USER_ID_LEN + 1];
     const char *code = "internal";
+    char *detail = nullptr;
     if (!c->ctx->courier || !c->ctx->courier->pond_join ||
-        c->ctx->courier->pond_join(c->ctx, &link, profile ? profile->c_str() : nullptr, id, &code) != 0)
+        c->ctx->courier->pond_join(c->ctx, &link, profile ? profile->c_str() : nullptr, answers.empty() ? nullptr : answers.c_str(), id, &code,
+                                   &detail) != 0) {
+        /* an application: what the Pond said goes to the app as it is, with our code ({error, form?, reason?}) */
+        if (detail && (!strncmp(code, "application_", 12) || !strcmp(code, "bad_answers"))) {
+            std::string said(detail);
+            free(detail);
+            const int status = strcmp(code, "bad_answers") == 0 ? 400 : 409;
+            return big_json(c, status, [&](puddle_jw *w) {
+                puddle_jw_object(w);
+                puddle_jw_str(w, "error", code);
+                puddle_jw_key(w, "pond");
+                if (puddle_json_valid_object(said.data(), said.size()))
+                    puddle_jw_raw(w, said.data(), said.size());
+                else
+                    puddle_jw_null(w);
+                puddle_jw_end_object(w);
+                return 0;
+            });
+        }
+        free(detail);
         throw failure(code);
+    }
     return big_json(c, 201, [&](puddle_jw *w) { return puddle_ponds_write_one(p, id, w); });
 }
 
@@ -359,7 +388,7 @@ static int get_page(const puddle_call *c, puddle_jw *)
     }
     int r = big_json(c, 200, [&](puddle_jw *w) {
         puddle_jw_object(w);
-        for (const char *key : {"id", "title", "kind", "body", "updated", "updated_by"})
+        for (const char *key : {"id", "title", "kind", "body", "updated", "updated_by", "roles", "data", "mine", "events", "items", "payments"})
             if (puddle_json_member(all.p, all.len, key, &v) == 0) {
                 puddle_jw_key(w, key);
                 puddle_jw_raw(w, v.p, v.len); /* from the Pond, valid JSON */
@@ -484,6 +513,18 @@ static int admin_channel_roles(const puddle_call *c, puddle_jw *)
 static int admin_channel_order(const puddle_call *c, puddle_jw *) { return relay(c, "POST", "/pond/v1/admin/channels/order", objectBody(c)); }
 static int admin_role_order(const puddle_call *c, puddle_jw *) { return relay(c, "POST", "/pond/v1/admin/roles/order", objectBody(c)); }
 static int admin_bans(const puddle_call *c, puddle_jw *) { return relay(c, "GET", "/pond/v1/admin/bans", ""); }
+
+/* The Pond's own route for this one: /api/v1/ponds/{pond}/<rest> is /pond/v1/<rest>, with the same body (protocol 13: page
+ * kinds, the shop, applications, permissions, voice moderation; each checked by the Pond) */
+static std::string same_route(const puddle_call *c)
+{
+    const std::string path = c->req->path, prefix = std::string("/api/v1/ponds/") + puddle_param(c, "pond") + "/";
+    if (path.compare(0, prefix.size(), prefix) != 0)
+        throw Error::notFound();
+    return "/pond/v1/" + path.substr(prefix.size());
+}
+static int pass_get(const puddle_call *c, puddle_jw *) { return relay(c, "GET", same_route(c), ""); }
+static int pass_post(const puddle_call *c, puddle_jw *) { return relay(c, "POST", same_route(c), objectBody(c)); }
 static int admin_invites(const puddle_call *c, puddle_jw *) { return relay(c, "GET", "/pond/v1/admin/invites", ""); }
 static int admin_invite_create(const puddle_call *c, puddle_jw *) { return relay(c, "POST", "/pond/v1/admin/invites/create", objectBody(c)); }
 static int admin_invite_revoke(const puddle_call *c, puddle_jw *)
@@ -649,6 +690,26 @@ const puddle_route puddle_pond_api_routes[] = {
     { "POST", POND "/admin/banner",                               PUDDLE_AUTH_OWNER, 256,   admin_banner,     NULL },
     { "POST", POND "/admin/role_colors",                          PUDDLE_AUTH_OWNER, 64,    admin_role_colors, NULL },
     { "POST", POND "/role_color",                                 PUDDLE_AUTH_OWNER, 64,    role_color,       NULL },
+    /* protocol 13, as the Pond has them (pass_get, pass_post) */
+    { "POST", POND "/admin/everyone",                             PUDDLE_AUTH_OWNER, 4096,  pass_post,        NULL },
+    { "POST", POND "/admin/channels/{channel:num}/overrides",     PUDDLE_AUTH_OWNER, 65536, pass_post,        NULL },
+    { "POST", POND "/admin/shop/stripe",                          PUDDLE_AUTH_OWNER, 1024,  pass_post,        NULL },
+    { "GET",  POND "/admin/orders",                               PUDDLE_AUTH_OWNER, 0,     pass_get,         NULL },
+    { "GET",  POND "/orders",                                     PUDDLE_AUTH_OWNER, 0,     pass_get,         NULL },
+    { "GET",  POND "/admin/applications",                         PUDDLE_AUTH_OWNER, 0,     pass_get,         NULL },
+    { "POST", POND "/admin/applications/{member:id}/accept",      PUDDLE_AUTH_OWNER, 64,    pass_post,        NULL },
+    { "POST", POND "/admin/applications/{member:id}/decline",     PUDDLE_AUTH_OWNER, 2048,  pass_post,        NULL },
+    { "POST", POND "/admin/pages/{page:num}/events/create",       PUDDLE_AUTH_OWNER, 16384, pass_post,        NULL },
+    { "POST", POND "/admin/pages/{page:num}/events/{event:num}/edit", PUDDLE_AUTH_OWNER, 16384, pass_post,    NULL },
+    { "POST", POND "/admin/pages/{page:num}/events/{event:num}/delete", PUDDLE_AUTH_OWNER, 64, pass_post,     NULL },
+    { "POST", POND "/admin/pages/{page:num}/items/create",        PUDDLE_AUTH_OWNER, 16384, pass_post,        NULL },
+    { "POST", POND "/admin/pages/{page:num}/items/{item:num}/edit", PUDDLE_AUTH_OWNER, 16384, pass_post,      NULL },
+    { "POST", POND "/admin/pages/{page:num}/items/{item:num}/delete", PUDDLE_AUTH_OWNER, 64, pass_post,       NULL },
+    { "POST", POND "/pages/{page:num}/roles",                     PUDDLE_AUTH_OWNER, 4096,  pass_post,        NULL },
+    { "POST", POND "/pages/{page:num}/events/{event:num}/going",  PUDDLE_AUTH_OWNER, 64,    pass_post,        NULL },
+    { "POST", POND "/pages/{page:num}/items/{item:num}/buy",      PUDDLE_AUTH_OWNER, 256,   pass_post,        NULL },
+    { "POST", POND "/voice/members/{member:id}/mute",             PUDDLE_AUTH_OWNER, 64,    pass_post,        NULL },
+    { "POST", POND "/voice/members/{member:id}/disconnect",       PUDDLE_AUTH_OWNER, 64,    pass_post,        NULL },
     { "GET",  POND "/pages/{page:num}",                           PUDDLE_AUTH_OWNER, 0,     get_page,         NULL },
     { "POST", POND "/pages/{page:num}/files/{file:event}/download", PUDDLE_AUTH_OWNER, 64,  fetch_page_file,  NULL },
     { "POST", POND "/admin/pages/create",                         PUDDLE_AUTH_OWNER, 300000, admin_page_create, NULL },
