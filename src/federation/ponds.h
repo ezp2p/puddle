@@ -19,8 +19,8 @@ extern "C" {
  * followed from now on. 0, or -1 with `code`: "unreachable" (nobody answered), "not_a_pond" (something answered, but not a
  * Pond), "invite_refused" (the Pond did not accept the invite: unknown, used up, expired or revoked; it does not say which),
  * "no_profile", "failed". */
-int puddle_pond_join(puddle_ctx *ctx, const puddle_link *link, const char *profile_id, char out_id[PUDDLE_USER_ID_LEN + 1],
-                     const char **code);
+int puddle_pond_join(puddle_ctx *ctx, const puddle_link *link, const char *profile_id, const char *answers, char out_id[PUDDLE_USER_ID_LEN + 1],
+                     const char **code, char **detail);
 
 /* Post `text` to a channel, with `files` (NULL, or the text of a "files" array as the owner's send gives it: files here whole,
  * each sent to the Pond first, docs/ponds.md "Files"). 0, or -1 with `code`: "no_pond", "no_channel", "bad_text", "slow_down",

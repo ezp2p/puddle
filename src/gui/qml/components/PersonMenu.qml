@@ -92,6 +92,20 @@ Item {
             visible: pm.canMod && pm.ponds.canMute && pm.info.muted === true; height: visible ? implicitHeight : 0
             onTriggered: pm.ponds.unmute(pm.userId)
         }
+        // in a voice channel: muted for everyone, or disconnected, by whoever may there (protocol 13)
+        MenuItem {
+            readonly property var where: pm.ponds && pm.canMod ? pm.ponds.inVoice(pm.userId) : ({})
+            objectName: "personVoiceMute"
+            text: where.serverMuted ? qsTr("Unmute %1 in voice").arg(pm.name) : qsTr("Mute %1 in voice").arg(pm.name)
+            visible: where.channel !== undefined && pm.ponds.canVoiceModeration && pm.ponds.mayIn(where.channel, "voice_mute"); height: visible ? implicitHeight : 0
+            onTriggered: pm.ponds.voiceMute(pm.userId, !where.serverMuted)
+        }
+        MenuItem {
+            readonly property var where: pm.ponds && pm.canMod ? pm.ponds.inVoice(pm.userId) : ({})
+            objectName: "personVoiceDisconnect"; text: qsTr("Disconnect %1 from voice").arg(pm.name)
+            visible: where.channel !== undefined && pm.ponds.canVoiceModeration && pm.ponds.mayIn(where.channel, "move_members"); height: visible ? implicitHeight : 0
+            onTriggered: pm.ponds.voiceDisconnect(pm.userId)
+        }
         MenuItem {
             objectName: "personKick"; text: qsTr("Kick %1").arg(pm.name); palette.text: Theme.danger
             visible: pm.canMod && pm.ponds.canKick; height: visible ? implicitHeight : 0

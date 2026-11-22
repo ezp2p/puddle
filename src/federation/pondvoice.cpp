@@ -249,6 +249,7 @@ int puddle_voice_join(puddle_ctx *ctx, const char *pond, int64_t channel, const 
     auto v = std::make_shared<PondVoice>();
     v->pond = pond, v->channel = channel, v->state = "connecting";
     v->started = now_of(cs);
+    v->kicks = ctx->ponds ? puddle_ponds_voice_kicks(ctx->ponds, pond) : 0;
     v->next_ts = random32();
     {
         std::lock_guard<std::mutex> g(cs->mu);
@@ -504,6 +505,10 @@ void callsx::voice_tick(puddle_calls *cs, int64_t now)
         }
         if (v->lost_since && now - v->lost_since >= LOST_MS) {
             end_voice(cs, v, "failed"); /* it dropped, and didn't come back */
+            return;
+        }
+        if (cs->ctx->ponds && puddle_ponds_voice_kicks(cs->ctx->ponds, v->pond.c_str()) > v->kicks) {
+            end_voice(cs, v, "disconnected"); /* a moderator took us out: not to come back by itself */
             return;
         }
     }

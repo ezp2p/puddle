@@ -56,6 +56,8 @@ properties:
         permissions: { type: array, items: { type: string }, description: "What it lets its members do (protocol 10): manage_pond, manage_channels, manage_roles, manage_invites, kick_members, ban_members, mute_members" }
   banner: { description: "Its banner, over its name (a Pond of protocol 11): a picture, as the icon; null for none" }
   role_colors: { type: string, enum: [choice, enforced], description: "Names in a role's colour (a Pond of protocol 12): each member's choice (a member's `role_color`), or everyone's" }
+  everyone: { type: object, properties: { permissions: { type: array, items: { type: string } } }, description: "What everyone may do there (a Pond of protocol 13)" }
+  shop: { type: object, properties: { payments: { type: boolean }, test: { type: boolean } }, description: "Its shop takes payments, and whether in Stripe's test mode (protocol 13)" }
   pages:
     type: array
     description: "Its pages, in its order (a Pond of protocol 11; docs/ponds.md, \"Pages and the banner\"); the body is asked for when one is opened"
@@ -80,6 +82,7 @@ $defs:
       last: { type: integer, description: The newest message id kept; 0 for none }
       kind: { enum: [text, voice], description: "A voice channel (docs/ponds.md, \"Voice channels\") takes messages too" }
       roles: { type: array, items: { type: integer }, description: "Present when it is not open to everyone: operators, administrators and members with one of these roles see it" }
+      overrides: { type: array, items: { type: object, properties: { role: { type: integer, description: "0 for everyone" }, allow: { type: array, items: { type: string } }, deny: { type: array, items: { type: string } } } }, description: "What it allows and denies everyone and each role (protocol 13); absent for none" }
       voice:
         type: array
         description: A voice channel's people now, as the Pond last said

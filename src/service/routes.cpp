@@ -15,7 +15,7 @@
 
 const puddle_route *puddle_all_routes(size_t *count)
 {
-    static puddle_route all[160];
+    static puddle_route all[512];
     static size_t n;
     if (n == 0) {
         static const struct { const puddle_route *routes; const size_t *count; } tables[] = {

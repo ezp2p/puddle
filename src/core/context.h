@@ -63,7 +63,10 @@ typedef struct {
     int (*file_fetch)(puddle_ctx *ctx, const char *chat, const char *message, const char *file, const char **code);
     int (*file_request)(puddle_ctx *ctx, const char *chat, const char *message, const char *file, const char **code);
     int (*file_answer)(puddle_ctx *ctx, const char *chat, const char *message, const char *file, const char *peer, int yes, const char **code);
-    int (*pond_join)(puddle_ctx *ctx, const puddle_link *link, const char *profile_id, char out_id[PUDDLE_USER_ID_LEN + 1], const char **code);
+    /* `answers` (may be NULL): an entry form's answers, a JSON object; `detail` (may be NULL): for the application_* codes, the
+     * Pond's answer (its form, the reason), malloc'd */
+    int (*pond_join)(puddle_ctx *ctx, const puddle_link *link, const char *profile_id, const char *answers, char out_id[PUDDLE_USER_ID_LEN + 1],
+                     const char **code, char **detail);
     int (*pond_send)(puddle_ctx *ctx, const char *pond, int64_t channel, const char *text, const char *files, size_t files_len,
                      const char **code);
     int (*pond_history)(puddle_ctx *ctx, const char *pond, int64_t channel, int64_t before, int limit, char **page, size_t *len,

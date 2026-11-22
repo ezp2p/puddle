@@ -117,7 +117,8 @@ struct PondVoice {
     int64_t channel = 0;
     int slot = 0;
     std::string state;      /* connecting, active, ended */
-    std::string reason;     /* ended: why ("failed": the connection never came or dropped; "removed": the Pond let us go) */
+    std::string reason;     /* ended: why ("failed": the connection never came or dropped; "removed": the Pond let us go;
+                             * "disconnected": a moderator took us out) */
     std::mutex state_mu;    /* one state to the Pond at a time, each built as it goes, so the last it hears is the newest */
     bool muted = false, deafened = false, camera = false, screen = false;
     std::shared_ptr<rtc::PeerConnection> pc;
@@ -130,6 +131,7 @@ struct PondVoice {
     bool watch_busy = false;                         /* telling the Pond what to change */
     bool open = false;      /* the track: our voice can go */
     int64_t started = 0, lost_since = 0;
+    int64_t kicks = 0;      /* the Pond's count of moderators disconnecting us, when we joined: when it goes up, we are out */
     uint32_t next_ts = 0;   /* the RTP timestamp of our next frame */
 };
 using VoicePtr = std::shared_ptr<PondVoice>;

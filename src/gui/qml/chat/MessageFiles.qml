@@ -71,7 +71,7 @@ ColumnLayout {
                 readonly property bool here: f.state === "available"
                 // one alone keeps its shape, at most 360 by 280; several are squares
                 readonly property real aspect: f.w > 0 && f.h > 0 ? f.w / f.h : 4 / 3
-                width: root.media.length === 1 ? Math.min(360, 280 * aspect) : 160
+                width: root.media.length === 1 ? Math.min(360, 280 * aspect, root.width > 0 ? root.width : 360) : 160
                 height: root.media.length === 1 ? width / aspect : 160
                 objectName: "mediaTile"
                 radius: Theme.radiusLarge
@@ -178,7 +178,10 @@ ColumnLayout {
             readonly property var f: modelData
             readonly property bool here: f.state === "available"
             objectName: "fileCard"
+            // never wider than the column it is in: a narrow window or page shortens the name, not the card
             Layout.preferredWidth: Math.min(360, root.width > 0 ? root.width : 360)
+            Layout.maximumWidth: root.width > 0 ? root.width : 360
+            clip: true
             implicitHeight: 56
             radius: Theme.radiusLarge
             color: Theme.tint(palette.text, 0.06)
@@ -234,7 +237,7 @@ ColumnLayout {
                 }
                 Button {
                     objectName: "openFile"
-                    visible: card.here
+                    visible: card.here && card.width >= 260 // narrow: Save as… is still there
                     text: qsTr("Open")
                     onClicked: root.openFile(card.f)
                 }

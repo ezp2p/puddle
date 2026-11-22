@@ -158,6 +158,9 @@ int puddle_ponds_channel_kind(puddle_ponds *p, const char *id, int64_t channel);
 int puddle_ponds_has_feature(puddle_ponds *p, const char *id, const char *feature);
 /* Who has `slot` in voice channel `channel` now, as the Pond last said: 0 with their id, -1 if nobody we know of. */
 int puddle_ponds_voice_member(puddle_ponds *p, const char *id, int64_t channel, int slot, char out[PUDDLE_USER_ID_LEN + 1]);
+/* How often a moderator has disconnected us from the Pond's voice since this Puddle started (protocol 13): a voice session that
+ * sees this go up has ended. */
+int64_t puddle_ponds_voice_kicks(puddle_ponds *p, const char *id);
 /* Who is in voice channel `channel` now, as the Pond last said: a malloc'd list (free() it). 0, or -1 no such Pond. */
 typedef struct {
     char member[PUDDLE_USER_ID_LEN + 1];

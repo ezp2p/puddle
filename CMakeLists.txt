@@ -334,6 +334,10 @@ if(PUDDLE_BUILD_GUI)
         src/gui/qml/shell/PondMembers.qml
         src/gui/qml/shell/PondMenuRow.qml
         src/gui/qml/shell/PondSettings.qml
+        src/gui/qml/shell/PondRolesPane.qml
+        src/gui/qml/shell/PondChannelEditor.qml
+        src/gui/qml/shell/PondApplicationsPane.qml
+        src/gui/qml/shell/PondShopPane.qml
         src/gui/qml/dialogs/NewConversationDialog.qml
         src/gui/qml/dialogs/JoinPondDialog.qml
         src/gui/qml/dialogs/HandOverDialog.qml
@@ -341,6 +345,17 @@ if(PUDDLE_BUILD_GUI)
         src/gui/qml/chat/ChatPage.qml
         src/gui/qml/chat/PondPage.qml
         src/gui/qml/chat/PageView.qml
+        src/gui/qml/chat/MediaTile.qml
+        src/gui/qml/components/WrapRadio.qml
+        src/gui/qml/components/WrapCheck.qml
+        src/gui/qml/components/TabStrip.qml
+        src/gui/qml/chat/PageRoles.qml
+        src/gui/qml/chat/PageRolesSettings.qml
+        src/gui/qml/chat/PageEvents.qml
+        src/gui/qml/chat/PageForm.qml
+        src/gui/qml/chat/PageFormSettings.qml
+        src/gui/qml/chat/PageShop.qml
+        src/gui/qml/chat/PageShopSettings.qml
         src/gui/qml/chat/MessageFiles.qml
         src/gui/qml/chat/MediaViewer.qml
         src/gui/qml/chat/FileActions.qml

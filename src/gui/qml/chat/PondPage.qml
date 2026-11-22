@@ -25,7 +25,7 @@ Pane {
     padding: 0
     background: null
 
-    readonly property bool canSend: ponds.channel !== "" && ponds.currentStatus !== "removed" && !muted
+    readonly property bool canSend: ponds.channel !== "" && ponds.currentStatus !== "removed" && !muted && ponds.canSendHere
     // muted by an operator or administrator: until it runs out (looked at again each minute)
     property double now: Date.now()
     Timer { interval: 30000; running: page.ponds.mutedUntil >= 0; repeat: true; onTriggered: page.now = Date.now() }
@@ -398,6 +398,7 @@ Pane {
                     placeholderText: page.ponds.currentStatus === "removed" ? qsTr("You are no longer a member here.")
                                      : page.muted ? (page.ponds.mutedUntil > 0 ? qsTr("You're muted here until %1.").arg(new Date(page.ponds.mutedUntil).toLocaleTimeString(Qt.locale(), Locale.ShortFormat))
                                                                                : qsTr("You're muted here."))
+                                     : !page.ponds.canSendHere ? qsTr("You can't send messages in #%1.").arg(page.ponds.channelName)
                                      : qsTr("Message #%1").arg(page.ponds.channelName)
                     wrapMode: TextArea.Wrap
                     selectByMouse: true
@@ -430,7 +431,7 @@ Pane {
                 anchors.margins: box.pad
                 width: box.buttonSize
                 height: box.buttonSize
-                enabled: page.canSend && !composer.sending
+                enabled: page.canSend && page.ponds.canAttachHere && !composer.sending
                 icon.source: Theme.icon("paperclip"); icon.width: 18; icon.height: 18
                 display: AbstractButton.IconOnly
                 Accessible.name: qsTr("Add files")
