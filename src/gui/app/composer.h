@@ -50,11 +50,16 @@ public:
     Q_INVOKABLE void clear();
     // Send what is waiting, with `text` (which may be empty), to the open chat. False if there is nothing to send yet.
     Q_INVOKABLE bool send(const QString &text, const QString &replyTo);
+    // the files to `target` with `extra` as the rest of the body, after `keep` (files sent before): a Pond page's edit
+    Q_INVOKABLE bool sendWith(const QVariantMap &extra, const QVariantList &keep);
 
     // A preview of `img` at most `max` bytes: a tiny JPEG, as base64. "" if it cannot be made that small.
     static QString previewOf(const QImage &img, int max = kPreviewMax);
     // What to call a file in a message: no folders, no control characters, at most 255 bytes.
     static QString safeName(const QString &name);
+
+private:
+    bool sendAll(const QString &text, const QString &replyTo, const QVariantMap *extra, const QVariantList *keep);
 
 signals:
     void chatsChanged();

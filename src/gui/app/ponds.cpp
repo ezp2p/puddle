@@ -1,6 +1,9 @@
 #include "ponds.h"
 
 #include <QDateTime>
+#include <QRegularExpression>
+
+#include <climits>
 
 #include <algorithm>
 #include <QJsonArray>
@@ -11,11 +14,12 @@ Ponds::Ponds(ApiClient *api, QObject *parent)
       api_(api),
       list_({ "id", "name", "status", "address", "icon" }),
       channels_({ "id", "name", "topic", "kind", "voice", "restricted", "roles" }),
-      members_({ "id", "name", "color", "avatar", "isMe", "role", "muted", "mutedUntil", "roles" }),
-      roles_({ "id", "name", "count" }),
+      members_({ "id", "name", "color", "avatar", "isMe", "role", "muted", "mutedUntil", "roles", "group" }),
       messages_({ "id", "author", "name", "tint", "avatar", "text", "files", "ts", "mine", "grouped", "dayStart" }),
       bans_({ "member", "name", "by", "byName", "reason", "ts" }, nullptr, QStringLiteral("member")),
-      invites_({ "token", "link", "uses", "maxUses", "expires", "created" }, nullptr, QStringLiteral("token"))
+      invites_({ "token", "link", "uses", "maxUses", "expires", "created" }, nullptr, QStringLiteral("token")),
+      roles_({ "id", "name", "count", "color", "hoist", "permissions", "editable" }),
+      pages_({ "id", "title", "kind", "updated" })
 {
     timer_.setInterval(1000);
     connect(&timer_, &QTimer::timeout, this, &Ponds::refresh);
@@ -105,6 +109,16 @@ QJsonObject Ponds::channelRow(const QJsonObject &c) const
 void Ponds::refresh()
 {
     refreshVoice();
+    // the open page has files on their way: look again every few seconds, until they are here
+    if (!page_.isEmpty() && ++pageTicks_ % 3 == 0) {
+        for (const QVariant &f : pageData_.value("files").toList()) {
+            const QString st = f.toMap().value("state").toString();
+            if (st == QLatin1String("downloading") || st == QLatin1String("waiting")) {
+                loadPage();
+                break;
+            }
+        }
+    }
     if (busyList_ || !api_->ready())
         return;
     busyList_ = true;
@@ -193,31 +207,80 @@ void Ponds::refreshPond()
                              { "muted", muted }, { "mutedUntil", muted ? until : -1 },
                              { "role", mo.value("role").toString(QStringLiteral("member")) }, { "roles", idStrings(mo.value("roles")) } });
         }
-        // operators first, then administrators, then everyone else; by name within each
+        // the roles, highest first, as the Pond keeps them
+        QList<QJsonObject> roles;
+        QStringList order, hoisted;
+        for (const QJsonValue &r : o.value("roles").toArray()) {
+            const QJsonObject ro = r.toObject();
+            const QString rid = QString::number(qint64(ro.value("id").toDouble()));
+            int count = 0;
+            for (const QJsonObject &m : members)
+                count += m.value("roles").toArray().contains(rid) ? 1 : 0;
+            QStringList perms;
+            for (const QJsonValue &p : ro.value("permissions").toArray())
+                perms << p.toString();
+            roles.append({ { "id", rid }, { "name", ro.value("name") }, { "count", count }, { "color", ro.value("color").toString() },
+                           { "hoist", ro.value("hoist").toBool() }, { "permissions", QJsonArray::fromStringList(perms) } });
+            order << rid;
+            if (ro.value("hoist").toBool())
+                hoisted << rid;
+        }
+        // shown apart (Discord's "display separately"): each member under their highest role that is, in the roles' order, then
+        // everyone else; operators first, then administrators, then by name within each
+        auto group = [&](const QJsonObject &m) {
+            int best = INT_MAX;
+            for (const QJsonValue &r : m.value("roles").toArray())
+                if (hoisted.contains(r.toString()))
+                    best = std::min(best, int(order.indexOf(r.toString())));
+            return best;
+        };
         auto rank = [](const QJsonObject &m) { const QString r = m.value("role").toString(); return r == "operator" ? 0 : r == "administrator" ? 1 : 2; };
         std::stable_sort(members.begin(), members.end(), [&](const QJsonObject &a, const QJsonObject &b) {
+            if (group(a) != group(b))
+                return group(a) < group(b);
             if (rank(a) != rank(b))
                 return rank(a) < rank(b);
             return a.value("name").toString().compare(b.value("name").toString(), Qt::CaseInsensitive) < 0;
         });
-        members_.setItems(members);
-        QList<QJsonObject> roles;
-        for (const QJsonValue &r : o.value("roles").toArray()) {
-            const QString rid = QString::number(qint64(r.toObject().value("id").toDouble()));
-            int count = 0;
+        if (!hoisted.isEmpty()) {
+            QHash<int, int> counts;
             for (const QJsonObject &m : members)
-                count += m.value("roles").toArray().contains(rid) ? 1 : 0;
-            roles.append({ { "id", rid }, { "name", r.toObject().value("name") }, { "count", count } });
+                counts[group(m)]++;
+            for (QJsonObject &m : members) {
+                const int g = group(m);
+                const QString title = g == INT_MAX ? tr("Members") : roles.at(g).value("name").toString();
+                m.insert("group", QStringLiteral("%1 — %2").arg(title).arg(counts.value(g)));
+            }
         }
-        std::stable_sort(roles.begin(), roles.end(), [](const QJsonObject &a, const QJsonObject &b) {
-            return a.value("name").toString().compare(b.value("name").toString(), Qt::CaseInsensitive) < 0;
-        });
+        members_.setItems(members);
         roles_.setItems(roles);
         QList<QJsonObject> channels;
         for (const QJsonValue &c : o.value("channels").toArray())
             channels.append(channelRow(c.toObject()));
         channels_.setItems(channels);
+        // the pages, in the Pond's order; the open one again if it changed, or the first channel if it went
+        QList<QJsonObject> pages;
+        bool pageThere = false;
+        for (const QJsonValue &pv : o.value("pages").toArray()) {
+            const QJsonObject po = pv.toObject();
+            const QString pid = QString::number(qint64(po.value("id").toDouble()));
+            pages.append({ { "id", pid }, { "title", po.value("title") }, { "kind", po.value("kind") }, { "updated", po.value("updated") } });
+            if (pid == page_) {
+                pageThere = true;
+                if (!pageData_.isEmpty() && qint64(po.value("updated").toDouble()) != qint64(pageData_.value("updated").toDouble()))
+                    loadPage();
+            }
+        }
+        pages_.setItems(pages);
+        if (!page_.isEmpty() && !pageThere)
+            closePage();
         info_ = o;
+        // which roles we may change, give and move: below our highest, unless we have a rank
+        const int mine = topOf(me_);
+        const bool all = ranked(), manage = canManageRoles();
+        for (int i = 0; i < roles.size(); i++)
+            roles[i].insert("editable", manage && (all || i > mine));
+        roles_.setItems(roles);
         emit currentInfoChanged();
         // the open channel was deleted, or none is open yet: the first there is
         bool have = false;
@@ -351,10 +414,12 @@ void Ponds::admin(const QString &path, const QJsonObject &body, const QString &d
             const QJsonObject o = json.object();
             const QString code = o.value("error").toString();
             emit adminFailed(!o.value("message").toString().isEmpty() ? o.value("message").toString()
-                             : code == QLatin1String("no_role")       ? tr("You no longer have a role in this Pond.")
+                             : code == QLatin1String("no_role")       ? tr("You may no longer do that in this Pond.")
                              : code == QLatin1String("unknown_role")  ? tr("That role was deleted meanwhile.")
                              : code == QLatin1String("channels_changed") ? tr("The channels changed meanwhile. Try again.")
-                             : code == QLatin1String("outranked")     ? tr("They are your rank or above.")
+                             : code == QLatin1String("outranked")     ? (ranked() ? tr("They are your rank or above.") : tr("That is above your highest role, or more than you may do."))
+                             : code == QLatin1String("roles_changed") ? tr("The roles changed meanwhile. Try again.")
+                             : code == QLatin1String("unknown_permission") ? tr("This Pond doesn't know that permission.")
                              : code == QLatin1String("not_yourself")  ? tr("You can't do that to yourself.")
                              : code == QLatin1String("too_large")     ? tr("That picture is too large for a Pond: the most is 1 MiB.")
                              : code == QLatin1String("no_pictures")   ? tr("This Pond is too old to have an icon.")
@@ -409,6 +474,87 @@ void Ponds::createRole(const QString &name)
 void Ponds::renameRole(const QString &roleId, const QString &name)
 {
     admin(QStringLiteral("roles/%1/edit").arg(roleId), { { "name", name.trimmed() } }, tr("Saved."), tr("rename that role"));
+}
+
+void Ponds::editRole(const QString &roleId, const QVariantMap &changes)
+{
+    QJsonObject body;
+    if (changes.contains("name"))
+        body.insert("name", changes.value("name").toString().trimmed());
+    if (changes.contains("color")) {
+        const QString c = changes.value("color").toString().toLower();
+        body.insert("color", c.isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue(c));
+    }
+    if (changes.contains("hoist"))
+        body.insert("hoist", changes.value("hoist").toBool());
+    if (changes.contains("permissions"))
+        body.insert("permissions", QJsonArray::fromStringList(changes.value("permissions").toStringList()));
+    if (body.isEmpty())
+        return;
+    admin(QStringLiteral("roles/%1/edit").arg(roleId), body, tr("Saved."), tr("change that role"));
+}
+
+void Ponds::moveRole(const QString &roleId, int by)
+{
+    QStringList order;
+    for (const QJsonObject &r : roles_.items())
+        order << r.value("id").toString();
+    const int from = int(order.indexOf(roleId)), to = from + by;
+    if (from < 0 || to < 0 || to >= order.size())
+        return;
+    order.move(from, to);
+    QJsonArray ids;
+    for (const QString &r : order)
+        ids.append(r.toLongLong());
+    admin(QStringLiteral("roles/order"), { { "roles", ids } }, tr("Moved."), tr("move that role"));
+}
+
+QVariantList Ponds::rolesOf(const QString &memberId) const
+{
+    QJsonArray held;
+    for (const QJsonObject &m : members_.items())
+        if (m.value("id").toString() == memberId)
+            held = m.value("roles").toArray();
+    QVariantList out;
+    for (const QJsonObject &r : roles_.items())
+        if (held.contains(r.value("id")))
+            out << QVariantMap{ { "id", r.value("id").toString() }, { "name", r.value("name").toString() }, { "color", r.value("color").toString() } };
+    return out;
+}
+
+QSet<QString> Ponds::myPermissions() const
+{
+    QJsonArray held;
+    for (const QJsonObject &m : members_.items())
+        if (m.value("id").toString() == me_)
+            held = m.value("roles").toArray();
+    QSet<QString> out;
+    for (const QJsonObject &r : roles_.items())
+        if (held.contains(r.value("id")))
+            for (const QJsonValue &p : r.value("permissions").toArray())
+                out.insert(p.toString());
+    return out;
+}
+
+int Ponds::topOf(const QString &memberId) const
+{
+    QJsonArray held;
+    for (const QJsonObject &m : members_.items())
+        if (m.value("id").toString() == memberId)
+            held = m.value("roles").toArray();
+    const QList<QJsonObject> roles = roles_.items();
+    for (int i = 0; i < roles.size(); i++)
+        if (held.contains(roles.at(i).value("id")))
+            return i;
+    return INT_MAX;
+}
+
+QString Ponds::memberRole(const QString &memberId) const
+{
+    for (const QJsonObject &m : members_.items())
+        if (m.value("id").toString() == memberId)
+            return m.value("role").toString();
+    return QStringLiteral("member");
 }
 
 void Ponds::deleteRole(const QString &roleId)
@@ -494,7 +640,8 @@ QVariantMap Ponds::card(const QString &memberId) const
     c.insert("place", currentName());
     c.insert("pond", current_);
     c.insert("pondIcon", currentIcon());
-    c.insert("dms", dmsOn() && who.value("dms").toBool(true)); /* a direct message through this Pond can be written to them */
+    c.insert("dms", dmsOn() && who.value("dms").toBool(true));
+    c.insert("roles", rolesOf(memberId)); /* the roles they hold there, highest first */ /* a direct message through this Pond can be written to them */
     return c;
 }
 
@@ -591,7 +738,7 @@ void Ponds::createInvite(int uses, int seconds)
     api_->post(QStringLiteral("/api/v1/ponds/%1/admin/invites/create").arg(current_), body, [this](int status, const QJsonDocument &json) {
         if (status != 200) {
             const QString code = json.object().value("error").toString();
-            emit adminFailed(code == QLatin1String("no_role") ? tr("You no longer have a role in this Pond.") : why(status, json, tr("make an invite")));
+            emit adminFailed(code == QLatin1String("no_role") ? tr("You may no longer do that in this Pond.") : why(status, json, tr("make an invite")));
             return;
         }
         emit inviteMade(json.object().value("link").toString());
@@ -607,11 +754,13 @@ void Ponds::revokeInvite(const QString &token)
 bool Ponds::canActOn(const QString &memberId) const
 {
     auto rank = [](const QString &r) { return r == QLatin1String("operator") ? 2 : r == QLatin1String("administrator") ? 1 : 0; };
-    QString theirs = QStringLiteral("member");
-    for (const QJsonObject &m : members_.items())
-        if (m.value("id").toString() == memberId)
-            theirs = m.value("role").toString();
-    return memberId != me_ && theirs != QLatin1String("operator") && rank(currentRole()) > rank(theirs);
+    const QString theirs = memberRole(memberId);
+    if (memberId == me_ || theirs == QLatin1String("operator"))
+        return false;
+    if (ranked())
+        return rank(currentRole()) > rank(theirs);
+    // let by our roles: only on a member, whose highest role is below ours
+    return (canKick() || canBan() || canMute()) && rank(theirs) == 0 && topOf(me_) < topOf(memberId);
 }
 
 void Ponds::join(const QString &link, const QString &profile)
@@ -653,6 +802,8 @@ void Ponds::open(const QString &pondId)
     bans_.clear();
     invites_.clear();
     members_.clear();
+    pages_.clear();
+    closePage();
     generation_++;
     emit currentChanged();
     emit currentInfoChanged();
@@ -663,6 +814,7 @@ void Ponds::open(const QString &pondId)
 
 void Ponds::openChannel(const QString &channelId)
 {
+    closePage();
     if (channelId == channel_)
         return;
     channel_ = channelId;
@@ -683,6 +835,185 @@ void Ponds::openChannel(const QString &channelId)
 void Ponds::close()
 {
     open(QString());
+}
+
+// ---- pages ----
+
+void Ponds::openPage(const QString &pageId)
+{
+    if (pageId == page_)
+        return;
+    page_ = pageId;
+    pageData_.clear();
+    pageGen_++;
+    emit pageChanged();
+    emit pageDataChanged();
+    loadPage();
+}
+
+void Ponds::closePage()
+{
+    if (page_.isEmpty())
+        return;
+    page_.clear();
+    pageData_.clear();
+    pageGen_++;
+    emit pageChanged();
+    emit pageDataChanged();
+}
+
+void Ponds::loadPage()
+{
+    if (page_.isEmpty() || current_.isEmpty())
+        return;
+    const int gen = pageGen_;
+    api_->get(QStringLiteral("/api/v1/ponds/%1/pages/%2").arg(current_, page_), [this, gen](int status, const QJsonDocument &json) {
+        if (gen != pageGen_)
+            return;
+        if (status != 200) {
+            if (status == 404)
+                closePage();
+            return;
+        }
+        QVariantMap d = json.object().toVariantMap();
+        d.insert("id", QString::number(qint64(json.object().value("id").toDouble())));
+        d.insert("markdown", pageMarkdown(d.value("body").toString()));
+        d.insert("updatedBy", nameOf(d.value("updated_by").toString()));
+        pageData_ = d;
+        emit pageDataChanged();
+    });
+}
+
+QString Ponds::pageMarkdown(const QString &body) const
+{
+    QHash<QString, QString> ids;
+    for (const QJsonObject &c : channels_.items())
+        ids.insert(c.value("name").toString(), c.value("id").toString());
+    // a channel's name after # where a word can't go on: not a heading ("# Title"), not inside a word or a link
+    static const QRegularExpression name(QStringLiteral("(^|[\\s(,;:!?])#([a-z0-9-]{1,32})(?![a-z0-9-])"));
+    QStringList out;
+    bool fence = false;
+    for (const QString &line : body.split(u'\n')) {
+        if (line.trimmed().startsWith(QLatin1String("```"))) {
+            fence = !fence;
+            out << line;
+            continue;
+        }
+        if (fence) {
+            out << line;
+            continue;
+        }
+        // between backticks it stays as written
+        const QStringList parts = line.split(u'`');
+        QStringList done;
+        for (int i = 0; i < parts.size(); i++) {
+            QString part = parts.at(i);
+            if (i % 2 == 0) {
+                QString linked;
+                qsizetype at = 0;
+                auto it = name.globalMatch(part);
+                while (it.hasNext()) {
+                    const QRegularExpressionMatch m = it.next();
+                    const QString id = ids.value(m.captured(2));
+                    linked += part.mid(at, m.capturedStart(2) - 1 - at);
+                    linked += id.isEmpty() ? QStringLiteral("#") + m.captured(2) : QStringLiteral("[#%1](channel:%2)").arg(m.captured(2), id);
+                    at = m.capturedEnd(2);
+                }
+                part = linked + part.mid(at);
+            }
+            done << part;
+        }
+        out << done.join(u'`');
+    }
+    return out.join(u'\n');
+}
+
+void Ponds::createPage(const QString &title)
+{
+    const QString id = current_, t = title.trimmed();
+    if (id.isEmpty() || t.isEmpty())
+        return;
+    api_->post(QStringLiteral("/api/v1/ponds/%1/admin/pages/create").arg(id), QJsonObject{ { "title", t }, { "body", QString() } },
+               [this, id](int status, const QJsonDocument &json) {
+                   if (status != 200) {
+                       emit adminFailed(why(status, json, tr("make that page")));
+                       return;
+                   }
+                   emit adminDone(tr("Page made."));
+                   refreshPond();
+                   if (id == current_)
+                       openPage(QString::number(qint64(json.object().value("id").toDouble())));
+               });
+}
+
+void Ponds::savePage(const QString &pageId, const QString &title, const QString &body, const QVariantList &files)
+{
+    QJsonArray list;
+    for (const QVariant &f : files) {
+        const QVariantMap m = f.toMap();
+        QJsonObject o{ { "id", m.value("id").toString() }, { "name", m.value("name").toString() }, { "mime", m.value("mime").toString() },
+                       { "size", m.value("size").toDouble() } };
+        if (m.value("w").toInt() > 0 && m.value("h").toInt() > 0) {
+            o.insert("w", m.value("w").toInt());
+            o.insert("h", m.value("h").toInt());
+        }
+        list.append(o);
+    }
+    const QString id = current_;
+    api_->post(QStringLiteral("/api/v1/ponds/%1/admin/pages/%2/edit").arg(id, pageId),
+               QJsonObject{ { "title", title.trimmed() }, { "body", body }, { "files", list } }, [this, id](int status, const QJsonDocument &json) {
+                   if (status < 200 || status > 299) {
+                       emit adminFailed(json.object().value("message").toString().isEmpty() ? why(status, json, tr("save that page"))
+                                                                                           : json.object().value("message").toString());
+                       return;
+                   }
+                   emit adminDone(tr("Page saved."));
+                   if (id == current_) {
+                       emit pageSaved();
+                       loadPage();
+                       refreshPond();
+                   }
+               });
+}
+
+void Ponds::deletePage(const QString &pageId)
+{
+    admin(QStringLiteral("pages/%1/delete").arg(pageId), {}, tr("Page deleted."), tr("delete that page"));
+}
+
+void Ponds::movePage(const QString &pageId, int by)
+{
+    QStringList order;
+    for (const QJsonObject &p : pages_.items())
+        order << p.value("id").toString();
+    const int from = int(order.indexOf(pageId)), to = from + by;
+    if (from < 0 || to < 0 || to >= order.size())
+        return;
+    order.move(from, to);
+    QJsonArray ids;
+    for (const QString &p : order)
+        ids.append(p.toLongLong());
+    admin(QStringLiteral("pages/order"), { { "pages", ids } }, tr("Moved."), tr("move that page"));
+}
+
+void Ponds::fetchPageFile(const QString &fileId)
+{
+    if (page_.isEmpty() || current_.isEmpty())
+        return;
+    api_->post(QStringLiteral("/api/v1/ponds/%1/pages/%2/files/%3/download").arg(current_, page_, fileId), QJsonObject{},
+               [this](int status, const QJsonDocument &json) {
+                   if (status != 204 && status != 200)
+                       emit failed(why(status, json, tr("fetch that file")));
+                   else
+                       loadPage();
+               });
+}
+
+void Ponds::setBanner(const QString &hash)
+{
+    QJsonObject body;
+    body.insert("hash", hash.isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue(hash));
+    admin(QStringLiteral("banner"), body, hash.isEmpty() ? tr("Banner removed.") : tr("Banner set."), tr("change the banner"));
 }
 
 void Ponds::send(const QString &text)

@@ -59,11 +59,26 @@ struct Member {
     std::vector<int64_t> roles;  /* the roles for channels they hold (protocol 9; the Pond's docs/design.md, "Roles for channels") */
 };
 
-/* A role for channels: named by the Pond's operators and administrators, given to members, asked for by channels. */
+/* A role: named by the Pond's operators and administrators, given to members, asked for by channels; and, from protocol 10,
+ * what it lets its members do, its colour, and whether the member list shows it apart (the Pond's docs/design.md,
+ * "Permissions"). A Pond keeps its roles in order, highest first, and so does `Pond::roles`. */
 struct PondRole {
     int64_t id = 0;
     std::string name;
+    std::string color;                    /* "#rrggbb", or "" for none */
+    bool hoist = false;
+    std::vector<std::string> permissions; /* names, as the Pond says them */
 };
+
+/* A page the Pond shows above its channels (the Pond's docs/design.md, "Pages"): what /info lists of it. Its body is asked for
+ * when it is opened. */
+struct PondPage {
+    int64_t id = 0;
+    std::string title, kind;
+    int64_t updated = 0;
+};
+#define MAX_PAGES 50
+#define PAGE_TITLE_MAX 64
 
 /* Someone in one of the Pond's voice channels now (the Pond's docs/voice.md, "Who is in it"): only in memory, as the Pond says
  * it in /info and its `voice` and `voice_left` events. */
@@ -81,6 +96,7 @@ struct Pond {
     int64_t offer = 0;                 /* a role it offers us, waiting for the owner's answer; 0 for none */
     std::string offer_role;
     std::string icon;                  /* its icon as {hash, mime, size}, cleaned; "" for none (protocol 6, feature `pictures`) */
+    std::string banner;                /* the picture over its name in the channel list, the same; "" for none (protocol 11) */
     int dms = -1;                      /* direct messages between members: 1 on, 0 off, -1 it does not say (protocol 8) */
     int64_t dm_files_max = 0;          /* the largest file one may carry; 0 none */
     std::vector<std::string> features;
@@ -91,6 +107,7 @@ struct Pond {
     std::map<std::string, Member> members;
     std::vector<InVoice> voice;
     std::vector<PondRole> roles; /* protocol 9 */
+    std::vector<PondPage> pages; /* protocol 11, in the Pond's order */
 };
 
 } // namespace
@@ -168,10 +185,30 @@ static void write_ids(puddle_jw *w, const char *key, const std::vector<int64_t> 
     puddle_jw_end_array(w);
 }
 
-/* "roles": [{id, name}] as /info says them, or a `role` event's {id, name} */
+/* "roles": [{id, name, color, hoist, permissions}] as /info says them, or a `role` event's */
 static bool parse_role(puddle_span v, PondRole &r)
 {
-    return get_int(v, "id", &r.id) && r.id > 0 && get_text(v, "name", ROLE_NAME_MAX, 0, r.name) && !r.name.empty();
+    if (!get_int(v, "id", &r.id) || r.id <= 0 || !get_text(v, "name", ROLE_NAME_MAX, 0, r.name) || r.name.empty())
+        return false;
+    std::string c;
+    r.color.clear();
+    if (get_text(v, "color", 7, 0, c) && c.size() == 7 && c[0] == '#' &&
+        std::all_of(c.begin() + 1, c.end(), [](char x) { return (x >= '0' && x <= '9') || (x >= 'a' && x <= 'f'); }))
+        r.color = c;
+    puddle_span h, arr, item;
+    r.hoist = member(v, "hoist", &h) && h.len == 4 && !memcmp(h.p, "true", 4);
+    r.permissions.clear();
+    size_t cur = 0;
+    if (member(v, "permissions", &arr) && arr.len && *arr.p == '[')
+        while (puddle_json_array_next(arr, &cur, &item) == 1 && r.permissions.size() < 32) {
+            char buf[40];
+            if (puddle_json_string(item, buf, sizeof buf) != 0 || !buf[0] || strlen(buf) > 32)
+                continue;
+            std::string name = buf;
+            if (std::all_of(name.begin(), name.end(), [](char x) { return (x >= 'a' && x <= 'z') || x == '_'; }))
+                r.permissions.push_back(std::move(name));
+        }
+    return true;
 }
 
 static void parse_roles(puddle_span all, Pond &pd)
@@ -195,6 +232,17 @@ static void write_roles(puddle_jw *w, const Pond &pd)
         puddle_jw_object(w);
         puddle_jw_num(w, "id", r.id);
         puddle_jw_str(w, "name", r.name.c_str());
+        puddle_jw_key(w, "color");
+        if (r.color.empty())
+            puddle_jw_null(w);
+        else
+            puddle_jw_string(w, r.color.c_str());
+        puddle_jw_flag(w, "hoist", r.hoist);
+        puddle_jw_key(w, "permissions");
+        puddle_jw_array(w);
+        for (auto &n : r.permissions)
+            puddle_jw_string(w, n.c_str());
+        puddle_jw_end_array(w);
         puddle_jw_end_object(w);
     }
     puddle_jw_end_array(w);
@@ -355,12 +403,52 @@ static bool clean_picture(puddle_span v, std::string &out)
     return true;
 }
 
-/* The pond's "icon": a picture, or null or missing for none. */
+/* The pond's "icon" and "banner": each a picture, or null or missing for none. */
 static void parse_icon(puddle_span pond, Pond &pd)
 {
     puddle_span v;
     if (!member(pond, "icon", &v) || !clean_picture(v, pd.icon))
         pd.icon.clear();
+    if (!member(pond, "banner", &v) || !clean_picture(v, pd.banner))
+        pd.banner.clear();
+}
+
+/* {id, title, kind, updated}: as /info lists a page, or a `page` event says one */
+static bool parse_page(puddle_span v, PondPage &pg)
+{
+    if (!get_int(v, "id", &pg.id) || pg.id <= 0 || !get_text(v, "title", PAGE_TITLE_MAX, 0, pg.title) || pg.title.empty() ||
+        !get_text(v, "kind", 16, 0, pg.kind) || pg.kind.empty())
+        return false;
+    get_int(v, "updated", &pg.updated);
+    return std::all_of(pg.kind.begin(), pg.kind.end(), [](char c) { return (c >= 'a' && c <= 'z') || c == '_'; });
+}
+
+static void parse_pages(puddle_span all, Pond &pd)
+{
+    puddle_span arr, item;
+    pd.pages.clear();
+    size_t cur = 0;
+    if (member(all, "pages", &arr) && arr.len && *arr.p == '[')
+        while (puddle_json_array_next(arr, &cur, &item) == 1 && pd.pages.size() < MAX_PAGES) {
+            PondPage pg;
+            if (parse_page(item, pg))
+                pd.pages.push_back(std::move(pg));
+        }
+}
+
+static void write_pages(puddle_jw *w, const Pond &pd)
+{
+    puddle_jw_key(w, "pages");
+    puddle_jw_array(w);
+    for (auto &pg : pd.pages) {
+        puddle_jw_object(w);
+        puddle_jw_num(w, "id", pg.id);
+        puddle_jw_str(w, "title", pg.title.c_str());
+        puddle_jw_str(w, "kind", pg.kind.c_str());
+        puddle_jw_num(w, "updated", pg.updated);
+        puddle_jw_end_object(w);
+    }
+    puddle_jw_end_array(w);
 }
 
 /* {"id", "profile", "joined"}: the profile is cleaned, or dropped if it can't be. */
@@ -446,6 +534,7 @@ static bool parse_info(puddle_ponds *p, const char *json, size_t len, Pond &pd, 
     parse_icon(pond, pd);
     parse_offer(all, pd);
     parse_roles(all, pd);
+    parse_pages(all, pd);
     pd.voice.clear();
     puddle_span voice;
     size_t vcur = 0;
@@ -681,6 +770,10 @@ static void save_pond(puddle_ponds *p, const Pond &pd)
             puddle_jw_key(w, "icon");
             puddle_jw_raw(w, pd.icon.c_str(), pd.icon.size());
         }
+        if (!pd.banner.empty()) {
+            puddle_jw_key(w, "banner");
+            puddle_jw_raw(w, pd.banner.c_str(), pd.banner.size());
+        }
         puddle_jw_end_object(w);
         puddle_jw_key(w, "me");
         auto me = pd.members.find(pd.me);
@@ -694,6 +787,7 @@ static void save_pond(puddle_ponds *p, const Pond &pd)
         write_protocol(w, pd);
         write_offer(w, pd);
         write_roles(w, pd);
+        write_pages(w, pd);
         puddle_jw_str(w, "address", pd.address.c_str());
         puddle_jw_num(w, "joined", pd.joined);
         puddle_jw_key(w, "filled");
@@ -938,6 +1032,8 @@ int puddle_ponds_info(puddle_ponds *p, const char *id, const char *info, size_t 
     pd.files_max = fresh.files_max;
     pd.dms = fresh.dms, pd.dm_files_max = fresh.dm_files_max;
     pd.icon = fresh.icon;
+    pd.banner = fresh.banner;
+    pd.pages = std::move(fresh.pages);
     pd.offer = fresh.offer, pd.offer_role = fresh.offer_role;
     pd.voice = std::move(fresh.voice); /* who is in voice now: /info always says it whole */
     pd.roles = std::move(fresh.roles);
@@ -1109,9 +1205,57 @@ int puddle_ponds_events(puddle_ponds *p, const char *id, const char *json, size_
             if (parse_role(data, n)) {
                 auto r = std::find_if(pd.roles.begin(), pd.roles.end(), [&](const PondRole &x) { return x.id == n.id; });
                 if (r != pd.roles.end())
-                    r->name = n.name;
-                else if (pd.roles.size() < MAX_ROLES)
+                    *r = std::move(n); /* where it is in the order stays */
+                else if (pd.roles.size() < MAX_ROLES) /* a new one is at the bottom */
                     pd.roles.push_back(std::move(n));
+                pond_changed = true;
+            }
+        } else if (kind == "page") { /* made or changed (protocol 11): a new one is last */
+            PondPage n;
+            if (parse_page(data, n)) {
+                auto pg = std::find_if(pd.pages.begin(), pd.pages.end(), [&](const PondPage &x) { return x.id == n.id; });
+                if (pg != pd.pages.end())
+                    *pg = std::move(n);
+                else if (pd.pages.size() < MAX_PAGES)
+                    pd.pages.push_back(std::move(n));
+                pond_changed = true;
+            }
+        } else if (kind == "page_deleted") {
+            int64_t pid;
+            if (get_int(data, "id", &pid)) {
+                pd.pages.erase(std::remove_if(pd.pages.begin(), pd.pages.end(), [&](const PondPage &x) { return x.id == pid; }), pd.pages.end());
+                pond_changed = true;
+            }
+        } else if (kind == "page_order") { /* {pages: [ids]}, first to last */
+            std::vector<int64_t> order;
+            puddle_span arr, item;
+            size_t cur = 0;
+            int64_t n;
+            if (member(data, "pages", &arr) && arr.len && *arr.p == '[') {
+                while (puddle_json_array_next(arr, &cur, &item) == 1 && order.size() < MAX_PAGES)
+                    if (puddle_json_int64(item, &n) == 0)
+                        order.push_back(n);
+                auto place = [&](const PondPage &pg) {
+                    auto i = std::find(order.begin(), order.end(), pg.id);
+                    return i == order.end() ? order.size() : (size_t)(i - order.begin());
+                };
+                std::stable_sort(pd.pages.begin(), pd.pages.end(), [&](const PondPage &a, const PondPage &b) { return place(a) < place(b); });
+                pond_changed = true;
+            }
+        } else if (kind == "role_order") { /* {roles: [ids]}, highest first (protocol 10) */
+            std::vector<int64_t> order;
+            puddle_span arr, item;
+            size_t cur = 0;
+            int64_t n;
+            if (member(data, "roles", &arr) && arr.len && *arr.p == '[') {
+                while (puddle_json_array_next(arr, &cur, &item) == 1 && order.size() < MAX_ROLES)
+                    if (puddle_json_int64(item, &n) == 0)
+                        order.push_back(n);
+                auto rank = [&](const PondRole &r) {
+                    auto i = std::find(order.begin(), order.end(), r.id);
+                    return i == order.end() ? order.size() : (size_t)(i - order.begin()); /* one it didn't name: last */
+                };
+                std::stable_sort(pd.roles.begin(), pd.roles.end(), [&](const PondRole &a, const PondRole &b) { return rank(a) < rank(b); });
                 pond_changed = true;
             }
         } else if (kind == "role_deleted") { /* gone from every member and channel too */
@@ -1272,6 +1416,12 @@ static void write_summary(puddle_jw *w, const Pond &pd)
         puddle_jw_null(w);
     else
         puddle_jw_raw(w, pd.icon.c_str(), pd.icon.size());
+    puddle_jw_key(w, "banner");
+    if (pd.banner.empty())
+        puddle_jw_null(w);
+    else
+        puddle_jw_raw(w, pd.banner.c_str(), pd.banner.size());
+    write_pages(w, pd);
     auto me = pd.members.find(pd.me);
     puddle_jw_str(w, "role", me != pd.members.end() ? me->second.role.c_str() : "member");
     write_offer(w, pd);
@@ -1598,6 +1748,8 @@ int puddle_ponds_pictures(puddle_ponds *p, const char *id, puddle_pond_picture_f
             return -1;
         if (!it->second.icon.empty())
             refs.push_back(it->second.icon);
+        if (!it->second.banner.empty())
+            refs.push_back(it->second.banner);
         for (auto &[mid, m] : it->second.members) {
             puddle_span prof = {m.profile.data(), m.profile.size()}, v;
             std::string ref;

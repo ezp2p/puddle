@@ -93,6 +93,10 @@ typedef struct {
     int (*pdm_befriend)(puddle_ctx *ctx, const char *chat, const char **code);
     void (*pdm_retry)(puddle_ctx *ctx, const char *chat);
     int (*pdm_accept)(puddle_ctx *ctx, const char *pond, int accept, const char **code);
+    /* a Pond's pages (the Pond's docs/design.md, "Pages"): files sent to the Pond before a page carries them (`files` as a
+     * message's), and one a page carries fetched (`page`, its size as the page says) */
+    int (*pond_upload)(puddle_ctx *ctx, const char *pond, const char *files, size_t files_len, const char **code);
+    int (*pond_page_fetch)(puddle_ctx *ctx, const char *pond, int64_t page, const char *file, int64_t size, const char **code);
 } puddle_courier;
 
 /* What handlers can reach. */

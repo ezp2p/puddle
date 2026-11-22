@@ -176,6 +176,8 @@ public:
     Q_INVOKABLE void sendFiles(const QString &text, const QString &replyTo, const QVariantList &files);
     // The same, to another place's send route (`path`, such as a Pond channel's .../messages/send), rather than the open chat.
     void sendFilesTo(const QString &path, const QString &text, const QVariantList &files);
+    // ...or with `extra` as the rest of the body and `keep` (files already sent) before these: a Pond page's edit
+    void sendFilesWith(const QString &path, const QVariantList &files, const QVariantMap &extra, const QVariantList &keep);
     Q_INVOKABLE void edit(const QString &messageId, const QString &text);
     Q_INVOKABLE void remove(const QString &messageId);
 

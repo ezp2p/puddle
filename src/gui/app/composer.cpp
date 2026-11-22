@@ -315,7 +315,17 @@ void Composer::clear()
 
 bool Composer::send(const QString &text, const QString &replyTo)
 {
-    if (!chats_ || sending_ || !ready())
+    return sendAll(text, replyTo, nullptr, nullptr);
+}
+
+bool Composer::sendWith(const QVariantMap &extra, const QVariantList &keep)
+{
+    return sendAll(QString(), QString(), &extra, &keep);
+}
+
+bool Composer::sendAll(const QString &text, const QString &replyTo, const QVariantMap *extra, const QVariantList *keep)
+{
+    if (!chats_ || sending_ || !ready() || (extra && target_.isEmpty()))
         return false;
     QVariantList files;
     QList<QJsonObject> rows = items_.items();
@@ -332,7 +342,9 @@ bool Composer::send(const QString &text, const QString &replyTo)
     items_.setItems(rows);
     sending_ = true;
     emit changed();
-    if (target_.isEmpty())
+    if (extra)
+        chats_->sendFilesWith(target_, files, *extra, *keep);
+    else if (target_.isEmpty())
         chats_->sendFiles(text, replyTo, files);
     else
         chats_->sendFilesTo(target_, text, files);

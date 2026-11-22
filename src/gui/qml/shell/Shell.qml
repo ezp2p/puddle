@@ -245,6 +245,16 @@ Pane {
                 sidebarShown: shell.sidebarOpen
                 onToggleSidebar: shell.toggleSidebar()
             }
+            // one of the Pond's pages, where its channel would be (the Pond's docs/design.md, "Pages")
+            PageView {
+                anchors.fill: parent
+                visible: shell.page === "pond" && shell.chats.ponds.page !== ""
+                chats: shell.chats
+                sidebarShown: shell.sidebarOpen
+                contextShown: shell.contextVisible
+                onToggleSidebar: shell.toggleSidebar()
+                onToggleContext: shell.toggleContext()
+            }
             PondPage {
                 video: shell.backend.video
                 backend: shell.backend
@@ -252,7 +262,7 @@ Pane {
                 objectName: "pondPage"
                 people: shell
                 anchors.fill: parent
-                visible: shell.page === "pond"
+                visible: shell.page === "pond" && shell.chats.ponds.page === ""
                 chats: shell.chats
                 narrow: !shell.wide
                 sidebarShown: shell.sidebarOpen

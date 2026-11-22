@@ -486,7 +486,9 @@ static void fetch_round(puddle_ctx *ctx, Follower *f)
         h.until = now + ASKED_KEEP_MS;
         now_held[h.key()] = h;
         int64_t size = 0;
-        if (puddle_ponds_message_file(ctx->ponds, pond.c_str(), h.channel, h.message, h.file.c_str(), &size) != 0)
+        if (h.channel == 0) /* a page's file (channel 0, the page as the message), with its size */
+            ls >> size;
+        else if (puddle_ponds_message_file(ctx->ponds, pond.c_str(), h.channel, h.message, h.file.c_str(), &size) != 0)
             size = size_from_pond(ctx, f, h.channel, h.message, h.file);
         if (size > 0)
             want.push_back({h, size, true});
@@ -1045,10 +1047,57 @@ int puddle_pond_fetch(puddle_ctx *ctx, const char *pond, int64_t channel, int64_
     return 0;
 }
 
+int puddle_pond_page_fetch(puddle_ctx *ctx, const char *pond, int64_t page, const char *file, int64_t size, const char **code)
+{
+    if (!puddle_file_id_valid(file) || !ctx->pond_followers || page <= 0 || size <= 0) {
+        *code = "failed";
+        return -1;
+    }
+    std::lock_guard<std::mutex> g(ctx->pond_followers->mu);
+    auto it = ctx->pond_followers->all.find(pond);
+    if (it == ctx->pond_followers->all.end()) {
+        *code = "no_pond";
+        return -1;
+    }
+    Follower *f = it->second.get();
+    {
+        std::lock_guard<std::mutex> fg(f->mu);
+        f->asked.push_back(std::string(file) + " 0 " + std::to_string(page) + " " + std::to_string(size));
+    }
+    poke_fetcher(f);
+    return 0;
+}
+
+int puddle_pond_upload(puddle_ctx *ctx, const char *pond, const char *files, size_t files_len, const char **code)
+{
+    if (!ctx->ponds || puddle_ponds_conn(ctx->ponds, pond, NULL) != 0) {
+        *code = "no_pond";
+        return -1;
+    }
+    puddle_file_ref *refs = nullptr;
+    size_t nrefs = 0;
+    if (files && files_len && puddle_file_refs_parse(files, files_len, &refs, &nrefs) != 0) {
+        *code = "no_file";
+        return -1;
+    }
+    for (size_t i = 0; i < nrefs; i++) {
+        int64_t size = 0;
+        if (!ctx->files || puddle_files_state(ctx->files, refs[i].id, &size, nullptr) != PUDDLE_FILE_WHOLE)
+            continue; /* not here: the Pond has it already, or says no_file */
+        if (!upload_file(ctx, pond, refs[i], code)) {
+            free(refs);
+            return -1;
+        }
+    }
+    free(refs);
+    return 0;
+}
+
 int puddle_pond_admin(puddle_ctx *ctx, const char *pond, const char *method, const char *target, const char *body, size_t len,
                       int *status, char **reply, size_t *reply_len, const char **code)
 {
-    if (strncmp(target, "/pond/v1/admin/", 15) != 0 && strcmp(target, "/pond/v1/roles/answer") != 0 && strcmp(target, "/pond/v1/pictures") != 0) {
+    if (strncmp(target, "/pond/v1/admin/", 15) != 0 && strcmp(target, "/pond/v1/roles/answer") != 0 && strcmp(target, "/pond/v1/pictures") != 0 &&
+        strncmp(target, "/pond/v1/pages/", 15) != 0) {
         *code = "failed";
         return -1;
     }

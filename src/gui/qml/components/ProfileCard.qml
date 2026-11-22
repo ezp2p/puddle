@@ -5,7 +5,8 @@ import "../theme"
 
 // Someone's card, just under their name or picture where it was clicked, as Discord pops a profile out: a band in their
 // colours (or their banner), their picture, name and pronouns, their blurb, and in a Pond their role and whether they are
-// muted. Beside the picture, small icons: Message and Block, and for an operator or administrator who outranks them in a Pond, Mute, Kick and Ban
+// muted, and the roles they hold there (in each role's colour; someone who may give roles has a + to give or take them).
+// Beside the picture, small icons: Message and Block, and in a Pond, for whoever may and is above them, Mute, Kick and Ban
 // (asked through the PersonMenu's dialogs, so the card and the menu ask the same way). In a Puddle
 // chat it shows what is known at once and fills in as their profile for the place on screen arrives (Chats.loadCard).
 // showFor(item, card): `card` is Ponds.card(id) or Chats.card(id).
@@ -36,6 +37,14 @@ Popup {
     property var ponds: null       // in a Pond: its operators' and administrators' buttons
     property var menu: null        // the PersonMenu, whose dialogs the buttons use (so they ask the same way)
     property var info: ({})
+    // a change of roles, made from here or anywhere: the roles shown are the Pond's now
+    Connections {
+        target: card.ponds
+        function onCurrentInfoChanged() {
+            if (card.opened && card.info.pond && card.ponds && card.info.id)
+                card.info = Object.assign({}, card.info, { roles: card.ponds.rolesOf(card.info.id) })
+        }
+    }
     property bool canMod: false    // we outrank them in this Pond (asked as the card opens: ranks change)
     property bool blocked: false
     signal messageRequested(string userId)
@@ -198,7 +207,7 @@ Popup {
                 }
                 CardAction {
                     objectName: "profileCardKick"
-                    visible: card.canMod && card.menu !== null
+                    visible: card.canMod && card.menu !== null && card.ponds.canKick
                     glyph: "door-exit"
                     tip: qsTr("Kick")
                     danger: true
@@ -206,7 +215,7 @@ Popup {
                 }
                 CardAction {
                     objectName: "profileCardBan"
-                    visible: card.canMod && card.menu !== null
+                    visible: card.canMod && card.menu !== null && card.ponds.canBan
                     glyph: "hammer"
                     tip: qsTr("Ban")
                     danger: true
@@ -256,6 +265,74 @@ Popup {
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
                 text: card.info.blurb || ""
+            }
+            // their roles in this Pond, highest first, as Discord's profile shows them
+            ColumnLayout {
+                id: rolesBox
+                objectName: "profileCardRoles"
+                readonly property var held: card.info.roles || []
+                readonly property bool canGive: card.ponds !== null && card.info.pond !== undefined && card.ponds.canRoles &&
+                                                card.ponds.canManageRoles && card.ponds.roles.count > 0
+                visible: card.info.roles !== undefined && (held.length > 0 || canGive)
+                Layout.fillWidth: true
+                spacing: 4
+                Rectangle { Layout.fillWidth: true; Layout.topMargin: 6; Layout.bottomMargin: 2; height: 1; color: Theme.hairline }
+                Label { text: qsTr("Roles"); font.pixelSize: 11; font.bold: true; opacity: 0.6 }
+                Flow {
+                    Layout.fillWidth: true
+                    spacing: 4
+                    Repeater {
+                        model: rolesBox.held
+                        delegate: Rectangle {
+                            required property var modelData
+                            objectName: "profileCardRole_" + modelData.name
+                            height: 22; radius: 6
+                            width: chipRow.implicitWidth + 14
+                            color: Theme.tint(Theme.text, Theme.hover)
+                            border.width: 1
+                            border.color: Theme.hairline
+                            Row {
+                                id: chipRow
+                                anchors.centerIn: parent
+                                spacing: 5
+                                Rectangle {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: 10; height: 10; radius: 5
+                                    color: parent.parent.modelData.color || Theme.tint(Theme.text, 0.45)
+                                }
+                                Label { text: parent.parent.modelData.name; font.pixelSize: 12 }
+                            }
+                        }
+                    }
+                    // give or take a role (those below ours, unless we have a rank)
+                    Rectangle {
+                        objectName: "profileCardAddRole"
+                        visible: rolesBox.canGive
+                        height: 22; width: 22; radius: 6
+                        color: plusHover.hovered ? Theme.tint(Theme.text, Theme.selected) : Theme.tint(Theme.text, Theme.hover)
+                        Icon { anchors.centerIn: parent; glyph: "plus"; size: 14 }
+                        HoverHandler { id: plusHover; cursorShape: Qt.PointingHandCursor }
+                        TapHandler { onTapped: giveMenu.popup() }
+                        ToolTip.text: qsTr("Roles"); ToolTip.visible: plusHover.hovered; ToolTip.delay: 300
+                        Accessible.role: Accessible.Button
+                        Accessible.name: qsTr("Give or take roles")
+                        Menu {
+                            id: giveMenu
+                            Repeater {
+                                model: card.ponds ? card.ponds.roles : null
+                                delegate: MenuItem {
+                                    required property var model
+                                    objectName: "giveRole_" + model.name
+                                    text: model.name
+                                    checkable: true
+                                    enabled: model.editable === true
+                                    checked: rolesBox.held.some(r => r.id === model.id)
+                                    onTriggered: card.ponds.setMemberRole(card.info.id, model.id, checked)
+                                }
+                            }
+                        }
+                    }
+                }
             }
             Label {
                 visible: (card.info.place || "") !== ""
