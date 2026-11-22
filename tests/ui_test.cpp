@@ -10,6 +10,7 @@
 #include <QRegularExpression>
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
+#include <QQmlComponent>
 #include <QQmlContext>
 #include <QPointer>
 #include <QQuickItem>
@@ -1436,6 +1437,21 @@ int main(int argc, char **argv)
             CHECK(until([&] { return row(members, "name", "Bob").value("group").toString() == QStringLiteral("Frog Wranglers — 1"); }, 5000));
             CHECK(row(members, "name", "Ann").value("group").toString().startsWith("Members — "));
             CHECK(members->at(0).value("name").toString() == "Bob");
+            /* name colours (the Pond's docs/design.md, "Role colours"): Bob's own, until he chooses his role's, or the Pond
+             * makes everyone's so (the switch in Server Settings) */
+            {
+                const QString own = row(members, "name", "Bob").value("color").toString();
+                CHECK(own != "#e67e22" && row(members, "name", "Bob").value("nameColor").toString() == own);
+                CHECK(PB.canRoleColors() && PB.myRoleColor() == "#e67e22" && !PB.useRoleColor() && !P.roleColorsEnforced());
+                PB.setUseRoleColor(true);
+                CHECK(until([&] { return PB.useRoleColor() && row(members, "name", "Bob").value("nameColor").toString() == "#e67e22"; }, 10000));
+                PB.setUseRoleColor(false);
+                CHECK(until([&] { return !PB.useRoleColor() && row(members, "name", "Bob").value("nameColor").toString() == own; }, 10000));
+                CHECK(clickName("enforceRoleColors"));
+                CHECK(until([&] { return P.roleColorsEnforced() && PB.roleColorsEnforced() && row(members, "name", "Bob").value("nameColor").toString() == "#e67e22"; }, 10000));
+                CHECK(clickName("enforceRoleColors"));
+                CHECK(until([&] { return !P.roleColorsEnforced() && row(members, "name", "Bob").value("nameColor").toString() == own; }, 10000));
+            }
             /* the order: a second role, moved above the first, for Bob too */
             P.createRole("Tadpoles");
             CHECK(until([&] { return roles->rowCount() == 2; }, 10000));
@@ -1454,6 +1470,25 @@ int main(int argc, char **argv)
             settle(300);
             if (!shot.isEmpty())
                 win->grabWindow().save(shot + "-pond-card-roles.png");
+            /* the + keeps its click: the card isn't modal, so a click it lets pass would reach what lies under it (a picture
+             * in the channel opened its viewer). A catcher over the whole window, under the card, must see nothing. */
+            {
+                QQmlComponent pc(qmlEngine(win));
+                pc.setData("import QtQuick\nItem { property int hits: 0; TapHandler { onTapped: parent.hits++ } }", QUrl()); // as a picture in a message listens
+                QPointer<QQuickItem> catcher(qobject_cast<QQuickItem *>(pc.create()));
+                CHECK(catcher != nullptr);
+                if (catcher) {
+                    catcher->setParentItem(win->contentItem());
+                    catcher->setSize(win->contentItem()->size());
+                    catcher->setZ(1000); // over the window's content, under the popups' overlay
+                    CHECK(click(find("profileCardAddRole")));
+                    CHECK(until([&] { return find("giveRole_Frog Wranglers") != nullptr && find("giveRole_Frog Wranglers")->isVisible(); }, 3000));
+                    CHECK(catcher->property("hits").toInt() == 0);
+                    key(Qt::Key_Escape);
+                    settle(200);
+                    delete catcher;
+                }
+            }
             key(Qt::Key_Escape);
             settle(200);
             P.deleteRole(tadId);

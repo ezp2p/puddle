@@ -312,7 +312,8 @@ Popup {
                         color: plusHover.hovered ? Theme.tint(Theme.text, Theme.selected) : Theme.tint(Theme.text, Theme.hover)
                         Icon { anchors.centerIn: parent; glyph: "plus"; size: 14 }
                         HoverHandler { id: plusHover; cursorShape: Qt.PointingHandCursor }
-                        TapHandler { onTapped: giveMenu.popup() }
+                        // take the press for ourselves: the card is not modal, so a click it lets pass reaches whatever lies under it
+                        TapHandler { gesturePolicy: TapHandler.ReleaseWithinBounds; onTapped: giveMenu.popup() }
                         ToolTip.text: qsTr("Roles"); ToolTip.visible: plusHover.hovered; ToolTip.delay: 300
                         Accessible.role: Accessible.Button
                         Accessible.name: qsTr("Give or take roles")

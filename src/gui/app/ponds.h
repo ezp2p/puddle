@@ -26,6 +26,11 @@ class Ponds : public QObject {
     Q_PROPERTY(bool canPages READ canPages NOTIFY currentInfoChanged)           // it has pages and a banner (`pages`)
     Q_PROPERTY(bool canManagePages READ canManagePages NOTIFY currentInfoChanged)
     Q_PROPERTY(QString currentBanner READ currentBanner NOTIFY currentInfoChanged) // its banner, a picture's hash; "" for none
+    // names in a role's colour (protocol 12): each member's choice, or the Pond's for everyone; our choice, and our role's colour
+    Q_PROPERTY(bool canRoleColors READ canRoleColors NOTIFY currentInfoChanged)
+    Q_PROPERTY(bool roleColorsEnforced READ roleColorsEnforced NOTIFY currentInfoChanged)
+    Q_PROPERTY(bool useRoleColor READ useRoleColor NOTIFY currentInfoChanged)
+    Q_PROPERTY(QString myRoleColor READ myRoleColor NOTIFY currentInfoChanged)
     Q_PROPERTY(QObject *bans READ bans CONSTANT)           // of the open Pond, once loadBans() has asked: member, name, by, byName, reason, ts
     Q_PROPERTY(QObject *invites READ invites CONSTANT)     // of the open Pond, once loadInvites() has asked: token, link, uses, maxUses, expires, created
     Q_PROPERTY(QObject *messages READ messages CONSTANT)   // the open channel, oldest first: id, author, name, tint, avatar, text, files, ts, mine, grouped, dayStart
@@ -89,6 +94,10 @@ public:
     bool canPages() const { return info_.value("features").toArray().contains(QStringLiteral("pages")); }
     bool canManagePages() const { return canPages() && may("manage_pages"); }
     QString currentBanner() const { return info_.value("banner").toObject().value("hash").toString(); }
+    bool canRoleColors() const { return info_.value("features").toArray().contains(QStringLiteral("role_colors")); }
+    bool roleColorsEnforced() const { return info_.value("role_colors").toString() == QLatin1String("enforced"); }
+    bool useRoleColor() const;
+    QString myRoleColor() const;
     QObject *bans() { return &bans_; }
     QObject *invites() { return &invites_; }
     QString currentRole() const { return info_.value("role").toString(QStringLiteral("member")); }
@@ -180,6 +189,8 @@ public:
     Q_INVOKABLE void deletePage(const QString &pageId);
     Q_INVOKABLE void movePage(const QString &pageId, int by); // -1 up, +1 down
     Q_INVOKABLE void fetchPageFile(const QString &fileId);   // one of the open page's that did not come by itself
+    Q_INVOKABLE void setRoleColorsEnforced(bool on);       // those who may manage the Pond
+    Q_INVOKABLE void setUseRoleColor(bool on);             // our own name, in this Pond
     Q_INVOKABLE void setBanner(const QString &hash);        // a picture sent to our Puddle first; "" for none
     // a page's markdown as shown: each #channel-name (a channel we see) a link to "channel:<id>", outside code
     Q_INVOKABLE QString pageMarkdown(const QString &body) const;

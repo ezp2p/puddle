@@ -85,7 +85,7 @@ Pane {
                         Layout.fillWidth: !badge.visible && !mutedMark.visible
                         elide: Text.ElideRight
                         text: pRow.model.isMe ? qsTr("%1 (you)").arg(pRow.model.name) : pRow.model.name
-                        color: pRow.model.color ? pRow.model.color : palette.text
+                        color: pRow.model.nameColor ? pRow.model.nameColor : palette.text // their role's colour if they chose it (or the Pond says), else their own
                     }
                     RoleBadge { id: badge; role: pRow.model.role || ""; Layout.rightMargin: mutedMark.visible ? 0 : 8 }
                     // muted by an operator or administrator

@@ -312,6 +312,23 @@ static int admin_banner(const puddle_call *c, puddle_jw *)
     return set_picture(c, "/pond/v1/admin/banner");
 }
 
+/* ---- role colours (a Pond of protocol 12; the Pond's docs/design.md, "Role colours") ---- */
+
+/* Whether our name there shows in our highest coloured role's colour: {"use": bool} */
+static int role_color(const puddle_call *c, puddle_jw *)
+{
+    if (!puddle_ponds_has_feature(pondsOf(c), puddle_param(c, "pond"), "role_colors"))
+        throw Error(409, "no_role_colors");
+    return relay(c, "POST", "/pond/v1/role_color", objectBody(c));
+}
+/* Whether everyone's does, whatever they chose: {"enforced": bool} */
+static int admin_role_colors(const puddle_call *c, puddle_jw *)
+{
+    if (!puddle_ponds_has_feature(pondsOf(c), puddle_param(c, "pond"), "role_colors"))
+        throw Error(409, "no_role_colors");
+    return relay(c, "POST", "/pond/v1/admin/role_colors", objectBody(c));
+}
+
 /* ---- pages (the Pond's docs/design.md, "Pages") ---- */
 
 /* The page as the Pond gives it, asked each time it is opened: {id, title, kind, body, updated, updated_by, files}, each file a
@@ -630,6 +647,8 @@ const puddle_route puddle_pond_api_routes[] = {
     { "POST", POND "/admin/pond",                                 PUDDLE_AUTH_OWNER, 8192,  admin_pond,       NULL },
     { "POST", POND "/admin/icon",                                 PUDDLE_AUTH_OWNER, 256,   admin_icon,       NULL },
     { "POST", POND "/admin/banner",                               PUDDLE_AUTH_OWNER, 256,   admin_banner,     NULL },
+    { "POST", POND "/admin/role_colors",                          PUDDLE_AUTH_OWNER, 64,    admin_role_colors, NULL },
+    { "POST", POND "/role_color",                                 PUDDLE_AUTH_OWNER, 64,    role_color,       NULL },
     { "GET",  POND "/pages/{page:num}",                           PUDDLE_AUTH_OWNER, 0,     get_page,         NULL },
     { "POST", POND "/pages/{page:num}/files/{file:event}/download", PUDDLE_AUTH_OWNER, 64,  fetch_page_file,  NULL },
     { "POST", POND "/admin/pages/create",                         PUDDLE_AUTH_OWNER, 300000, admin_page_create, NULL },

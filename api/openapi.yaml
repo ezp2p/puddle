@@ -580,6 +580,20 @@ paths:
       tags: [ponds]
       summary: "The Pond's banner, as its icon: {hash} of a picture this Puddle holds, or {hash: null} (a Pond of protocol 11; `409 no_pages` for an older one)"
       responses: { "204": { description: Done } }
+  /api/v1/ponds/{pond}/admin/role_colors:
+    parameters: [{ $ref: "#/components/parameters/Pond" }]
+    post:
+      tags: [ponds]
+      summary: "Everyone's name in their role's colour, or each member's choice: {enforced} (a Pond of protocol 12; `409 no_role_colors` for an older one)"
+      requestBody: { content: { application/json: { schema: { type: object, required: [enforced], properties: { enforced: { type: boolean } } } } } }
+      responses: { "204": { description: Done } }
+  /api/v1/ponds/{pond}/role_color:
+    parameters: [{ $ref: "#/components/parameters/Pond" }]
+    post:
+      tags: [ponds]
+      summary: "Whether our name there shows in our highest coloured role's colour: {use} (a Pond of protocol 12; `409 no_role_colors` for an older one)"
+      requestBody: { content: { application/json: { schema: { type: object, required: [use], properties: { use: { type: boolean } } } } } }
+      responses: { "200": { description: "`{use}`" } }
   /api/v1/ponds/{pond}/admin/roles/order:
     parameters: [{ $ref: "#/components/parameters/Pond" }]
     post:
