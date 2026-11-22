@@ -169,6 +169,8 @@ Pane {
         target: shell.ponds
         function onFailed(what) { toast.show(what) }
         function onAdminDone(what) { if (!pondSettings.opened) toast.show(what) }
+        function onSettingsWanted(section) { pondSettings.show(section) }
+        function onCheckout(url) { Qt.openUrlExternally(url); toast.show(qsTr("Pay in your browser: the Pond sees the payment a moment after.")) }
         function onAdminFailed(why) { if (!pondSettings.opened) toast.show(why) }
         function onJoined(id) { shell.openPond(id) }
         // the open Pond went away (we left it): nothing to show but the empty page

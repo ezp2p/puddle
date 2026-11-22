@@ -107,7 +107,7 @@ static QPoint centre(QQuickItem *i) { return i->mapToScene(QPointF(i->width() / 
 static void reveal(QQuickItem *i)
 {
     for (QQuickItem *p = i ? i->parentItem() : nullptr; p; p = p->parentItem())
-        if (p->objectName() == "settingsScroll") {
+        if (p->objectName() == "settingsScroll" || p->objectName() == "pageScroll") {
             QQuickItem *content = p->property("contentItem").value<QQuickItem *>();
             if (!content)
                 return;
@@ -1420,11 +1420,14 @@ int main(int argc, char **argv)
             CHECK(!PB.canAdmin() && !PB.canKick());
             CHECK(clickName("settingsSection_roles"));
             CHECK(until([&] { return find("editRole_Frog Wranglers") != nullptr; }, 3000));
+            /* as Discord lays it out: the role chosen on the left, its Display tab (colour, shown apart), then Permissions */
             CHECK(click(find("editRole_Frog Wranglers")));
-            CHECK(until([&] { return find("rolePermission_kick_members") != nullptr; }, 3000));
+            CHECK(until([&] { return find("roleColor_#e67e22") != nullptr && find("roleColor_#e67e22")->isVisible(); }, 3000));
             CHECK(click(find("roleColor_#e67e22")));
-            CHECK(click(find("rolePermission_kick_members")) && click(find("rolePermission_mute_members")));
             CHECK(click(find("roleHoist")));
+            CHECK(clickName("roleTabPermissions"));
+            CHECK(until([&] { return find("rolePermission_kick_members") != nullptr && find("rolePermission_kick_members")->isVisible(); }, 3000));
+            CHECK(click(find("rolePermission_kick_members")) && click(find("rolePermission_mute_members")));
             settle(300);
             if (!shot.isEmpty())
                 win->grabWindow().save(shot + "-pond-role-edit.png");
@@ -1560,6 +1563,156 @@ int main(int argc, char **argv)
             CHECK(until([&] { return P.currentBanner().isEmpty(); }, 10000));
             P.deletePage(pageId);
             CHECK(until([&] { return pagesA->rowCount() == 0 && P.page().isEmpty(); }, 10000));
+
+            /* ---- protocol 13 (the Pond's docs/design.md): media in the markdown, the page kinds, permissions ---- */
+            CHECK(P.canPageKinds() && P.canOverrides() && P.canShop() && P.canApplications());
+            /* a picture shows where the markdown names it; Media's Insert writes that for you */
+            {
+                P.createPage("Guide");
+                CHECK(until([&] { return pagesA->rowCount() == 1 && !P.page().isEmpty() && find("pageEdit") && find("pageEdit")->isEnabled(); }, 10000));
+                const QString guideId = P.page();
+                QImage frog(64, 48, QImage::Format_RGB32);
+                frog.fill(QColor("#2f9e44"));
+                CHECK(frog.save(home.path() + "/frog.png"));
+                QSignalSpy sent(&A, &Chats::filesSent);
+                A.sendFilesWith(QStringLiteral("/api/v1/ponds/%1/admin/pages/%2/edit").arg(pondId, guideId),
+                                { QVariantMap{ { "key", "f1" }, { "name", "frog.png" }, { "mime", "image/png" }, { "path", home.path() + "/frog.png" } } },
+                                { { "title", "Guide" }, { "body", "# Frogs\n\n![a frog](media:frog.png)\n\nThat is a frog." } }, {});
+                CHECK(until([&] { return sent.count() == 1; }, 15000));
+                CHECK(until([&] { QQuickItem *t = find("pageText"); return t && t->property("text").toString().contains("<img src=\"file:"); }, 15000));
+                CHECK(find("pageText")->property("text").toString().contains("That is a frog"));
+                CHECK(click(find("pageEdit")));
+                CHECK(until([&] { return find("pageBodyField") != nullptr; }, 3000));
+                if (find("pageBodyField"))
+                    find("pageBodyField")->setProperty("text", "");
+                CHECK(clickName("pageTabMedia"));
+                CHECK(until([&] { return find("pageMedia_frog.png") != nullptr && find("pageMedia_frog.png")->isVisible(); }, 5000));
+                settle(300);
+                if (!shot.isEmpty())
+                    win->grabWindow().save(shot + "-pond-page-media.png");
+                QQuickItem *insert = nullptr;
+                for (QQuickItem *i : all("insertMedia"))
+                    if (i->isVisible())
+                        insert = i;
+                CHECK(click(insert));
+                CHECK(until([&] { QQuickItem *b = find("pageBodyField"); return b && b->property("text").toString() == "![](media:frog.png)"; }, 3000));
+                key(Qt::Key_Escape);
+                P.deletePage(guideId);
+                CHECK(until([&] { return pagesA->rowCount() == 0; }, 10000));
+            }
+            /* an events page, made from the + with its kind; an event added on it; Bob is going */
+            {
+                CHECK(clickName("newPage"));
+                CHECK(until([&] { return find("newPageTitle") != nullptr; }, 3000));
+                find("newPageTitle")->setProperty("text", "Meetups");
+                CHECK(clickName("newPageKind_events"));
+                CHECK(clickName("createPage"));
+                CHECK(until([&] { return pagesA->rowCount() == 1 && P.pageData().value("kind").toString() == "events"; }, 10000));
+                const QString evPage = P.page();
+                CHECK(clickName("addEvent"));
+                CHECK(until([&] { return find("eventTitle") != nullptr && find("eventTitle")->isVisible(); }, 3000));
+                if (find("eventTitle"))
+                    find("eventTitle")->setProperty("text", "Frog walk");
+                if (find("eventDay"))
+                    find("eventDay")->setProperty("text", "2030-04-02");
+                if (find("eventFrom"))
+                    find("eventFrom")->setProperty("text", "19:00");
+                if (find("eventPlace"))
+                    find("eventPlace")->setProperty("text", "#general");
+                CHECK(clickName("saveEvent"));
+                CHECK(until([&] { return P.pageData().value("events").toList().size() == 1; }, 10000));
+                const QVariantMap ev = P.pageData().value("events").toList().value(0).toMap();
+                CHECK(ev.value("title").toString() == "Frog walk" && QDateTime::fromMSecsSinceEpoch(qint64(ev.value("starts").toDouble())).toString("yyyy-MM-dd HH:mm") == "2030-04-02 19:00");
+                PB.openPage(evPage);
+                CHECK(until([&] { return PB.pageData().value("events").toList().size() == 1; }, 10000));
+                PB.setGoing(evPage, QString::number(qint64(ev.value("id").toDouble())), true);
+                CHECK(until([&] { return PB.pageData().value("events").toList().value(0).toMap().value("me").toBool(); }, 10000));
+                CHECK(PB.pageData().value("events").toList().value(0).toMap().value("going").toInt() == 1);
+                settle(300);
+                if (!shot.isEmpty())
+                    win->grabWindow().save(shot + "-pond-events.png");
+                P.deletePage(evPage);
+                CHECK(until([&] { return pagesA->rowCount() == 0; }, 10000));
+            }
+            /* a roles page: Bob takes the role it offers for himself */
+            {
+                P.createRole("Pings");
+                CHECK(until([&] { return !row(roles, "name", "Pings").isEmpty(); }, 10000));
+                const QString pings = row(roles, "name", "Pings").value("id").toString();
+                P.createPage("Pick roles", "roles");
+                CHECK(until([&] { return pagesA->rowCount() == 1 && P.pageData().value("kind").toString() == "roles"; }, 10000));
+                const QString rp = P.page();
+                P.savePage(rp, "Pick roles", "Take what you like.", {},
+                           { { "kind", "roles" }, { "data", QVariantMap{ { "roles", QVariantList{ QVariantMap{ { "role", pings.toLongLong() }, { "description", "Be told" } } } } } } });
+                CHECK(until([&] { return P.pageData().value("data").toMap().value("roles").toList().size() == 1; }, 10000));
+                CHECK(until([&] { return find("pickRole_Pings") != nullptr && find("pickRole_Pings")->isVisible(); }, 5000));
+                settle(300);
+                if (!shot.isEmpty())
+                    win->grabWindow().save(shot + "-pond-roles-page.png");
+                PB.openPage(rp);
+                CHECK(until([&] { return PB.pageData().value("kind").toString() == "roles"; }, 10000));
+                PB.pickRoles(rp, { pings });
+                CHECK(until([&] { return row(members, "name", "Bob").value("roles").toArray().contains(pings); }, 10000));
+                PB.pickRoles(rp, {});
+                CHECK(until([&] { return !row(members, "name", "Bob").value("roles").toArray().contains(pings); }, 10000));
+                P.deletePage(rp);
+                P.deleteRole(pings);
+                CHECK(until([&] { return pagesA->rowCount() == 0; }, 10000));
+            }
+            /* a shop page: an item on it, which Bob sees; no payments until Stripe is connected */
+            {
+                P.createPage("Shop", "shop");
+                CHECK(until([&] { return pagesA->rowCount() == 1 && P.pageData().value("kind").toString() == "shop"; }, 10000));
+                const QString sp = P.page();
+                CHECK(clickName("addItem"));
+                CHECK(until([&] { return find("itemTitle") != nullptr && find("itemTitle")->isVisible(); }, 3000));
+                if (find("itemTitle"))
+                    find("itemTitle")->setProperty("text", "Sticker");
+                if (find("itemPrice"))
+                    find("itemPrice")->setProperty("text", "3.50");
+                CHECK(clickName("saveItem"));
+                CHECK(until([&] { return P.pageData().value("items").toList().size() == 1; }, 10000));
+                CHECK(P.pageData().value("items").toList().value(0).toMap().value("price").toInt() == 350);
+                CHECK(!P.shopPayments() && !P.pageData().value("payments").toBool());
+                PB.openPage(sp);
+                CHECK(until([&] { return PB.pageData().value("items").toList().size() == 1; }, 10000));
+                settle(300);
+                if (!shot.isEmpty())
+                    win->grabWindow().save(shot + "-pond-shop.png");
+                P.deletePage(sp);
+                CHECK(until([&] { return pagesA->rowCount() == 0; }, 10000));
+            }
+            /* permissions for a channel, in its own page of Server Settings: everyone may not write in #general, until it is
+             * given back with the editor's "as the roles say" */
+            {
+                P.openChannel(general);
+                PB.openChannel(general);
+                CHECK(until([&] { return PB.canSendHere(); }, 5000));
+                P.setChannelOverrides(general, { QVariantMap{ { "role", "0" }, { "allow", QStringList() }, { "deny", QStringList{ "send_messages" } } } });
+                CHECK(until([&] { return !PB.canSendHere(); }, 10000));
+                CHECK(P.canSendHere()); /* an operator may do everything */
+                CHECK(clickName("pondHeader"));
+                CHECK(clickName("serverSettings"));
+                CHECK(clickName("settingsSection_channels"));
+                CHECK(clickName("editChannel_general"));
+                CHECK(clickName("channelTabPermissions"));
+                CHECK(until([&] { return find("override_send_messages_deny") != nullptr && find("override_send_messages_deny")->property("on").toBool(); }, 5000));
+                settle(300);
+                if (!shot.isEmpty())
+                    win->grabWindow().save(shot + "-pond-channel-permissions.png");
+                CHECK(clickName("override_send_messages_inherit"));
+                CHECK(clickName("saveChannel"));
+                CHECK(until([&] { return PB.canSendHere(); }, 10000));
+                /* what everyone may do: no files anywhere, then back */
+                CHECK(clickName("channelEditorBack"));
+                const QStringList all13{ "view_channels", "send_messages", "attach_files", "connect", "speak", "video" };
+                P.setEveryone({ "view_channels", "send_messages", "connect", "speak", "video" });
+                CHECK(until([&] { return !PB.canAttachHere() && PB.canSendHere(); }, 10000));
+                P.setEveryone(all13);
+                CHECK(until([&] { return PB.canAttachHere(); }, 10000));
+                key(Qt::Key_Escape);
+                settle(200);
+            }
         }
         /* ---- a direct message through the Pond (docs/pond-dms.md): "Bob @ <Pond>", sealed from one Puddle to the other, with a
          * banner saying so; Bob offers to be friends ---- */

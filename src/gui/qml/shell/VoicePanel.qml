@@ -49,7 +49,8 @@ Item {
     function status() {
         if (inVoice)
             return (phase === "active" ? qsTr("Voice connected") : phase === "connecting" ? qsTr("Connecting…")
-                    : ponds.voiceReason === "removed" ? qsTr("Disconnected by the Pond") : qsTr("Voice disconnected"))
+                    : ponds.voiceReason === "removed" ? qsTr("Disconnected by the Pond")
+                    : ponds.voiceReason === "disconnected" ? qsTr("A moderator disconnected you") : qsTr("Voice disconnected"))
                    + (ponds.voicePondName !== "" ? " · " + ponds.voicePondName : "")
         const group = calls.group !== ""
         const what = phase === "ringing" ? (group ? qsTr("%1 started a call").arg(chats.nameOf(calls.user)) : qsTr("is calling you"))

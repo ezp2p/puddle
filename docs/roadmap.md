@@ -597,7 +597,8 @@ activation or push to talk, no cap on people or voices, cameras too, and the Pon
   pane for both (`VideoPane.qml`): a grid in a fixed order (or who's talking first, in Settings), click to pin (how one of
   several shared screens is picked), full size over the messages, or popped out. Tested in `pondvoice_test`, `call_test`,
   `groupcall_test`, `callvideo_test`, `ui_test` and the pond repository's `voice_test`.
-- [ ] **9.5 Moderation.** Disconnecting and muting someone, by administrators.
+- [x] **9.5 Moderation.** Disconnecting and muting someone, by whoever may there (the Pond's protocol 13: `voice_mute` and
+  `move_members`, for the whole Pond or one channel); a channel's permissions decide who may connect, speak and show video.
 
 ## Phase 10: TLS is transport only
 

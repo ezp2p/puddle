@@ -1581,6 +1581,8 @@ static void write_summary(puddle_jw *w, const Pond &pd)
         puddle_jw_str(w, "topic", c.topic.c_str());
         if (c.restricted) /* who may see it: operators, administrators and these; absent for everyone */
             write_ids(w, "roles", c.roles);
+        if (!c.overrides.empty()) /* what it allows and denies each role (protocol 13) */
+            write_overrides(w, c.overrides);
         puddle_jw_num(w, "last", c.recent.empty() ? 0 : c.recent.back().id);
         puddle_jw_str(w, "kind", c.voice ? "voice" : "text");
         if (c.voice) { /* who is in it now */

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QHash>
+#include <functional>
 #include <QJsonArray>
 #include <QObject>
 #include <QSet>
@@ -24,6 +25,23 @@ class Ponds : public QObject {
     // files (as a message's), updated, updatedBy (a name); empty until it comes
     Q_PROPERTY(QVariantMap pageData READ pageData NOTIFY pageDataChanged)
     Q_PROPERTY(bool canPages READ canPages NOTIFY currentInfoChanged)           // it has pages and a banner (`pages`)
+    // protocol 13 (the Pond's docs/design.md): permissions for everyone and each channel, page kinds, the shop, applications
+    Q_PROPERTY(bool canOverrides READ canOverrides NOTIFY currentInfoChanged)
+    Q_PROPERTY(bool canPageKinds READ canPageKinds NOTIFY currentInfoChanged)
+    Q_PROPERTY(bool canApplications READ canApplications NOTIFY currentInfoChanged)
+    Q_PROPERTY(bool canShop READ canShop NOTIFY currentInfoChanged)
+    Q_PROPERTY(bool canVoiceModeration READ canVoiceModeration NOTIFY currentInfoChanged)
+    Q_PROPERTY(QStringList everyone READ everyone NOTIFY currentInfoChanged)     // what everyone may do there (permission names)
+    Q_PROPERTY(bool canManageEvents READ canManageEvents NOTIFY currentInfoChanged)
+    Q_PROPERTY(bool canManageShop READ canManageShop NOTIFY currentInfoChanged)
+    Q_PROPERTY(bool canManageApplications READ canManageApplications NOTIFY currentInfoChanged)
+    Q_PROPERTY(bool shopPayments READ shopPayments NOTIFY currentInfoChanged)    // the shop takes payments (a Stripe key is set)
+    Q_PROPERTY(bool shopTest READ shopTest NOTIFY currentInfoChanged)            // ...in Stripe's test mode
+    Q_PROPERTY(bool canSendHere READ canSendHere NOTIFY channelChanged)          // in the open channel
+    Q_PROPERTY(bool canAttachHere READ canAttachHere NOTIFY channelChanged)
+    Q_PROPERTY(QObject *orders READ orders CONSTANT)              // once loadOrders() has asked: id, item, title, quantity, amount, currency, status, url, created, paid, member, memberName
+    Q_PROPERTY(QObject *applications READ applications CONSTANT)  // once loadApplications() has asked: member, name, answers, status, reason, created
+    Q_PROPERTY(int applicationsWaiting READ applicationsWaiting NOTIFY applicationsChanged)
     Q_PROPERTY(bool canManagePages READ canManagePages NOTIFY currentInfoChanged)
     Q_PROPERTY(QString currentBanner READ currentBanner NOTIFY currentInfoChanged) // its banner, a picture's hash; "" for none
     // names in a role's colour (protocol 12): each member's choice, or the Pond's for everyone; our choice, and our role's colour
@@ -93,6 +111,23 @@ public:
     QVariantMap pageData() const { return pageData_; }
     bool canPages() const { return info_.value("features").toArray().contains(QStringLiteral("pages")); }
     bool canManagePages() const { return canPages() && may("manage_pages"); }
+    bool feature(const char *f) const { return info_.value("features").toArray().contains(QLatin1String(f)); }
+    bool canOverrides() const { return feature("overrides"); }
+    bool canPageKinds() const { return feature("page_kinds"); }
+    bool canApplications() const { return feature("applications"); }
+    bool canShop() const { return feature("shop"); }
+    bool canVoiceModeration() const { return feature("voice_moderation"); }
+    QStringList everyone() const;
+    bool canManageEvents() const { return canPageKinds() && may("manage_events"); }
+    bool canManageShop() const { return canShop() && may("manage_shop"); }
+    bool canManageApplications() const { return canApplications() && may("manage_applications"); }
+    bool shopPayments() const { return info_.value("shop").toObject().value("payments").toBool(); }
+    bool shopTest() const { return info_.value("shop").toObject().value("test").toBool(true); }
+    bool canSendHere() const { return mayIn(channel_, QStringLiteral("send_messages")); }
+    bool canAttachHere() const { return mayIn(channel_, QStringLiteral("attach_files")); }
+    QObject *orders() { return &orders_; }
+    QObject *applications() { return &applications_; }
+    int applicationsWaiting() const { return applicationsWaiting_; }
     QString currentBanner() const { return info_.value("banner").toObject().value("hash").toString(); }
     bool canRoleColors() const { return info_.value("features").toArray().contains(QStringLiteral("role_colors")); }
     bool roleColorsEnforced() const { return info_.value("role_colors").toString() == QLatin1String("enforced"); }
@@ -103,7 +138,7 @@ public:
     QString currentRole() const { return info_.value("role").toString(QStringLiteral("member")); }
     bool ranked() const { return currentRole() == QLatin1String("operator") || currentRole() == QLatin1String("administrator"); }
     bool may(const char *permission) const { return ranked() || myPermissions().contains(QLatin1String(permission)); }
-    bool canAdmin() const { return ranked() || !myPermissions().isEmpty(); }
+    bool canAdmin() const; // any permission that opens Server Settings
     bool canMute() const { return may("mute_members") && info_.value("protocol").toInt() >= 7; }
     bool canManagePond() const { return may("manage_pond"); }
     bool canManageChannels() const { return may("manage_channels"); }
@@ -147,7 +182,8 @@ public:
 
     Q_INVOKABLE void refresh();
     // `profile`: which of the owner's profiles the members will see; empty for none
-    Q_INVOKABLE void join(const QString &link, const QString &profile);
+    // `answers`: an entry form's, when the Pond asks for one (application(), the Pond's docs/design.md, "Entry form")
+    Q_INVOKABLE void join(const QString &link, const QString &profile, const QVariantMap &answers = QVariantMap());
     Q_INVOKABLE void open(const QString &pondId);            // its first channel, or the one open there last
     Q_INVOKABLE void openChannel(const QString &channelId);
     Q_INVOKABLE void close();
@@ -183,9 +219,36 @@ public:
     // roles for channels, and the channels' order (the Pond's docs/design.md, "Roles for channels")
     // ---- pages (the Pond's docs/design.md, "Pages") ----
     Q_INVOKABLE void openPage(const QString &pageId);       // shown instead of the channel, until a channel is opened
-    Q_INVOKABLE void createPage(const QString &title);      // opened once made, to be written
+    Q_INVOKABLE void createPage(const QString &title, const QString &kind = QStringLiteral("markdown")); // opened once made, to be written
     // its title, its markdown, and the files it carries: those it had ({id, name, mime, size, ...}) and new ones from the composer
-    Q_INVOKABLE void savePage(const QString &pageId, const QString &title, const QString &body, const QVariantList &files);
+    // `extra`: data (the kind's settings), roles (null for everyone, or role ids), as the Pond takes them
+    Q_INVOKABLE void savePage(const QString &pageId, const QString &title, const QString &body, const QVariantList &files,
+                              const QVariantMap &extra = QVariantMap());
+    // the page kinds (the Pond's docs/design.md, "Pages"): roles members pick, events, the shop; each reloads the page
+    Q_INVOKABLE void pickRoles(const QString &pageId, const QStringList &roleIds);
+    Q_INVOKABLE void setGoing(const QString &pageId, const QString &eventId, bool going);
+    Q_INVOKABLE void saveEvent(const QString &pageId, const QString &eventId, const QVariantMap &fields); // "" eventId: a new one
+    Q_INVOKABLE void deleteEvent(const QString &pageId, const QString &eventId);
+    Q_INVOKABLE void saveItem(const QString &pageId, const QString &itemId, const QVariantMap &fields);   // "" itemId: a new one
+    Q_INVOKABLE void deleteItem(const QString &pageId, const QString &itemId);
+    // buy: the Pond makes a Stripe link for this order alone, opened in the browser (checkout(url)); `amount` for one paid as wished
+    Q_INVOKABLE void buy(const QString &pageId, const QString &itemId, int quantity, double amount);
+    Q_INVOKABLE void loadOrders(bool all);                   // ours, or (all) every order, for whoever keeps the shop
+    Q_INVOKABLE void setStripeKey(const QString &key);       // "" stops taking payments
+    Q_INVOKABLE void loadApplications();
+    Q_INVOKABLE void decideApplication(const QString &memberId, bool accept, const QString &reason);
+    // permissions (protocol 13): what everyone may do, and what a channel allows and denies each role ({role, allow, deny}; role "0" everyone)
+    Q_INVOKABLE void setEveryone(const QStringList &permissions);
+    Q_INVOKABLE QVariantList channelOverrides(const QString &channelId) const;
+    Q_INVOKABLE void setChannelOverrides(const QString &channelId, const QVariantList &overrides);
+    // may we do this in that channel (a permission's name)?
+    Q_INVOKABLE bool mayIn(const QString &channelId, const QString &permission) const;
+    // voice moderation (docs/ponds.md): mute someone in our voice channel for everyone, or disconnect them
+    Q_INVOKABLE void voiceMute(const QString &memberId, bool muted);
+    Q_INVOKABLE void voiceDisconnect(const QString &memberId);
+    Q_INVOKABLE void openSettings(const QString &section) { emit settingsWanted(section); }
+    // where a member is in the open Pond's voice: {channel, serverMuted}, or empty
+    Q_INVOKABLE QVariantMap inVoice(const QString &memberId) const;
     Q_INVOKABLE void deletePage(const QString &pageId);
     Q_INVOKABLE void movePage(const QString &pageId, int by); // -1 up, +1 down
     Q_INVOKABLE void fetchPageFile(const QString &fileId);   // one of the open page's that did not come by itself
@@ -250,6 +313,12 @@ signals:
     void pageChanged();
     void pageDataChanged();
     void pageSaved();     // a save of the open page went through
+    void checkout(const QString &url);  // pay here (a Stripe link for one order)
+    void settingsWanted(const QString &section); // open Server Settings at this section
+    void applicationsChanged();
+    // joining asked for an application, or says where it stands: code application_required, _pending, _declined, _refused or
+    // bad_answers; `pond` what the Pond said (form: {intro, questions}, reason, message)
+    void application(const QString &link, const QString &profile, const QString &code, const QVariantMap &pond);
 
 private:
     QSet<QString> blocked_;
@@ -261,7 +330,7 @@ private:
     void takeVoice(const QJsonObject &voice);
     void setVoiceFlag(const QString &name, bool on);
     QJsonObject channelRow(const QJsonObject &c) const;
-    QSet<QString> myPermissions() const;           // what our roles let us do there (not counting rank)
+    QSet<QString> myPermissions() const;           // what everyone, and our roles, let us do there (not counting rank)
     int topOf(const QString &memberId) const;      // where their highest role is in the order: 0 the highest; INT_MAX none
     QString memberRole(const QString &memberId) const;
     void loadPage();
@@ -274,7 +343,9 @@ private:
 
     ApiClient *api_;
     QTimer timer_;
-    JsonListModel list_, channels_, members_, messages_, bans_, invites_, roles_, pages_;
+    JsonListModel list_, channels_, members_, messages_, bans_, invites_, roles_, pages_, orders_, applications_;
+    int applicationsWaiting_ = 0;
+    void post(const QString &path, const QJsonObject &body, const QString &done, const QString &doing, std::function<void()> then = {});
     qint64 version_ = -1;
     QString current_, channel_, me_;
     QJsonObject info_;

@@ -239,8 +239,12 @@ Rectangle {
                     anchors.leftMargin: 10
                     anchors.rightMargin: 10
                     spacing: 6
-                    Icon { glyph: "file-text"; size: 18; opacity: pageRow.selected ? 1 : 0.6 }
+                    Icon {
+                        glyph: ({ roles: "tag", events: "calendar", form: "clipboard-list", shop: "shopping-bag" })[pageRow.model.kind] || "file-text"
+                        size: 18; opacity: pageRow.selected ? 1 : 0.6
+                    }
                     Label { text: pageRow.model.title; Layout.fillWidth: true; elide: Text.ElideRight; opacity: pageRow.selected ? 1 : 0.8; font.bold: pageRow.selected }
+                    Icon { visible: pageRow.model.restricted === true; glyph: "lock"; size: 13; opacity: 0.5 }
                 }
             }
         }
@@ -368,7 +372,9 @@ Rectangle {
                                 font.pixelSize: 13
                                 opacity: person.talking ? 1 : 0.75
                             }
-                            Icon { visible: person.modelData.muted; glyph: "microphone-off"; size: 14; opacity: 0.6 }
+                            Icon { visible: person.modelData.muted && !person.modelData.serverMuted; glyph: "microphone-off"; size: 14; opacity: 0.6 }
+                            // muted by a moderator, or not let speak in this channel: in red, as Discord's server mute
+                            Icon { objectName: "serverMuted_" + person.modelData.name; visible: person.modelData.serverMuted === true || person.modelData.speak === false; glyph: "microphone-off"; size: 14; color: Theme.danger }
                             Icon { visible: person.modelData.deafened; glyph: "headphones-off"; size: 14; opacity: 0.6 }
                         }
                     }
@@ -425,7 +431,8 @@ Rectangle {
     // a new page: its title, then it opens to be written
     Dialog {
         id: newPageDialog
-        function ask() { pageTitle.text = ""; open(); pageTitle.forceActiveFocus() }
+        property string kind: "markdown"
+        function ask() { pageTitle.text = ""; kind = "markdown"; open(); pageTitle.forceActiveFocus() }
         parent: Overlay.overlay
         anchors.centerIn: parent
         modal: true
@@ -434,7 +441,7 @@ Rectangle {
         ColumnLayout {
             width: newPageDialog.availableWidth
             spacing: 8
-            Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: qsTr("Pages show above the channels, for everyone here: rules, a guide, links.") }
+            Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: qsTr("Pages show above the channels: rules, a guide, links, and more.") }
             TextField {
                 id: pageTitle
                 objectName: "newPageTitle"
@@ -443,11 +450,28 @@ Rectangle {
                 maximumLength: 64
                 onAccepted: if (text.trim() !== "") newPageDialog.accept()
             }
+            // what kind of page (protocol 13): each adds to the markdown
+            Repeater {
+                model: bar.ponds.canPageKinds ? [
+                    { id: "markdown", title: qsTr("Page"), note: qsTr("Markdown, pictures and files") },
+                    { id: "roles", title: qsTr("Roles to pick"), note: qsTr("Members take roles for themselves") },
+                    { id: "events", title: qsTr("Events"), note: qsTr("A calendar of what's planned") },
+                    { id: "form", title: qsTr("Entry form"), note: qsTr("Questions those joining answer") },
+                    { id: "shop", title: qsTr("Shop"), note: qsTr("Things to buy, or donations, through Stripe") }
+                ] : []
+                delegate: RadioButton {
+                    required property var modelData
+                    objectName: "newPageKind_" + modelData.id
+                    text: modelData.title + " — " + modelData.note
+                    checked: newPageDialog.kind === modelData.id
+                    onClicked: newPageDialog.kind = modelData.id
+                }
+            }
         }
         footer: DialogButtonBox {
             Button { text: qsTr("Cancel"); DialogButtonBox.buttonRole: DialogButtonBox.RejectRole }
             Button { objectName: "createPage"; text: qsTr("Create"); enabled: pageTitle.text.trim() !== ""; DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole }
         }
-        onAccepted: if (pageTitle.text.trim() !== "") bar.ponds.createPage(pageTitle.text)
+        onAccepted: if (pageTitle.text.trim() !== "") bar.ponds.createPage(pageTitle.text, kind)
     }
 }

@@ -349,7 +349,10 @@ paths:
       summary: Join the Pond a pond:// invite names
       description: |
         `bad_link` (400) if it is not a pond:// link with an invite; `invite_refused` (409) if the Pond did not accept it (it
-        does not say why); `no_profile` (404); `unreachable`, `not_a_pond` (502).
+        does not say why); `no_profile` (404); `unreachable`, `not_a_pond` (502). A Pond with an entry form (protocol 13):
+        `409 {error, pond}` with `error` one of `application_required` (`pond.form`: {intro, questions}), `application_pending`,
+        `application_declined` (`pond.reason`, `pond.form`) or `application_refused`; `400 {error: bad_answers, pond}` (the
+        Pond's message). Joining again with `answers` applies.
       requestBody:
         content:
           application/json:
@@ -359,6 +362,7 @@ paths:
               properties:
                 link: { type: string, maxLength: 400, examples: ["pond://pond.example.org?invite=abcdefghijklmnopqrstuvwxyz"] }
                 profile: { type: [string, "null"], description: Which of the owner's profiles the members see; null or left out for none }
+                answers: { type: object, description: "An entry form's answers: question id to text, or a list of choices (protocol 13)" }
       responses:
         "201": { $ref: "#/components/responses/Pond" }
   /api/v1/ponds/{pond}:
@@ -580,6 +584,64 @@ paths:
       tags: [ponds]
       summary: "The Pond's banner, as its icon: {hash} of a picture this Puddle holds, or {hash: null} (a Pond of protocol 11; `409 no_pages` for an older one)"
       responses: { "204": { description: Done } }
+  # protocol 13 (the Pond's docs/design.md): each is the Pond's own route of the same path under /pond/v1, relayed as it is
+  /api/v1/ponds/{pond}/admin/everyone:
+    parameters: [{ $ref: "#/components/parameters/Pond" }]
+    post: { tags: [ponds], summary: "What everyone may do there: {permissions: [names]}", responses: { "204": { description: Done } } }
+  /api/v1/ponds/{pond}/admin/channels/{channel}/overrides:
+    parameters: [{ $ref: "#/components/parameters/Pond" }, { name: channel, in: path, required: true, schema: { type: integer } }]
+    post: { tags: [ponds], summary: "What a channel allows and denies everyone (role 0) and each role: {overrides: [{role, allow, deny}]}", responses: { "204": { description: Done } } }
+  /api/v1/ponds/{pond}/admin/shop/stripe:
+    parameters: [{ $ref: "#/components/parameters/Pond" }]
+    post: { tags: [ponds], summary: "The Stripe key the Pond's shop takes payments with: {key}, or {key: null} to stop", responses: { "204": { description: Done } } }
+  /api/v1/ponds/{pond}/orders:
+    parameters: [{ $ref: "#/components/parameters/Pond" }]
+    get: { tags: [ponds], summary: "Our orders in its shop: {orders}", responses: { "200": { description: "{orders}" } } }
+  /api/v1/ponds/{pond}/admin/orders:
+    parameters: [{ $ref: "#/components/parameters/Pond" }]
+    get: { tags: [ponds], summary: "Every order, for whoever may manage the shop", responses: { "200": { description: "{orders}" } } }
+  /api/v1/ponds/{pond}/admin/applications:
+    parameters: [{ $ref: "#/components/parameters/Pond" }]
+    get: { tags: [ponds], summary: "Applications to join, for whoever may manage them", responses: { "200": { description: "{applications}" } } }
+  /api/v1/ponds/{pond}/admin/applications/{member}/accept:
+    parameters: [{ $ref: "#/components/parameters/Pond" }, { name: member, in: path, required: true, schema: { type: string } }]
+    post: { tags: [ponds], summary: "They are a member now", responses: { "204": { description: Done } } }
+  /api/v1/ponds/{pond}/admin/applications/{member}/decline:
+    parameters: [{ $ref: "#/components/parameters/Pond" }, { name: member, in: path, required: true, schema: { type: string } }]
+    post: { tags: [ponds], summary: "Declined: {reason?}", responses: { "204": { description: Done } } }
+  /api/v1/ponds/{pond}/admin/pages/{page}/events/create:
+    parameters: [{ $ref: "#/components/parameters/Pond" }, { name: page, in: path, required: true, schema: { type: integer } }]
+    post: { tags: [ponds], summary: "An event on an events page: {title, starts, ends?, place?, description?}", responses: { "200": { description: "{id}" } } }
+  /api/v1/ponds/{pond}/admin/pages/{page}/events/{event}/edit:
+    parameters: [{ $ref: "#/components/parameters/Pond" }, { name: page, in: path, required: true, schema: { type: integer } }, { name: event, in: path, required: true, schema: { type: integer } }]
+    post: { tags: [ponds], summary: "What is given changes", responses: { "204": { description: Done } } }
+  /api/v1/ponds/{pond}/admin/pages/{page}/events/{event}/delete:
+    parameters: [{ $ref: "#/components/parameters/Pond" }, { name: page, in: path, required: true, schema: { type: integer } }, { name: event, in: path, required: true, schema: { type: integer } }]
+    post: { tags: [ponds], summary: "Deleted", responses: { "204": { description: Done } } }
+  /api/v1/ponds/{pond}/admin/pages/{page}/items/create:
+    parameters: [{ $ref: "#/components/parameters/Pond" }, { name: page, in: path, required: true, schema: { type: integer } }]
+    post: { tags: [ponds], summary: "Something a shop page sells: {title, price, description?, image?, custom?, stock?, active?}", responses: { "200": { description: "{id}" } } }
+  /api/v1/ponds/{pond}/admin/pages/{page}/items/{item}/edit:
+    parameters: [{ $ref: "#/components/parameters/Pond" }, { name: page, in: path, required: true, schema: { type: integer } }, { name: item, in: path, required: true, schema: { type: integer } }]
+    post: { tags: [ponds], summary: "What is given changes", responses: { "204": { description: Done } } }
+  /api/v1/ponds/{pond}/admin/pages/{page}/items/{item}/delete:
+    parameters: [{ $ref: "#/components/parameters/Pond" }, { name: page, in: path, required: true, schema: { type: integer } }, { name: item, in: path, required: true, schema: { type: integer } }]
+    post: { tags: [ponds], summary: "Taken off the page", responses: { "204": { description: Done } } }
+  /api/v1/ponds/{pond}/pages/{page}/roles:
+    parameters: [{ $ref: "#/components/parameters/Pond" }, { name: page, in: path, required: true, schema: { type: integer } }]
+    post: { tags: [ponds], summary: "Of the roles a roles page offers, those we hold now: {roles: [ids]}", responses: { "200": { description: "{roles}" } } }
+  /api/v1/ponds/{pond}/pages/{page}/events/{event}/going:
+    parameters: [{ $ref: "#/components/parameters/Pond" }, { name: page, in: path, required: true, schema: { type: integer } }, { name: event, in: path, required: true, schema: { type: integer } }]
+    post: { tags: [ponds], summary: "{going}", responses: { "200": { description: "{going, count}" } } }
+  /api/v1/ponds/{pond}/pages/{page}/items/{item}/buy:
+    parameters: [{ $ref: "#/components/parameters/Pond" }, { name: page, in: path, required: true, schema: { type: integer } }, { name: item, in: path, required: true, schema: { type: integer } }]
+    post: { tags: [ponds], summary: "Buy: {quantity?, amount?}; answers {order, url}, a Stripe link for this order alone", responses: { "200": { description: "{order, url}" } } }
+  /api/v1/ponds/{pond}/voice/members/{member}/mute:
+    parameters: [{ $ref: "#/components/parameters/Pond" }, { name: member, in: path, required: true, schema: { type: string } }]
+    post: { tags: [ponds], summary: "Mute someone in voice for everyone: {muted}", responses: { "204": { description: Done } } }
+  /api/v1/ponds/{pond}/voice/members/{member}/disconnect:
+    parameters: [{ $ref: "#/components/parameters/Pond" }, { name: member, in: path, required: true, schema: { type: string } }]
+    post: { tags: [ponds], summary: "Take someone out of their voice channel", responses: { "204": { description: Done } } }
   /api/v1/ponds/{pond}/admin/role_colors:
     parameters: [{ $ref: "#/components/parameters/Pond" }]
     post:

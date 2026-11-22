@@ -19,6 +19,7 @@ public:
     QHash<int, QByteArray> roleNames() const override;
 
     QJsonObject at(int row) const { return row >= 0 && row < items_.size() ? items_[row] : QJsonObject(); }
+    Q_INVOKABLE QVariantMap get(int row) const { return at(row).toVariantMap(); } // for QML
     const QList<QJsonObject> &items() const { return items_; }
 
     // Make the list these items. Rows with the same id in the same place are updated, not replaced.

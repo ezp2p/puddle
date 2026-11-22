@@ -28,6 +28,14 @@ On success the Pond answers with its id, name, channels and the member as it see
 
 Then it starts following the Pond. An invite the Pond did not accept is `409 invite_refused`; the Pond does not say why.
 
+**An entry form** (a Pond of protocol 13; the Pond's design, "Entry form"). A Pond may ask those joining to answer its
+questions first. Its `409 application_required` comes back to the app as `409 {error: "application_required", pond:
+{form: {intro, questions}}}`, and the join dialog shows the form. `POST /api/v1/ponds/join {link, profile, answers}` sends
+the answers (`POST /pond/v1/apply`, as a stranger, as a join is), then joins: while the application waits that is `409
+application_pending`, after a refusal `409 application_declined` with the reason (and the form, to answer again), and a
+bad answer `400 bad_answers` with the Pond's message. Once accepted, joining with the same invite works. The dialog's Check
+again asks; nothing is kept on the Puddle meanwhile, so the owner joins again later to see.
+
 A `puddle://` address and a `pond://` link are never mixed up. Each parser refuses the other kind with a message
 saying which it is.
 
@@ -207,11 +215,28 @@ A Pond has operators and administrators who run it from the app (the Pond's desi
 
 In the app, the Pond's name drops down its menu, as Discord's server menu does: **Server Settings** (for an operator
 or administrator), **Appear as…**, **Copy my id**, and **Leave Pond**. Server Settings opens over the window, with
-sections on the left (Overview, Channels, Roles, Members, Invites, Bans; Roles only where the Pond has them) and each section's settings in groups on the right
-(`shell/PondSettings.qml`). Invites makes one with an expiry (30 minutes to 7 days, or never) and a number of uses (or no
+sections on the left (Overview, Channels, Roles, Members, Invites, Bans, Applications, Shop; each only for whoever may use
+it, and where the Pond has it) and each section's settings on the right (`shell/PondSettings.qml`). Invites makes one with an expiry (30 minutes to 7 days, or never) and a number of uses (or no
 limit), copies its link at once and shows it to copy again, and lists those that can still be used (made there or with
-`pondctl`), each with Copy link and Revoke. Roles makes, edits and deletes roles, with how many hold each, and moves them up and down; its editor sets a role's name,
-colour, whether it is shown apart, and its permissions (only those the owner has themselves can be added). The member list
+`pondctl`), each with Copy link and Revoke.
+
+**Roles** is laid out as Discord's (`shell/PondRolesPane.qml`): the roles on the left, highest first, each with how many hold
+it and arrows to move it, a field to name a new one, and @everyone under them (protocol 13); the one chosen on the right in
+tabs: Display (name, colour, shown apart), Permissions (in groups: General, Membership, Text, Voice, Events and shop; each a
+switch, and only those the owner has themselves can be turned on) and Members (who holds it). @everyone has Permissions
+alone: what every member may do (`POST /api/v1/ponds/{pond}/admin/everyone`).
+
+**Channels** lists the channels, each with arrows, and a cog that opens it on a page of its own
+(`shell/PondChannelEditor.qml`): Overview (name, topic, Delete) and Permissions, as Discord's: @everyone and each role the
+channel says something of on the left (Add a role… to add one), and for the one chosen each permission the channel may
+set, with three choices: denied here, as the roles say (/), or allowed here. Private is the quick way to leave it to some
+roles: everyone is denied View channel, and roles added then are allowed it. Save sends them all at once
+(`/admin/channels/{channel}/overrides`). The app works out from these what the owner may do in a channel (`Ponds.mayIn`):
+a channel they may not write in says so in its composer, and its paperclip is off where they may not attach.
+
+**Applications** lists those waiting to be let in, with their answers, Accept and Decline (with a reason they see), and
+those answered under them; the section's name says how many wait. **Shop** connects Stripe (a key the Pond keeps and never
+shows again, Disconnect, and whether it is in test mode) and lists every order. The member list
 puts members under their highest role that is shown apart, with a heading for each, then everyone else under Members.
 Someone's card shows the roles they hold, each with its colour, and a + to give or take roles for whoever may. Overview
 sets the Pond's banner, beside its icon; a Pond too old for a banner and pages says so there. A banner may be an animated
@@ -223,15 +248,32 @@ to have it show in the colour of their highest coloured role instead (`POST /api
 Server Settings has a switch for whoever may manage the Pond, "Everyone's name in their role's colour"
 (`/admin/role_colors {enforced}`); while it is on, the menu item is gone. Pictures' letters keep the profile colour either way.
 
-A Pond's pages are listed above its channels in the channel list, under a line of their own, with a + for whoever may
-manage pages (it asks for a title, and the new page opens). A page shows where a channel's messages would be
-(`chat/PageView.qml`): its markdown, where #channel-name is a link that opens that channel, and its files under it, as a
-message's. Its header has Edit, Move up, Move down and Delete for whoever may manage pages; editing it is its title, its
-markdown, the files it carries (each can be taken off) and new ones from the paperclip. The banner shows over the Pond's
-name. Channels moves
-each channel up or down (for everyone), and its edit says who can see it: everyone, or only some roles. Members gives
+A Pond's pages are listed above its channels in the channel list, under a line of their own, each with its kind's icon (and a
+lock when only some roles see it), with a + for whoever may manage pages (it asks for a title and, where the Pond has them,
+a kind, and the new page opens). A page shows where a channel's messages would be (`chat/PageView.qml`): its markdown, where
+#channel-name is a link that opens that channel and each `![](media:name)` shows that picture of its media, as wide as the
+page; then what its kind adds; then its files that aren't pictures, as a message's. Its header has Edit, Move up, Move down
+and Delete for whoever may manage pages. Editing it is its title (with Cancel and Save beside it) and four tabs: Page (the
+markdown), Media (its pictures and files, each with Insert, which puts it in the markdown at the cursor, and a cross; Add
+pictures or files), the kind (which it is, and its settings: the roles it offers, the form's questions, the shop's currency)
+and Who sees it (everyone, or some roles). The kinds (`chat/PageRoles.qml`, `PageEvents.qml`, `PageForm.qml`, `PageShop.qml`):
+
+- **Roles to pick**: each role offered, with what it is for, and Take or Leave (`POST .../pages/{page}/roles`).
+- **Events**: those coming, soonest first, and the last month's; each with when, where (a #channel is a link), Going and
+  how many go. Whoever may manage events adds, changes and deletes them there.
+- **Entry form**: what those joining are asked; whoever may manage applications sees how many wait, and opens them.
+- **Shop**: the items, each with its picture, price, how many are left, and Buy (or Give, for one paid as wished). Buy asks
+  the Pond for a Stripe link for that order alone and opens it in the browser; the order shows under the items, waiting,
+  until the Pond sees it paid. Whoever may manage the shop adds, changes, takes off sale and deletes items there.
+
+The banner shows over the Pond's name. Members gives
 and takes roles from a menu beside each member, and shows the roles each holds. A channel only some roles see has a lock
 beside its name in the channel list.
+
+**Voice moderation** (protocol 13): someone's menu, while they are in a voice channel, has Mute in voice and Disconnect from
+voice for whoever may there (`POST /api/v1/ponds/{pond}/voice/members/{member}/mute {muted}`, `/disconnect`). Someone
+muted by a moderator, or not let speak in the channel, has a red crossed microphone under it; a Puddle disconnected by a
+moderator ends its session ("A moderator disconnected you") and doesn't join again by itself.
 
 The Pond never calls the Puddle for any of this. A Puddle always opens the connection: the offer comes on the event
 stream it already follows.
@@ -371,7 +413,10 @@ open channel instead of the open chat.
 - Asking again, refusals and the other notes between Puddles (`docs/files.md`) do not apply to a Pond: it serves
   any member.
 - Mentions, replies, edits and reactions.
-- In a voice channel: a phone (roadmap 9.3), and admins disconnecting or muting someone (9.5). Push to talk works only
-  while the window is in front. More than 16 cameras and screens at once are not all watched.
+- In a voice channel: a phone (roadmap 9.3). Push to talk works only while the window is in front. More than 16 cameras and
+  screens at once are not all watched.
+- An application waiting is not remembered by the Puddle: the owner joins again (or presses Check again) to see where it
+  stands, and a phone doesn't see it.
+- The phone's screens don't have page kinds, the shop, or the new Server Settings yet.
 - A Pond changing its certificate: today the member must leave and join again. See the Pond's design, "Not yet".
 - Whether a Pond sees the same key as everyone else, or one derived for it (`discuss-later.md`).
