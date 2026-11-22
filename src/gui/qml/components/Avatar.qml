@@ -17,7 +17,9 @@ Item {
     property string badge: ""
     property string badgeName: ""
     readonly property bool badged: badge !== "" || badgeName !== ""
-    readonly property bool ready: img.status === Image.Ready   // the picture shows, not the letter
+    property bool animated: false     // a moving picture (a GIF) plays, over and over: for a Pond's banner
+    readonly property Item shown: animated ? anim : img
+    readonly property bool ready: shown.status === Image.Ready   // the picture shows, not the letter
 
     width: size
     height: size
@@ -48,10 +50,19 @@ Item {
             font.pixelSize: av.size * 0.45
         }
     }
+    AnimatedImage {
+        id: anim
+        anchors.fill: parent
+        source: av.animated ? av.url : ""
+        visible: false
+        fillMode: Image.PreserveAspectCrop
+        playing: av.animated && av.visible
+        asynchronous: true
+    }
     Image {
         id: img
         anchors.fill: parent
-        source: av.url
+        source: av.animated ? "" : av.url
         visible: false
         fillMode: Image.PreserveAspectCrop
         sourceSize: Qt.size(av.width * 2, av.height * 2)
@@ -60,10 +71,10 @@ Item {
     Rectangle { id: mask; anchors.fill: parent; radius: av.radius; visible: false; layer.enabled: true }
     MultiEffect {
         anchors.fill: parent
-        source: img
+        source: av.shown
         maskEnabled: true
         maskSource: mask
-        visible: img.status === Image.Ready
+        visible: av.ready
     }
     // the badge sits on a ring of the window's colour, so it reads apart from the picture under it
     Rectangle {

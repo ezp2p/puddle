@@ -21,7 +21,8 @@ Rectangle {
     readonly property color ink: hover.hovered ? "white" : danger ? Theme.danger : Theme.text
 
     HoverHandler { id: hover; cursorShape: Qt.PointingHandCursor }
-    TapHandler { id: tap; onTapped: row.activated() }
+    // take the press for ourselves: the dropdown is not modal, so a click it lets pass reaches the list under it
+    TapHandler { id: tap; gesturePolicy: TapHandler.ReleaseWithinBounds; onTapped: row.activated() }
     Accessible.role: Accessible.MenuItem
     Accessible.name: label
     Accessible.onPressAction: row.activated()

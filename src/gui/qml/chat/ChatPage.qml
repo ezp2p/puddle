@@ -376,8 +376,11 @@ Pane {
                     MenuItem { objectName: "msgDelete"; text: qsTr("Delete…"); palette.text: Theme.danger; visible: msg.mine && !msg.model.deleted; height: visible ? implicitHeight : 0; onTriggered: confirm.ask(msg.model.id) }
                 }
 
+                // under the day's line, when there is one: it marks the message, not the day
                 Rectangle {
-                    anchors.fill: parent
+                    y: dayLine.visible ? dayLine.y + dayLine.height + 4 : 0
+                    width: parent.width
+                    height: parent.height - y
                     color: hover.hovered || msg.editing ? Theme.tint(palette.text, 0.05) : "transparent"
                 }
 
@@ -388,6 +391,7 @@ Pane {
 
                     // a new day
                     RowLayout {
+                        id: dayLine
                         visible: msg.model.dayStart === true
                         Layout.fillWidth: true
                         Layout.margins: 16

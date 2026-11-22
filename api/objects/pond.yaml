@@ -55,6 +55,7 @@ properties:
         hoist: { type: boolean, description: "Its members are shown apart in the member list (protocol 10)" }
         permissions: { type: array, items: { type: string }, description: "What it lets its members do (protocol 10): manage_pond, manage_channels, manage_roles, manage_invites, kick_members, ban_members, mute_members" }
   banner: { description: "Its banner, over its name (a Pond of protocol 11): a picture, as the icon; null for none" }
+  role_colors: { type: string, enum: [choice, enforced], description: "Names in a role's colour (a Pond of protocol 12): each member's choice (a member's `role_color`), or everyone's" }
   pages:
     type: array
     description: "Its pages, in its order (a Pond of protocol 11; docs/ponds.md, \"Pages and the banner\"); the body is asked for when one is opened"
@@ -105,6 +106,7 @@ $defs:
       role: { enum: [operator, administrator, member] }
       roles: { type: array, items: { type: integer }, description: "The roles for channels they hold (a Pond of protocol 9)" }
       dms: { type: boolean, description: "Present, and false, when they take no direct messages in this Pond (protocol 8)" }
+      role_color: { type: boolean, description: "Present, and true, when their name shows in their highest coloured role's colour, as they chose (protocol 12)" }
   Message:
     type: object
     properties:

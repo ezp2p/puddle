@@ -51,6 +51,7 @@ Rectangle {
             Avatar {
                 id: pondBanner
                 objectName: "pondBanner"
+                animated: true
                 anchors.fill: parent
                 size: width
                 chats: bar.chats
@@ -121,6 +122,14 @@ Rectangle {
                         label: bar.ponds.acceptDms ? qsTr("Turn off direct messages") : qsTr("Allow direct messages")
                         glyph: "message"
                         onActivated: { dropdown.close(); bar.ponds.setAcceptDms(!bar.ponds.acceptDms) }
+                    }
+                    // our name in our role's colour, or our own: ours to choose, unless the Pond makes everyone's the role's
+                    PondMenuRow {
+                        objectName: "roleColorItem"
+                        visible: bar.ponds.canRoleColors && !bar.ponds.roleColorsEnforced && bar.ponds.myRoleColor !== ""
+                        label: bar.ponds.useRoleColor ? qsTr("Name in my own colour") : qsTr("Name in my role's colour")
+                        glyph: "tag"
+                        onActivated: { dropdown.close(); bar.ponds.setUseRoleColor(!bar.ponds.useRoleColor) }
                     }
                     PondMenuRow {
                         objectName: "copyMyId"

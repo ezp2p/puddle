@@ -318,8 +318,16 @@ Popup {
                         SettingsGroup {
                             title: qsTr("Banner")
                             Layout.fillWidth: true
-                            visible: settings.ponds.canPages
+                            // a Pond too old for them says so, rather than the banner and pages being nowhere to be found
+                            Label {
+                                objectName: "pondTooOldForPages"
+                                visible: !settings.ponds.canPages
+                                text: qsTr("This Pond is too old for a banner or pages. Once it is updated, its banner is set here, and pages are made from the + over its channels.")
+                                wrapMode: Text.Wrap; opacity: 0.7; font.pixelSize: 12
+                                Layout.fillWidth: true; Layout.maximumWidth: 520
+                            }
                             RowLayout {
+                                visible: settings.ponds.canPages
                                 spacing: 16
                                 Rectangle {
                                     width: 160; height: 64; radius: Theme.radius
@@ -327,6 +335,7 @@ Popup {
                                     Avatar {
                                         id: bannerNow
                                         objectName: "pondSettingsBanner"
+                                        animated: true
                                         anchors.fill: parent
                                         chats: settings.chats
                                         name: ""
@@ -889,6 +898,22 @@ Popup {
                                     text: qsTr("Create")
                                     enabled: newRole.text.trim() !== ""
                                     onClicked: { settings.ponds.createRole(newRole.text); newRole.text = "" }
+                                }
+                            }
+                        }
+                        // names in a role's colour (protocol 12): each member's choice, unless the Pond makes it everyone's
+                        SettingsGroup {
+                            title: qsTr("Name colours")
+                            note: qsTr("Members choose whether their name shows in their highest coloured role's colour or in their own, from the Pond's menu. You can make everyone's show in their role's colour instead.")
+                            Layout.fillWidth: true
+                            visible: settings.ponds.canRoleColors && settings.ponds.canManagePond
+                            CheckBox {
+                                objectName: "enforceRoleColors"
+                                text: qsTr("Everyone's name in their role's colour")
+                                checked: settings.ponds.roleColorsEnforced
+                                onToggled: {
+                                    settings.ponds.setRoleColorsEnforced(checked)
+                                    checked = Qt.binding(() => settings.ponds.roleColorsEnforced) // until the Pond says so
                                 }
                             }
                         }

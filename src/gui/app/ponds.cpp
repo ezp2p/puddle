@@ -14,8 +14,8 @@ Ponds::Ponds(ApiClient *api, QObject *parent)
       api_(api),
       list_({ "id", "name", "status", "address", "icon" }),
       channels_({ "id", "name", "topic", "kind", "voice", "restricted", "roles" }),
-      members_({ "id", "name", "color", "avatar", "isMe", "role", "muted", "mutedUntil", "roles", "group" }),
-      messages_({ "id", "author", "name", "tint", "avatar", "text", "files", "ts", "mine", "grouped", "dayStart" }),
+      members_({ "id", "name", "color", "nameColor", "avatar", "isMe", "role", "muted", "mutedUntil", "roles", "group" }),
+      messages_({ "id", "author", "name", "tint", "nameColor", "avatar", "text", "files", "ts", "mine", "grouped", "dayStart" }),
       bans_({ "member", "name", "by", "byName", "reason", "ts" }, nullptr, QStringLiteral("member")),
       invites_({ "token", "link", "uses", "maxUses", "expires", "created" }, nullptr, QStringLiteral("token")),
       roles_({ "id", "name", "count", "color", "hoist", "permissions", "editable" }),
@@ -204,7 +204,7 @@ void Ponds::refreshPond()
             people_.insert(mid, { { "name", name }, { "color", color }, { "avatar", avatar }, { "profile", prof }, { "role", mo.value("role").toString(QStringLiteral("member")) },
                                   { "muted", muted }, { "mutedUntil", muted ? until : -1 }, { "dms", mo.value("dms").toBool(true) } });
             members.append({ { "id", mid }, { "name", name }, { "color", color }, { "avatar", avatar }, { "isMe", mid == me_ },
-                             { "muted", muted }, { "mutedUntil", muted ? until : -1 },
+                             { "muted", muted }, { "mutedUntil", muted ? until : -1 }, { "useRoleColor", mo.value("role_color").toBool() },
                              { "role", mo.value("role").toString(QStringLiteral("member")) }, { "roles", idStrings(mo.value("roles")) } });
         }
         // the roles, highest first, as the Pond keeps them
@@ -224,6 +224,24 @@ void Ponds::refreshPond()
             order << rid;
             if (ro.value("hoist").toBool())
                 hoisted << rid;
+        }
+        // the colour of a name (the Pond's docs/design.md, "Role colours"): their highest coloured role's, if they chose it or
+        // the Pond makes everyone's; otherwise the colour of their profile, as they chose
+        const bool enforced = o.value("role_colors").toString() == QLatin1String("enforced");
+        for (QJsonObject &m : members) {
+            QString c = m.value("color").toString();
+            if (enforced || m.value("useRoleColor").toBool())
+                for (const QJsonObject &r : roles)
+                    if (!r.value("color").toString().isEmpty() && m.value("roles").toArray().contains(r.value("id"))) {
+                        c = r.value("color").toString();
+                        break;
+                    }
+            m.insert("nameColor", c);
+            const QString mid = m.value("id").toString();
+            QJsonObject who = people_.value(mid);
+            who.insert("nameColor", c);
+            who.insert("useRoleColor", m.value("useRoleColor"));
+            people_.insert(mid, who);
         }
         // shown apart (Discord's "display separately"): each member under their highest role that is, in the roles' order, then
         // everyone else; operators first, then administrators, then by name within each
@@ -355,6 +373,7 @@ void Ponds::rebuildMessages()
                        { "author", author },
                        { "name", !who.value("name").toString().isEmpty() ? who.value("name").toString() : mine ? tr("You") : author.left(8) },
                        { "tint", who.value("color").toString() },
+                       { "nameColor", who.value("nameColor").toString(who.value("color").toString()) },
                        { "avatar", who.value("avatar").toString() },
                        { "text", m.value("text") },
                        { "files", m.value("files") },
@@ -1007,6 +1026,36 @@ void Ponds::fetchPageFile(const QString &fileId)
                    else
                        loadPage();
                });
+}
+
+void Ponds::setRoleColorsEnforced(bool on)
+{
+    admin(QStringLiteral("role_colors"), QJsonObject{ { "enforced", on } },
+          on ? tr("Everyone's name now shows in their role's colour.") : tr("Each member now chooses their name's colour."), tr("change that"));
+}
+
+void Ponds::setUseRoleColor(bool on)
+{
+    if (current_.isEmpty())
+        return;
+    api_->post(QStringLiteral("/api/v1/ponds/%1/role_color").arg(current_), QJsonObject{ { "use", on } }, [this](int status, const QJsonDocument &json) {
+        if (status / 100 != 2)
+            emit failed(why(status, json, tr("change your name's colour")));
+        refreshPond();
+    });
+}
+
+bool Ponds::useRoleColor() const
+{
+    return people_.value(me_).value("useRoleColor").toBool();
+}
+
+QString Ponds::myRoleColor() const
+{
+    for (const QVariant &r : rolesOf(me_)) /* highest first */
+        if (!r.toMap().value("color").toString().isEmpty())
+            return r.toMap().value("color").toString();
+    return QString();
 }
 
 void Ponds::setBanner(const QString &hash)

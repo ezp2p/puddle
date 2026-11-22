@@ -260,7 +260,13 @@ Pane {
                         onTriggered: bodyText.selectedText !== "" ? bodyText.copy() : page.chats.copy(msg.model.text)
                     }
                 }
-                Rectangle { anchors.fill: parent; color: hover.hovered ? Theme.tint(palette.text, 0.05) : "transparent" }
+                // under the day's line, when there is one: it marks the message, not the day
+                Rectangle {
+                    y: dayLine.visible ? dayLine.y + dayLine.height + 4 : 0
+                    width: parent.width
+                    height: parent.height - y
+                    color: hover.hovered ? Theme.tint(palette.text, 0.05) : "transparent"
+                }
 
                 ColumnLayout {
                     id: col
@@ -268,6 +274,7 @@ Pane {
                     spacing: 0
 
                     RowLayout {
+                        id: dayLine
                         visible: msg.model.dayStart === true
                         Layout.fillWidth: true
                         Layout.margins: 16
@@ -314,7 +321,7 @@ Pane {
                                 Label {
                                     id: msgName
                                     objectName: "pondMessageName"
-                                    text: msg.model.name || ""; font.bold: true; color: msg.model.tint ? msg.model.tint : palette.text /* their chosen colour, ours too */
+                                    text: msg.model.name || ""; font.bold: true; color: msg.model.nameColor ? msg.model.nameColor : palette.text /* their chosen colour, or their role's if they chose it (or the Pond says) */
                                     font.underline: nameHover.hovered
                                     HoverHandler { id: nameHover; cursorShape: Qt.PointingHandCursor }
                                     TapHandler { onTapped: if (page.people) page.people.showCard(msgName, msg.model.author) }

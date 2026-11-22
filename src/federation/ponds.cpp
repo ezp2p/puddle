@@ -304,6 +304,38 @@ static std::set<std::string> send_pictures(puddle_ctx *ctx, Follower *f, const c
     return sent;
 }
 
+/* After each sync: does the Pond show the pictures of the profile we chose for it? A picture whose sending failed once (the
+ * Pond away, or not taking it yet) left the profile there without it, and nothing would send it again until the profile
+ * changed: so the profile goes again, with its pictures. One that is too large for a Pond is not missed. */
+static void check_my_pictures(puddle_ctx *ctx, Follower *f)
+{
+    const char *id = f->id.c_str();
+    char place[PUDDLE_PLACE_MAX], me[PUDDLE_USER_ID_LEN + 1];
+    puddle_profile p;
+    if (!ctx->ponds || !puddle_ponds_has_feature(ctx->ponds, id, "pictures") || puddle_ponds_me(ctx->ponds, id, me) != 0)
+        return;
+    puddle_place_pond(id, place);
+    if (profile_for(ctx, place, NULL, &p) != 0)
+        return;
+    char *shown = NULL;
+    size_t len = 0;
+    int dms = 0;
+    bool missing = false;
+    if (puddle_ponds_member(ctx->ponds, id, me, &shown, &len, &dms) == 0) {
+        const std::string there(shown ? shown : "", len);
+        for (const puddle_media *m : {&p.avatar, &p.banner, &p.background})
+            if (m->hash[0] && m->size <= PUDDLE_POND_PICTURE_MAX && there.find(m->hash) == std::string::npos)
+                missing = true;
+    }
+    free(shown);
+    puddle_profile_free(&p);
+    if (missing) {
+        puddle_log(PUDDLE_LOG_INFO, "pond %.12s…: it doesn't show our profile's pictures; sending them again", id);
+        std::lock_guard<std::mutex> g(f->mu);
+        f->send_profile = true;
+    }
+}
+
 /* What the owner asked to be said to this Pond meanwhile. */
 static void say_what_waits(puddle_ctx *ctx, Follower *f)
 {
@@ -332,7 +364,7 @@ static void say_what_waits(puddle_ctx *ctx, Follower *f)
         write_profile(ctx, place, NULL, &w, sent);
         puddle_jw_end_object(&w);
         size_t n = puddle_jw_finish(&w);
-        if (n && follow_call(ctx, f, "POST", "/pond/v1/profile", body.substr(0, n), 4096, 20, &r) == GOT) {
+        if (n && follow_call(ctx, f, "POST", "/pond/v1/profile", body.substr(0, n), 4096, 20, &r) == GOT && r.status / 100 == 2) {
             std::lock_guard<std::mutex> g(f->mu);
             f->send_profile = false;
         }
@@ -625,6 +657,8 @@ static void follow(puddle_ctx *ctx, Follower *f)
             if (o == GOT) {
                 synced = true, reset = false;
                 poke_fetcher(f);
+                check_my_pictures(ctx, f);
+                say_what_waits(ctx, f);
             }
         }
         puddle_net_reply r;
@@ -1097,7 +1131,7 @@ int puddle_pond_admin(puddle_ctx *ctx, const char *pond, const char *method, con
                       int *status, char **reply, size_t *reply_len, const char **code)
 {
     if (strncmp(target, "/pond/v1/admin/", 15) != 0 && strcmp(target, "/pond/v1/roles/answer") != 0 && strcmp(target, "/pond/v1/pictures") != 0 &&
-        strncmp(target, "/pond/v1/pages/", 15) != 0) {
+        strncmp(target, "/pond/v1/pages/", 15) != 0 && strcmp(target, "/pond/v1/role_color") != 0) {
         *code = "failed";
         return -1;
     }

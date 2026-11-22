@@ -140,7 +140,10 @@ the app by `GET /api/v1/media?hash=`.
   the one it shows), it first sends each of its pictures (`POST /pond/v1/pictures`, the bytes) and names only those the Pond
   took. A picture over 1 MiB, what a Pond keeps, is left out with a line in the log; so is every picture for a Pond without
   `pictures`. Joining sends the profile without pictures (we are not a member until it is answered), and the follower then
-  sends it again with them.
+  sends it again with them. A picture whose sending failed (the Pond away for a moment, or answering with an error) would
+  otherwise stay missing until the profile next changed, so after each sync the follower looks at our member there: if it
+  doesn't name every picture of our profile that a Pond can keep, the profile goes again, with them. Only a `2xx` answer to
+  `POST /pond/v1/profile` counts as said.
 - **Theirs, and the icon.** The fetcher (see "Files") first fetches every picture the Pond shows us that is not here: the
   icon (`pond.icon` in `/info` and the `pond` event) and the avatar, banner and background of each member's profile, from
   `GET /pond/v1/pictures/{hash}`. Each is checked against what named it (hash, size, the kind of image from its own first
@@ -211,7 +214,14 @@ limit), copies its link at once and shows it to copy again, and lists those that
 colour, whether it is shown apart, and its permissions (only those the owner has themselves can be added). The member list
 puts members under their highest role that is shown apart, with a heading for each, then everyone else under Members.
 Someone's card shows the roles they hold, each with its colour, and a + to give or take roles for whoever may. Overview
-sets the Pond's banner, beside its icon.
+sets the Pond's banner, beside its icon; a Pond too old for a banner and pages says so there. A banner may be an animated
+GIF (up to 1 MiB, sent as it is), which plays in a loop.
+
+**Name colours** (a Pond of protocol 12, feature `role_colors`; the Pond's design, "Role colours"). A name shows in its
+owner's profile colour. A member who holds a coloured role can choose, from the Pond's menu ("Name in my role's colour"),
+to have it show in the colour of their highest coloured role instead (`POST /api/v1/ponds/{pond}/role_color {use}`). Roles in
+Server Settings has a switch for whoever may manage the Pond, "Everyone's name in their role's colour"
+(`/admin/role_colors {enforced}`); while it is on, the menu item is gone. Pictures' letters keep the profile colour either way.
 
 A Pond's pages are listed above its channels in the channel list, under a line of their own, with a + for whoever may
 manage pages (it asks for a title, and the new page opens). A page shows where a channel's messages would be

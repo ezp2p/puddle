@@ -57,6 +57,7 @@ struct Member {
     int64_t muted = -1;          /* muted by an operator or administrator: -1 not, 0 until unmuted, else until then (ms; protocol 7) */
     bool dms = true;             /* takes direct messages here (protocol 8; docs/pond-dms.md) */
     std::vector<int64_t> roles;  /* the roles for channels they hold (protocol 9; the Pond's docs/design.md, "Roles for channels") */
+    bool role_color = false;     /* their name in their highest coloured role's colour, as they chose (protocol 12) */
 };
 
 /* A role: named by the Pond's operators and administrators, given to members, asked for by channels; and, from protocol 10,
@@ -98,6 +99,7 @@ struct Pond {
     std::string icon;                  /* its icon as {hash, mime, size}, cleaned; "" for none (protocol 6, feature `pictures`) */
     std::string banner;                /* the picture over its name in the channel list, the same; "" for none (protocol 11) */
     int dms = -1;                      /* direct messages between members: 1 on, 0 off, -1 it does not say (protocol 8) */
+    bool role_colors_enforced = false; /* every member's name in their role's colour, whatever they chose (protocol 12) */
     int64_t dm_files_max = 0;          /* the largest file one may carry; 0 none */
     std::vector<std::string> features;
     std::string key;      /* the Pond's public key, hex, as its /info says; its id is base32(SHA-256(key)) */
@@ -368,6 +370,13 @@ static void parse_offer(puddle_span v, Pond &pd)
 }
 
 /* The pond's "dms": {on, files_max} (protocol 8); a Pond that says nothing of them has none. */
+/* The pond's "role_colors" (protocol 12): "enforced", or each member's own choice. */
+static void parse_role_colors(puddle_span pond, Pond &pd)
+{
+    std::string v;
+    pd.role_colors_enforced = get_text(pond, "role_colors", 16, 0, v) && v == "enforced";
+}
+
 static void parse_dms(puddle_span pond, Pond &pd)
 {
     puddle_span d, on;
@@ -464,6 +473,7 @@ static bool parse_member(puddle_ponds *p, puddle_span v, std::string &id, Member
     if (member(v, "muted", &mu) && mu.len && *mu.p == '{') /* {"until": ms or null} */
         m.muted = member(mu, "until", &until) && get_int(mu, "until", &m.muted) && m.muted > 0 ? m.muted : 0;
     m.dms = !get_flag_false(v, "dms");
+    m.role_color = get_flag(v, "role_color");
     get_ids(v, "roles", m.roles);
     m.profile.clear();
     if (p->clean && member(v, "profile", &prof) && *prof.p == '{') {
@@ -531,6 +541,7 @@ static bool parse_info(puddle_ponds *p, const char *json, size_t len, Pond &pd, 
     parse_protocol(all, pd);
     parse_files_max(pond, pd);
     parse_dms(pond, pd);
+    parse_role_colors(pond, pd);
     parse_icon(pond, pd);
     parse_offer(all, pd);
     parse_roles(all, pd);
@@ -600,6 +611,8 @@ static void write_member(puddle_jw *w, const std::string &id, const Member &m)
     puddle_jw_str(w, "id", id.c_str());
     if (!m.dms)
         puddle_jw_flag(w, "dms", 0);
+    if (m.role_color)
+        puddle_jw_flag(w, "role_color", 1);
     puddle_jw_key(w, "profile");
     write_profile(w, m.profile);
     puddle_jw_num(w, "joined", m.joined);
@@ -766,6 +779,8 @@ static void save_pond(puddle_ponds *p, const Pond &pd)
             puddle_jw_str(w, "seal_key", pd.seal_key.c_str());
         write_files_max(w, pd);
         write_dms(w, pd);
+        if (pd.role_colors_enforced)
+            puddle_jw_str(w, "role_colors", "enforced");
         if (!pd.icon.empty()) {
             puddle_jw_key(w, "icon");
             puddle_jw_raw(w, pd.icon.c_str(), pd.icon.size());
@@ -1031,6 +1046,7 @@ int puddle_ponds_info(puddle_ponds *p, const char *id, const char *info, size_t 
     pd.features = std::move(fresh.features);
     pd.files_max = fresh.files_max;
     pd.dms = fresh.dms, pd.dm_files_max = fresh.dm_files_max;
+    pd.role_colors_enforced = fresh.role_colors_enforced;
     pd.icon = fresh.icon;
     pd.banner = fresh.banner;
     pd.pages = std::move(fresh.pages);
@@ -1323,6 +1339,7 @@ int puddle_ponds_events(puddle_ponds *p, const char *id, const char *json, size_
             get_text(data, "description", DESCRIPTION_MAX_CHARS, 1, pd.description);
             parse_files_max(data, pd);
             parse_dms(data, pd);
+            parse_role_colors(data, pd);
             parse_icon(data, pd);
             pond_changed = true;
         }
@@ -1411,6 +1428,7 @@ static void write_summary(puddle_jw *w, const Pond &pd)
     write_protocol(w, pd);
     write_files_max(w, pd);
     write_dms(w, pd);
+    puddle_jw_str(w, "role_colors", pd.role_colors_enforced ? "enforced" : "choice");
     puddle_jw_key(w, "icon");
     if (pd.icon.empty())
         puddle_jw_null(w);

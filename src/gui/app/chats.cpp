@@ -1898,6 +1898,8 @@ static QByteArray fitPicture(const QByteArray &in, const QString &slot)
     const QSize size = reader.size();
     if (in.size() <= most && (!size.isValid() || qMax(size.width(), size.height()) <= side))
         return in;
+    if (reader.supportsAnimation() && reader.imageCount() > 1)
+        return in; /* a moving picture (a GIF) would be cut to its first frame: it goes as it is */
     QImage img = reader.read();
     if (img.isNull())
         return in; /* not one Qt reads: the Puddle says what it thinks of it */
@@ -1929,6 +1931,8 @@ void Chats::uploadPicture(const QUrl &file, const QString &slot)
     if (f.size() > 25LL * 1024 * 1024)
         return emit pictureUploaded(slot, QString(), tr("That picture is too large: the most is 25 MiB."));
     const QByteArray bytes = fitPicture(f.readAll(), slot);
+    if (slot.startsWith(QLatin1String("pond-")) && bytes.size() > (1 << 20)) // only a moving picture is left this large
+        return emit pictureUploaded(slot, QString(), tr("That picture is too large for a Pond: an animated one can be 1 MiB at most."));
     api_.postBytes(QStringLiteral("/api/v1/media/upload"), bytes, [this, slot, bytes](int status, const QJsonDocument &doc) {
         const QString hash = doc.object().value("hash").toString();
         if (status / 100 != 2 || hash.isEmpty())
