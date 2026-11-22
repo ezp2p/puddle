@@ -45,6 +45,27 @@ Pane {
             Layout.fillHeight: true
             Layout.margins: 8
             model: panel.ponds.members
+            // where a role is shown apart: a heading for each such role, then one for everyone else (the Pond's docs/design.md,
+            // "Permissions")
+            section.property: "group"
+            section.criteria: ViewSection.FullString
+            section.delegate: Item {
+                required property string section
+                objectName: "pondMemberGroup_" + section
+                width: ListView.view ? ListView.view.width : 0
+                height: section === "" ? 0 : 30
+                visible: section !== ""
+                Label {
+                    anchors.left: parent.left
+                    anchors.leftMargin: 8
+                    anchors.bottom: parent.bottom
+                    anchors.bottomMargin: 4
+                    text: parent.section.toUpperCase()
+                    font.pixelSize: 11
+                    font.bold: true
+                    opacity: 0.6
+                }
+            }
             delegate: Item {
                 id: pRow
                 required property var model

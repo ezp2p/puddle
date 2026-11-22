@@ -11,6 +11,7 @@
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
+#include <QPointer>
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QSignalSpy>
@@ -119,20 +120,27 @@ static void reveal(QQuickItem *i)
             return;
         }
 }
-static bool click(QQuickItem *i)
+// a list may rebuild its rows while we wait: `i` is held weakly, and false if it went
+static bool click(QQuickItem *item)
 {
+    QPointer<QQuickItem> i(item);
     if (!i || !i->isVisible() || !i->isEnabled())
         return false;
     reveal(i);
     settle(150); // lists and layouts may still be moving into place
+    if (!i)
+        return false;
     QTest::mouseClick(win, Qt::LeftButton, {}, centre(i));
     return true;
 }
-static bool rightClick(QQuickItem *i)
+static bool rightClick(QQuickItem *item)
 {
+    QPointer<QQuickItem> i(item);
     if (!i || !i->isVisible())
         return false;
     settle(150);
+    if (!i)
+        return false;
     QTest::mouseClick(win, Qt::RightButton, {}, centre(i));
     return true;
 }
@@ -1189,8 +1197,7 @@ int main(int argc, char **argv)
             CHECK(until([&] { return group_rows(conv_a) == 1 && dm_row("Bob trip two") != nullptr; }, 5000));
 
             /* leaving asks first: Cancel keeps the group, the red button leaves it */
-            g = dm_row("Bob trip two");
-            CHECK(g && rightClick(g));
+            CHECK(until([&] { g = dm_row("Bob trip two"); return g && rightClick(g); }, 3000));
             CHECK(clickName("convLeave"));
             CHECK(until([&] { return find("confirmOk") != nullptr; }, 3000));
             CHECK(click(find("confirmCancel")));
@@ -1406,6 +1413,54 @@ int main(int argc, char **argv)
             CHECK(click(find("moveChannelUp_wranglers")));
             CHECK(until([&] { return place(chansA, "wranglers") == was - 1; }, 10000));
             CHECK(until([&] { return place(chansB, "wranglers") == place(chansB, chansA->at(was).value("name").toString()) - 1; }, 10000));
+            /* what a role lets its members do, its colour, its order and being shown apart (the Pond's docs/design.md,
+             * "Permissions"): made a Keeper's role, Bob may kick and mute but not ban, and sees Server Settings */
+            CHECK(P.canPermissions());
+            CHECK(!PB.canAdmin() && !PB.canKick());
+            CHECK(clickName("settingsSection_roles"));
+            CHECK(until([&] { return find("editRole_Frog Wranglers") != nullptr; }, 3000));
+            CHECK(click(find("editRole_Frog Wranglers")));
+            CHECK(until([&] { return find("rolePermission_kick_members") != nullptr; }, 3000));
+            CHECK(click(find("roleColor_#e67e22")));
+            CHECK(click(find("rolePermission_kick_members")) && click(find("rolePermission_mute_members")));
+            CHECK(click(find("roleHoist")));
+            settle(300);
+            if (!shot.isEmpty())
+                win->grabWindow().save(shot + "-pond-role-edit.png");
+            CHECK(clickName("saveRole"));
+            CHECK(until([&] { return roles->rowCount() == 1 && roles->at(0).value("color").toString() == "#e67e22" && roles->at(0).value("hoist").toBool(); }, 10000));
+            CHECK(roles->at(0).value("permissions").toArray() == QJsonArray({ "kick_members", "mute_members" }));
+            CHECK(until([&] { return PB.canAdmin() && PB.canKick() && PB.canMute() && !PB.canBan() && !PB.canManageRoles(); }, 10000));
+            CHECK(!PB.canActOn(backend.myId())); /* an operator is above every role */
+            /* the member list: Bob under his role, shown apart, before everyone else */
+            CHECK(until([&] { return row(members, "name", "Bob").value("group").toString() == QStringLiteral("Frog Wranglers — 1"); }, 5000));
+            CHECK(row(members, "name", "Ann").value("group").toString().startsWith("Members — "));
+            CHECK(members->at(0).value("name").toString() == "Bob");
+            /* the order: a second role, moved above the first, for Bob too */
+            P.createRole("Tadpoles");
+            CHECK(until([&] { return roles->rowCount() == 2; }, 10000));
+            const QString tadId = roles->at(1).value("id").toString();
+            CHECK(until([&] { return find("moveRoleUp_Tadpoles") != nullptr && find("moveRoleUp_Tadpoles")->isEnabled(); }, 3000));
+            settle(300);
+            if (!shot.isEmpty())
+                win->grabWindow().save(shot + "-pond-roles.png");
+            CHECK(click(find("moveRoleUp_Tadpoles")));
+            CHECK(until([&] { auto *rb = static_cast<JsonListModel *>(PB.roles()); return rb->rowCount() == 2 && rb->at(0).value("id").toString() == tadId; }, 10000));
+            key(Qt::Key_Escape);
+            settle(200);
+            /* his card shows his roles, in their colour, with a + for us to give more */
+            CHECK(clickName("pondMember_Bob"));
+            CHECK(until([&] { return find("profileCardRole_Frog Wranglers") != nullptr && find("profileCardAddRole") != nullptr; }, 5000));
+            settle(300);
+            if (!shot.isEmpty())
+                win->grabWindow().save(shot + "-pond-card-roles.png");
+            key(Qt::Key_Escape);
+            settle(200);
+            P.deleteRole(tadId);
+            CHECK(until([&] { return roles->rowCount() == 1; }, 10000));
+            CHECK(clickName("pondHeader"));
+            CHECK(clickName("serverSettings"));
+
             /* the role deleted: the channel is left to operators and administrators */
             P.deleteRole(roleId);
             CHECK(until([&] { return roles->rowCount() == 0 && place(chansB, "wranglers") < 0; }, 10000));

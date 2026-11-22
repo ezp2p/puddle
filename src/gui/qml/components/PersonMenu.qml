@@ -5,7 +5,7 @@ import "../theme"
 
 // The menu a right-click on someone's name or picture opens, as Discord's does: Profile, Message (a friend, or through the Pond
 // to a member who takes direct messages), Block their messages and Block (someone who isn't a friend), and in a Pond, for
-// an operator or administrator who outranks them, Mute or Unmute, Kick and Ban. Only what the viewer may do is shown; the Pond
+// an operator or administrator who outranks them (or a member whose roles let them, above them), Mute or Unmute, Kick and Ban. Only what the viewer may do is shown; the Pond
 // decides in the end (the Pond's docs/design.md, "Roles"). popup(item, x, y, card): `card` is Ponds.card(id) or Chats.card(id),
 // with `friend` said.
 Item {
@@ -94,13 +94,13 @@ Item {
         }
         MenuItem {
             objectName: "personKick"; text: qsTr("Kick %1").arg(pm.name); palette.text: Theme.danger
-            visible: pm.canMod; height: visible ? implicitHeight : 0
+            visible: pm.canMod && pm.ponds.canKick; height: visible ? implicitHeight : 0
             onTriggered: confirm.ask(qsTr("Kick %1?").arg(pm.name), qsTr("They leave the Pond now. They can come back with an invite."),
                                      qsTr("Kick"), (id => () => pm.ponds.kick(id))(pm.userId))
         }
         MenuItem {
             objectName: "personBan"; text: qsTr("Ban %1…").arg(pm.name); palette.text: Theme.danger
-            visible: pm.canMod; height: visible ? implicitHeight : 0
+            visible: pm.canMod && pm.ponds.canBan; height: visible ? implicitHeight : 0
             onTriggered: banDialog.ask()
         }
     }

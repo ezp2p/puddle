@@ -45,8 +45,15 @@ properties:
       - { type: "null" }
   roles:
     type: array
-    description: "The Pond's roles for channels (a Pond of protocol 9; docs/ponds.md, \"Roles for channels\"), made by its operators and administrators"
-    items: { type: object, properties: { id: { type: integer }, name: { type: string, maxLength: 32 } } }
+    description: "The Pond's roles (a Pond of protocol 9; docs/ponds.md, \"Roles for channels\" and \"Permissions\"), highest first"
+    items:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string, maxLength: 32 }
+        color: { type: [string, "null"], description: "#rrggbb (protocol 10)" }
+        hoist: { type: boolean, description: "Its members are shown apart in the member list (protocol 10)" }
+        permissions: { type: array, items: { type: string }, description: "What it lets its members do (protocol 10): manage_pond, manage_channels, manage_roles, manage_invites, kick_members, ban_members, mute_members" }
   channels: { type: array, items: { $ref: "#/$defs/Channel" }, description: "The channels we may see, in the order the Pond's admins set" }
   me: { $ref: "../wire/ids.yaml#/$defs/UserId", description: The owner's member id (their user id) }
   members: { type: array, items: { $ref: "#/$defs/Member" } }

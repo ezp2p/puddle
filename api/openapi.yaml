@@ -540,15 +540,22 @@ paths:
     parameters: [{ $ref: "#/components/parameters/Pond" }]
     post:
       tags: [ponds]
-      summary: "Make a role for channels (a Pond of protocol 9)"
-      requestBody: { content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string, maxLength: 32 } } } } } }
-      responses: { "200": { description: "{id, name}" } }
+      summary: "Make a role (a Pond of protocol 9; color, hoist and permissions from protocol 10), at the bottom of the order"
+      requestBody: { content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string, maxLength: 32 }, color: { type: [string, "null"] }, hoist: { type: boolean }, permissions: { type: array, items: { type: string } } } } } } }
+      responses: { "200": { description: "{id, name, color, hoist, permissions}" } }
+  /api/v1/ponds/{pond}/admin/roles/order:
+    parameters: [{ $ref: "#/components/parameters/Pond" }]
+    post:
+      tags: [ponds]
+      summary: "The order of the roles, highest first: every role's id (a Pond of protocol 10). `409 roles_changed` if one was made or deleted meanwhile"
+      requestBody: { content: { application/json: { schema: { type: object, required: [roles], properties: { roles: { type: array, items: { type: integer } } } } } } }
+      responses: { "204": { description: Done } }
   /api/v1/ponds/{pond}/admin/roles/{role}/edit:
     parameters: [{ $ref: "#/components/parameters/Pond" }, { name: role, in: path, required: true, schema: { type: integer } }]
     post:
       tags: [ponds]
-      summary: Rename a role for channels
-      requestBody: { content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string, maxLength: 32 } } } } } }
+      summary: "Change a role: what is given changes. `409 outranked`: not below our highest role, or a permission we don't have"
+      requestBody: { content: { application/json: { schema: { type: object, properties: { name: { type: string, maxLength: 32 }, color: { type: [string, "null"] }, hoist: { type: boolean }, permissions: { type: array, items: { type: string } } } } } } }
       responses: { "204": { description: Done } }
   /api/v1/ponds/{pond}/admin/roles/{role}/delete:
     parameters: [{ $ref: "#/components/parameters/Pond" }, { name: role, in: path, required: true, schema: { type: integer } }]

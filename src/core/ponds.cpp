@@ -59,10 +59,15 @@ struct Member {
     std::vector<int64_t> roles;  /* the roles for channels they hold (protocol 9; the Pond's docs/design.md, "Roles for channels") */
 };
 
-/* A role for channels: named by the Pond's operators and administrators, given to members, asked for by channels. */
+/* A role: named by the Pond's operators and administrators, given to members, asked for by channels; and, from protocol 10,
+ * what it lets its members do, its colour, and whether the member list shows it apart (the Pond's docs/design.md,
+ * "Permissions"). A Pond keeps its roles in order, highest first, and so does `Pond::roles`. */
 struct PondRole {
     int64_t id = 0;
     std::string name;
+    std::string color;                    /* "#rrggbb", or "" for none */
+    bool hoist = false;
+    std::vector<std::string> permissions; /* names, as the Pond says them */
 };
 
 /* Someone in one of the Pond's voice channels now (the Pond's docs/voice.md, "Who is in it"): only in memory, as the Pond says
@@ -168,10 +173,30 @@ static void write_ids(puddle_jw *w, const char *key, const std::vector<int64_t> 
     puddle_jw_end_array(w);
 }
 
-/* "roles": [{id, name}] as /info says them, or a `role` event's {id, name} */
+/* "roles": [{id, name, color, hoist, permissions}] as /info says them, or a `role` event's */
 static bool parse_role(puddle_span v, PondRole &r)
 {
-    return get_int(v, "id", &r.id) && r.id > 0 && get_text(v, "name", ROLE_NAME_MAX, 0, r.name) && !r.name.empty();
+    if (!get_int(v, "id", &r.id) || r.id <= 0 || !get_text(v, "name", ROLE_NAME_MAX, 0, r.name) || r.name.empty())
+        return false;
+    std::string c;
+    r.color.clear();
+    if (get_text(v, "color", 7, 0, c) && c.size() == 7 && c[0] == '#' &&
+        std::all_of(c.begin() + 1, c.end(), [](char x) { return (x >= '0' && x <= '9') || (x >= 'a' && x <= 'f'); }))
+        r.color = c;
+    puddle_span h, arr, item;
+    r.hoist = member(v, "hoist", &h) && h.len == 4 && !memcmp(h.p, "true", 4);
+    r.permissions.clear();
+    size_t cur = 0;
+    if (member(v, "permissions", &arr) && arr.len && *arr.p == '[')
+        while (puddle_json_array_next(arr, &cur, &item) == 1 && r.permissions.size() < 32) {
+            char buf[40];
+            if (puddle_json_string(item, buf, sizeof buf) != 0 || !buf[0] || strlen(buf) > 32)
+                continue;
+            std::string name = buf;
+            if (std::all_of(name.begin(), name.end(), [](char x) { return (x >= 'a' && x <= 'z') || x == '_'; }))
+                r.permissions.push_back(std::move(name));
+        }
+    return true;
 }
 
 static void parse_roles(puddle_span all, Pond &pd)
@@ -195,6 +220,17 @@ static void write_roles(puddle_jw *w, const Pond &pd)
         puddle_jw_object(w);
         puddle_jw_num(w, "id", r.id);
         puddle_jw_str(w, "name", r.name.c_str());
+        puddle_jw_key(w, "color");
+        if (r.color.empty())
+            puddle_jw_null(w);
+        else
+            puddle_jw_string(w, r.color.c_str());
+        puddle_jw_flag(w, "hoist", r.hoist);
+        puddle_jw_key(w, "permissions");
+        puddle_jw_array(w);
+        for (auto &n : r.permissions)
+            puddle_jw_string(w, n.c_str());
+        puddle_jw_end_array(w);
         puddle_jw_end_object(w);
     }
     puddle_jw_end_array(w);
@@ -1109,9 +1145,25 @@ int puddle_ponds_events(puddle_ponds *p, const char *id, const char *json, size_
             if (parse_role(data, n)) {
                 auto r = std::find_if(pd.roles.begin(), pd.roles.end(), [&](const PondRole &x) { return x.id == n.id; });
                 if (r != pd.roles.end())
-                    r->name = n.name;
-                else if (pd.roles.size() < MAX_ROLES)
+                    *r = std::move(n); /* where it is in the order stays */
+                else if (pd.roles.size() < MAX_ROLES) /* a new one is at the bottom */
                     pd.roles.push_back(std::move(n));
+                pond_changed = true;
+            }
+        } else if (kind == "role_order") { /* {roles: [ids]}, highest first (protocol 10) */
+            std::vector<int64_t> order;
+            puddle_span arr, item;
+            size_t cur = 0;
+            int64_t n;
+            if (member(data, "roles", &arr) && arr.len && *arr.p == '[') {
+                while (puddle_json_array_next(arr, &cur, &item) == 1 && order.size() < MAX_ROLES)
+                    if (puddle_json_int64(item, &n) == 0)
+                        order.push_back(n);
+                auto rank = [&](const PondRole &r) {
+                    auto i = std::find(order.begin(), order.end(), r.id);
+                    return i == order.end() ? order.size() : (size_t)(i - order.begin()); /* one it didn't name: last */
+                };
+                std::stable_sort(pd.roles.begin(), pd.roles.end(), [&](const PondRole &a, const PondRole &b) { return rank(a) < rank(b); });
                 pond_changed = true;
             }
         } else if (kind == "role_deleted") { /* gone from every member and channel too */

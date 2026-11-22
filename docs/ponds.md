@@ -182,12 +182,25 @@ A Pond has operators and administrators who run it from the app (the Pond's desi
   `/admin/roles/create`, `/admin/roles/{role}/edit`, `/delete`, `/admin/members/{member}/roles`,
   `/admin/channels/{channel}/roles` and `/admin/channels/order`, relayed like the rest.
 
+- **Permissions** (protocol 10, feature `role_permissions`; the Pond's design, "Permissions"). A role also says what its
+  members may do (`permissions`: `manage_pond`, `manage_channels`, `manage_roles`, `manage_invites`, `kick_members`,
+  `ban_members`, `mute_members`), has a `color` (or null) and `hoist` (shown apart in the member list), and the roles are in
+  an order, highest first, as `/info` gives them and as the Puddle keeps them; `role_order` reorders them. An operator or
+  administrator may do all of it. A member whose roles let them may use those admin routes, but only below their own
+  highest role: they act on members whose highest role is lower, and change, give and move only roles lower than theirs.
+  The window works out what the owner may do from their roles (`Ponds.canKick` and the rest), shows Server Settings with
+  only those sections, and shows on someone's card and menu only the actions it may take on them. The owner's route for
+  the order is `/admin/roles/order`.
+
 In the app, the Pond's name drops down its menu, as Discord's server menu does: **Server Settings** (for an operator
 or administrator), **Appear as…**, **Copy my id**, and **Leave Pond**. Server Settings opens over the window, with
 sections on the left (Overview, Channels, Roles, Members, Invites, Bans; Roles only where the Pond has them) and each section's settings in groups on the right
 (`shell/PondSettings.qml`). Invites makes one with an expiry (30 minutes to 7 days, or never) and a number of uses (or no
 limit), copies its link at once and shows it to copy again, and lists those that can still be used (made there or with
-`pondctl`), each with Copy link and Revoke. Roles makes, renames and deletes roles, with how many hold each. Channels moves
+`pondctl`), each with Copy link and Revoke. Roles makes, edits and deletes roles, with how many hold each, and moves them up and down; its editor sets a role's name,
+colour, whether it is shown apart, and its permissions (only those the owner has themselves can be added). The member list
+puts members under their highest role that is shown apart, with a heading for each, then everyone else under Members.
+Someone's card shows the roles they hold, each with its colour, and a + to give or take roles for whoever may. Channels moves
 each channel up or down (for everyone), and its edit says who can see it: everyone, or only some roles. Members gives
 and takes roles from a menu beside each member, and shows the roles each holds. A channel only some roles see has a lock
 beside its name in the channel list.

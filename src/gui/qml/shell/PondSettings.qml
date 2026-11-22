@@ -5,7 +5,8 @@ import QtQuick.Dialogs
 import "../components"
 import "../theme"
 
-// Server Settings: what an operator or administrator runs from the app (the Pond's docs/design.md, "Roles"), over the window as
+// Server Settings: what an operator or administrator runs from the app (the Pond's docs/design.md, "Roles"), or a member as far as
+// their roles let them ("Permissions": each section is there for whoever may use it), over the window as
 // Discord's are. On the left the sections, on the right the open one's page, in groups. Each change goes to the Pond through our
 // Puddle; what it says back shows under the page's title. Escape or the cross closes it.
 Popup {
@@ -46,11 +47,16 @@ Popup {
         function onAdminDone(what) { if (settings.opened) settings.say(what, false) }
         function onAdminFailed(why) { if (settings.opened) settings.say(why, true) }
         // the role went (taken away, or we left): nothing here is ours to change any more
-        function onCurrentInfoChanged() { if (settings.opened && !settings.ponds.canAdmin) settings.close() }
+        function onCurrentInfoChanged() {
+            if (settings.opened && !settings.ponds.canAdmin)
+                settings.close()
+            else if (settings.opened && !settings.sections.some(s => s.id === settings.section))
+                settings.section = settings.sections[0].id
+        }
     }
 
     function show(which) {
-        section = which || "overview"
+        section = sections.some(s => s.id === which) ? which : sections.length ? sections[0].id : "overview"
         status = ""
         open()
     }
@@ -89,15 +95,35 @@ Popup {
     exit: Transition { NumberAnimation { property: "opacity"; from: 1; to: 0; duration: 90 } }
     background: Rectangle { radius: Theme.cardRadius; color: Theme.card; border.width: 1; border.color: Theme.hairline }
 
-    // Roles only where the Pond has them (protocol 9: roles for channels, and the channels' order)
+    // Each section for whoever may use it; Roles only where the Pond has them (protocol 9: roles for channels, and the channels' order)
+    readonly property bool giveRoles: ponds.canRoles && ponds.canManageRoles
     readonly property var sections: [
-        { id: "overview", title: qsTr("Overview"), glyph: "settings" },
-        { id: "channels", title: qsTr("Channels"), glyph: "hash" },
-        { id: "roles", title: qsTr("Roles"), glyph: "tag" },
-        { id: "members", title: qsTr("Members"), glyph: "users" },
-        { id: "invites", title: qsTr("Invites"), glyph: "user-plus" },
-        { id: "bans", title: qsTr("Bans"), glyph: "x" }
-    ].filter(s => s.id !== "roles" || ponds.canRoles)
+        { id: "overview", title: qsTr("Overview"), glyph: "settings", may: ponds.canManagePond },
+        { id: "channels", title: qsTr("Channels"), glyph: "hash", may: ponds.canManageChannels },
+        { id: "roles", title: qsTr("Roles"), glyph: "tag", may: giveRoles },
+        { id: "members", title: qsTr("Members"), glyph: "users", may: giveRoles || ponds.canKick || ponds.canBan },
+        { id: "invites", title: qsTr("Invites"), glyph: "user-plus", may: ponds.canManageInvites },
+        { id: "bans", title: qsTr("Bans"), glyph: "x", may: ponds.canBan }
+    ].filter(s => s.may)
+    // what a role can let its members do (the Pond's docs/design.md, "Permissions"), in the Pond's order
+    readonly property var permissionList: [
+        { id: "manage_pond", title: qsTr("Manage the Pond"), note: qsTr("Change its name, description and icon.") },
+        { id: "manage_channels", title: qsTr("Manage channels"), note: qsTr("Make, edit, delete and order channels, and choose who sees each.") },
+        { id: "manage_roles", title: qsTr("Manage roles"), note: qsTr("Make, edit and order the roles below their own, and give them to members.") },
+        { id: "manage_invites", title: qsTr("Manage invites"), note: qsTr("See, make and revoke invites.") },
+        { id: "kick_members", title: qsTr("Kick members"), note: qsTr("Remove members below them, who can come back with an invite.") },
+        { id: "ban_members", title: qsTr("Ban members"), note: qsTr("Ban members below them, see the bans, and unban.") },
+        { id: "mute_members", title: qsTr("Mute members"), note: qsTr("Mute members below them, for a while or until unmuted.") }
+    ]
+    function permissionTitles(ids) {
+        const out = []
+        for (const p of permissionList)
+            if (ids.indexOf(p.id) >= 0)
+                out.push(p.title)
+        return out.length ? out.join(", ") : qsTr("Sees its channels; no other permissions")
+    }
+    // a role's colour, as Discord offers them; or none
+    readonly property var roleColors: ["#1abc9c", "#2ecc71", "#3498db", "#9b59b6", "#e91e63", "#f1c40f", "#e67e22", "#e74c3c", "#95a5a6", "#607d8b"]
     // "Everyone", or the names of the roles that may see a channel
     function whoSees(restricted, roleIds) {
         if (!restricted)
@@ -169,7 +195,9 @@ Popup {
                     wrapMode: Text.Wrap
                     font.pixelSize: 11
                     opacity: 0.55
-                    text: settings.ponds.currentRole === "operator" ? qsTr("You are an operator here.") : qsTr("You are an administrator here.")
+                    text: settings.ponds.currentRole === "operator" ? qsTr("You are an operator here.")
+                        : settings.ponds.currentRole === "administrator" ? qsTr("You are an administrator here.")
+                        : qsTr("Your roles let you do what is here.")
                 }
             }
         }
@@ -208,6 +236,7 @@ Popup {
 
             ScrollArea {
                 id: scroller
+                objectName: "settingsScroll" /* as Settings' own: the tests bring what they click into view */
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 contentWidth: width
@@ -528,7 +557,7 @@ Popup {
                         spacing: 16
                         SettingsGroup {
                             title: qsTr("Members (%1)").arg(settings.ponds.members.count)
-                            note: qsTr("Removing someone lets them back with a new invite; banning them does not, until they are unbanned. Operators are given and taken away by the server's admin (pondctl).")
+                            note: qsTr("Removing someone lets them back with a new invite; banning them does not, until they are unbanned. Operators are given and taken away by the server's admin (pondctl). Someone whose roles let them remove or ban can only do it to members whose highest role is below theirs.")
                             Layout.fillWidth: true
                             Repeater {
                                 model: settings.ponds.members
@@ -558,20 +587,31 @@ Popup {
                                                 Layout.topMargin: 2
                                                 spacing: 4
                                                 Repeater {
-                                                    model: mRow.model.roles || []
+                                                    model: { mRow.model.roles; return settings.ponds.rolesOf(mRow.model.id) }
                                                     delegate: Rectangle {
                                                         required property var modelData
                                                         height: 20; radius: 10
                                                         width: chip.implicitWidth + 16
                                                         color: Theme.tint(Theme.text, Theme.selected)
-                                                        Label { id: chip; anchors.centerIn: parent; text: settings.ponds.roleName(parent.modelData); font.pixelSize: 11 }
+                                                        Row {
+                                                            id: chip
+                                                            anchors.centerIn: parent
+                                                            spacing: 4
+                                                            Rectangle {
+                                                                visible: parent.parent.modelData.color !== ""
+                                                                anchors.verticalCenter: parent.verticalCenter
+                                                                width: 8; height: 8; radius: 4
+                                                                color: parent.parent.modelData.color || "transparent"
+                                                            }
+                                                            Label { text: parent.parent.modelData.name; font.pixelSize: 11 }
+                                                        }
                                                     }
                                                 }
                                             }
                                         }
                                         Button {
                                             objectName: "memberRoles_" + mRow.model.name
-                                            visible: settings.ponds.canRoles
+                                            visible: settings.giveRoles
                                             text: qsTr("Roles")
                                             icon.source: Theme.icon("chevron-down"); icon.width: 14; icon.height: 14
                                             enabled: settings.ponds.roles.count > 0
@@ -586,6 +626,7 @@ Popup {
                                                         required property var model
                                                         text: model.name
                                                         checkable: true
+                                                        enabled: model.editable === true
                                                         checked: (mRow.model.roles || []).indexOf(model.id) >= 0
                                                         onTriggered: settings.ponds.setMemberRole(mRow.model.id, model.id, checked)
                                                     }
@@ -594,6 +635,7 @@ Popup {
                                         }
                                         Button {
                                             text: qsTr("Remove")
+                                            visible: settings.ponds.canKick
                                             enabled: mRow.canAct
                                             onClicked: confirm.ask(qsTr("Remove %1?").arg(mRow.model.name),
                                                                    qsTr("They leave the Pond now, and can come back with a new invite."),
@@ -601,6 +643,7 @@ Popup {
                                         }
                                         Button {
                                             text: qsTr("Ban")
+                                            visible: settings.ponds.canBan
                                             enabled: mRow.canAct
                                             palette.buttonText: Theme.danger
                                             onClicked: banDialog.ask(mRow.model.id, mRow.model.name)
@@ -764,12 +807,14 @@ Popup {
                         }
                     }
 
-                    // ---- Roles: roles for channels (the Pond's docs/design.md, "Roles for channels") ----
+                    // ---- Roles (the Pond's docs/design.md, "Roles for channels" and "Permissions") ----
                     ColumnLayout {
                         spacing: 16
                         SettingsGroup {
                             title: qsTr("Make a role")
-                            note: qsTr("Roles say who can see a channel: give them to members under Members, and choose a channel's roles under Channels. They give no say over the Pond; operators and administrators see every channel.")
+                            note: settings.ponds.canPermissions
+                                  ? qsTr("Roles say who can see a channel, and what their members may do. Give them to members under Members, and choose a channel's roles under Channels. Higher roles come first: someone whose roles let them manage roles, kick, ban or mute can only do it below their own highest role. Operators and administrators may do everything and see every channel.")
+                                  : qsTr("Roles say who can see a channel: give them to members under Members, and choose a channel's roles under Channels. They give no say over the Pond; operators and administrators see every channel.")
                             Layout.fillWidth: true
                             RowLayout {
                                 Layout.fillWidth: true
@@ -795,11 +840,32 @@ Popup {
                             Layout.fillWidth: true
                             Label { visible: settings.ponds.roles.count === 0; text: qsTr("No roles yet."); opacity: 0.6 }
                             Repeater {
+                                id: roleRows
                                 model: settings.ponds.roles
                                 delegate: ColumnLayout {
                                     id: rRow
                                     required property var model
+                                    required property int index
                                     property bool editing: false
+                                    // what the editor holds until Save
+                                    property string editColor: ""
+                                    property bool editHoist: false
+                                    property var editPermissions: []
+                                    readonly property bool editable: model.editable === true
+                                    function startEdit() {
+                                        roleName.text = model.name
+                                        editColor = model.color || ""
+                                        editHoist = model.hoist === true
+                                        editPermissions = (model.permissions || []).slice()
+                                        colorField.text = editColor
+                                        editing = true
+                                    }
+                                    function togglePermission(id, on) {
+                                        const p = editPermissions.filter(x => x !== id)
+                                        if (on)
+                                            p.push(id)
+                                        editPermissions = p
+                                    }
                                     objectName: "roleRow_" + model.name
                                     Layout.fillWidth: true
                                     spacing: 6
@@ -807,21 +873,71 @@ Popup {
                                         visible: !rRow.editing
                                         Layout.fillWidth: true
                                         spacing: 8
-                                        Icon { glyph: "tag"; size: 16; opacity: 0.6 }
-                                        Label { text: rRow.model.name; font.bold: true }
-                                        Label {
+                                        Rectangle {
+                                            width: 14; height: 14; radius: 7
+                                            color: rRow.model.color || "transparent"
+                                            border.width: rRow.model.color ? 0 : 1
+                                            border.color: Theme.hairline
+                                        }
+                                        ColumnLayout {
                                             Layout.fillWidth: true
-                                            opacity: 0.6
-                                            text: rRow.model.count === 1 ? qsTr("1 member") : qsTr("%1 members").arg(rRow.model.count)
+                                            spacing: 0
+                                            RowLayout {
+                                                spacing: 8
+                                                Label { text: rRow.model.name; font.bold: true; color: rRow.model.color || palette.text }
+                                                Label {
+                                                    opacity: 0.6
+                                                    text: rRow.model.count === 1 ? qsTr("1 member") : qsTr("%1 members").arg(rRow.model.count)
+                                                }
+                                                Label {
+                                                    visible: rRow.model.hoist === true
+                                                    text: qsTr("shown apart")
+                                                    font.pixelSize: 11
+                                                    opacity: 0.6
+                                                }
+                                            }
+                                            Label {
+                                                objectName: "rolePermissions_" + rRow.model.name
+                                                visible: settings.ponds.canPermissions
+                                                Layout.fillWidth: true
+                                                text: settings.permissionTitles(rRow.model.permissions || [])
+                                                font.pixelSize: 12
+                                                opacity: 0.6
+                                                elide: Text.ElideRight
+                                            }
+                                        }
+                                        // its place in the order, higher roles first; below our highest, unless we have a rank
+                                        ToolButton {
+                                            objectName: "moveRoleUp_" + rRow.model.name
+                                            visible: settings.ponds.canPermissions
+                                            enabled: rRow.editable && rRow.index > 0 && settings.ponds.roleEditableAt(rRow.index - 1)
+                                            icon.source: Theme.icon("arrow-up"); icon.width: 16; icon.height: 16
+                                            display: AbstractButton.IconOnly
+                                            Accessible.name: qsTr("Move %1 up").arg(rRow.model.name)
+                                            ToolTip.text: qsTr("Move up"); ToolTip.visible: hovered
+                                            onClicked: settings.ponds.moveRole(rRow.model.id, -1)
                                         }
                                         ToolButton {
+                                            objectName: "moveRoleDown_" + rRow.model.name
+                                            visible: settings.ponds.canPermissions
+                                            enabled: rRow.editable && rRow.index < settings.ponds.roles.count - 1
+                                            icon.source: Theme.icon("arrow-down"); icon.width: 16; icon.height: 16
+                                            display: AbstractButton.IconOnly
+                                            Accessible.name: qsTr("Move %1 down").arg(rRow.model.name)
+                                            ToolTip.text: qsTr("Move down"); ToolTip.visible: hovered
+                                            onClicked: settings.ponds.moveRole(rRow.model.id, 1)
+                                        }
+                                        ToolButton {
+                                            objectName: "editRole_" + rRow.model.name
+                                            enabled: rRow.editable
                                             icon.source: Theme.icon("pencil"); icon.width: 16; icon.height: 16
                                             display: AbstractButton.IconOnly
-                                            Accessible.name: qsTr("Rename %1").arg(rRow.model.name)
-                                            ToolTip.text: qsTr("Rename"); ToolTip.visible: hovered
-                                            onClicked: { roleName.text = rRow.model.name; rRow.editing = true }
+                                            Accessible.name: qsTr("Edit %1").arg(rRow.model.name)
+                                            ToolTip.text: rRow.editable ? qsTr("Edit") : qsTr("Only roles below your highest"); ToolTip.visible: hovered
+                                            onClicked: rRow.startEdit()
                                         }
                                         ToolButton {
+                                            enabled: rRow.editable
                                             icon.source: Theme.icon("trash"); icon.width: 16; icon.height: 16; icon.color: Theme.danger
                                             display: AbstractButton.IconOnly
                                             Accessible.name: qsTr("Delete %1").arg(rRow.model.name)
@@ -831,17 +947,117 @@ Popup {
                                                                    qsTr("Delete role"), () => settings.ponds.deleteRole(rRow.model.id))
                                         }
                                     }
-                                    RowLayout {
+                                    // the editor: its name, and where the Pond has them, its colour, whether it is shown apart, and permissions
+                                    ColumnLayout {
                                         visible: rRow.editing
                                         Layout.fillWidth: true
-                                        spacing: 8
-                                        TextField { id: roleName; Layout.preferredWidth: 260; maximumLength: 32 }
-                                        PrimaryButton {
-                                            text: qsTr("Save")
-                                            enabled: roleName.text.trim() !== ""
-                                            onClicked: { settings.ponds.renameRole(rRow.model.id, roleName.text); rRow.editing = false }
+                                        spacing: 10
+                                        RowLayout {
+                                            spacing: 8
+                                            Label { text: qsTr("Name"); Layout.preferredWidth: 90 }
+                                            TextField { id: roleName; objectName: "roleNameField"; Layout.preferredWidth: 260; maximumLength: 32 }
                                         }
-                                        Button { text: qsTr("Cancel"); onClicked: rRow.editing = false }
+                                        RowLayout {
+                                            visible: settings.ponds.canPermissions
+                                            spacing: 6
+                                            Label { text: qsTr("Colour"); Layout.preferredWidth: 90 }
+                                            // none
+                                            Rectangle {
+                                                width: 24; height: 24; radius: 12
+                                                color: "transparent"
+                                                border.width: rRow.editColor === "" ? 2 : 1
+                                                border.color: rRow.editColor === "" ? Theme.primary : Theme.hairline
+                                                Icon { anchors.centerIn: parent; glyph: "x"; size: 12; opacity: 0.6 }
+                                                TapHandler { onTapped: { rRow.editColor = ""; colorField.text = "" } }
+                                                HoverHandler { cursorShape: Qt.PointingHandCursor }
+                                                Accessible.role: Accessible.Button
+                                                Accessible.name: qsTr("No colour")
+                                            }
+                                            Repeater {
+                                                model: settings.roleColors
+                                                delegate: Rectangle {
+                                                    required property string modelData
+                                                    objectName: "roleColor_" + modelData
+                                                    width: 24; height: 24; radius: 12
+                                                    color: modelData
+                                                    border.width: rRow.editColor === modelData ? 2 : 0
+                                                    border.color: palette.text
+                                                    TapHandler { onTapped: { rRow.editColor = parent.modelData; colorField.text = parent.modelData } }
+                                                    HoverHandler { cursorShape: Qt.PointingHandCursor }
+                                                    Accessible.role: Accessible.Button
+                                                    Accessible.name: modelData
+                                                }
+                                            }
+                                            TextField {
+                                                id: colorField
+                                                Layout.preferredWidth: 90
+                                                placeholderText: "#rrggbb"
+                                                maximumLength: 7
+                                                validator: RegularExpressionValidator { regularExpression: /^(#[0-9a-fA-F]{0,6})?$/ }
+                                                onTextEdited: if (/^#[0-9a-fA-F]{6}$/.test(text) || text === "") rRow.editColor = text.toLowerCase()
+                                            }
+                                        }
+                                        RowLayout {
+                                            visible: settings.ponds.canPermissions
+                                            spacing: 8
+                                            Item { Layout.preferredWidth: 90 }
+                                            CheckBox {
+                                                objectName: "roleHoist"
+                                                text: qsTr("Show members with this role apart in the member list")
+                                                checked: rRow.editHoist
+                                                onToggled: rRow.editHoist = checked
+                                            }
+                                        }
+                                        ColumnLayout {
+                                            visible: settings.ponds.canPermissions
+                                            spacing: 2
+                                            Label { text: qsTr("Permissions"); font.bold: true; Layout.topMargin: 4 }
+                                            Repeater {
+                                                model: settings.permissionList
+                                                delegate: RowLayout {
+                                                    required property var modelData
+                                                    spacing: 8
+                                                    Layout.fillWidth: true
+                                                    // only what we may do ourselves can be added
+                                                    readonly property bool mine: settings.ponds.hasPermission(modelData.id)
+                                                    CheckBox {
+                                                        objectName: "rolePermission_" + parent.modelData.id
+                                                        checked: rRow.editPermissions.indexOf(parent.modelData.id) >= 0
+                                                        enabled: parent.mine || checked
+                                                        onToggled: rRow.togglePermission(parent.modelData.id, checked)
+                                                    }
+                                                    ColumnLayout {
+                                                        spacing: 0
+                                                        Layout.fillWidth: true
+                                                        Label { text: parent.parent.modelData.title }
+                                                        Label {
+                                                            Layout.fillWidth: true
+                                                            text: parent.parent.modelData.note
+                                                            font.pixelSize: 12
+                                                            opacity: 0.6
+                                                            wrapMode: Text.Wrap
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        RowLayout {
+                                            spacing: 8
+                                            PrimaryButton {
+                                                objectName: "saveRole"
+                                                text: qsTr("Save")
+                                                enabled: roleName.text.trim() !== ""
+                                                onClicked: {
+                                                    if (settings.ponds.canPermissions)
+                                                        settings.ponds.editRole(rRow.model.id, { name: roleName.text, color: rRow.editColor, hoist: rRow.editHoist,
+                                                                                                 permissions: rRow.editPermissions })
+                                                    else
+                                                        settings.ponds.renameRole(rRow.model.id, roleName.text)
+                                                    rRow.editing = false
+                                                }
+                                            }
+                                            Button { text: qsTr("Cancel"); onClicked: rRow.editing = false }
+                                        }
                                     }
                                     Rectangle { Layout.fillWidth: true; height: 1; color: Theme.hairline }
                                 }
