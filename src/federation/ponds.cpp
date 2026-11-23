@@ -30,6 +30,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -805,6 +806,17 @@ static int ask_follower(puddle_ctx *ctx, const char *id, bool profile)
 
 /* ---------------------------------------------------------------- what the owner does */
 
+/* `len` bytes as a malloc'd, NUL-terminated string (strndup, which Windows lacks); NULL if out of memory */
+static char *copy_of(const char *p, size_t len)
+{
+    char *out = (char *)malloc(len + 1);
+    if (out) {
+        memcpy(out, p, len);
+        out[len] = '\0';
+    }
+    return out;
+}
+
 int puddle_pond_join(puddle_ctx *ctx, const puddle_link *link, const char *profile_id, const char *answers, char out_id[PUDDLE_USER_ID_LEN + 1],
                      const char **code, char **detail)
 {
@@ -848,7 +860,7 @@ int puddle_pond_join(puddle_ctx *ctx, const puddle_link *link, const char *profi
         if (r.result == PUDDLE_NET_OK && (st == 400 || (st == 409 && r.body && !strstr(r.body, "application_pending")))) {
             *code = st == 400 ? "bad_answers" : "application_refused";
             if (detail && r.body)
-                *detail = strndup(r.body, r.body_len);
+                *detail = copy_of(r.body, r.body_len);
             puddle_net_reply_free(&r);
             return -1;
         }
@@ -859,10 +871,10 @@ int puddle_pond_join(puddle_ctx *ctx, const puddle_link *link, const char *profi
     pond_call(ctx, &link->address, PUDDLE_RECIPIENT_ANY, "POST", "/pond/v1/join", body.substr(0, n), 1u << 20, 30, &call, &r);
     if (r.result == PUDDLE_NET_OK && r.status == 409 && r.body) { /* it asks for an application, or has one */
         for (const char *c : {"application_required", "application_pending", "application_declined"})
-            if (memmem(r.body, r.body_len, c, strlen(c))) {
+            if (std::string_view(r.body, r.body_len).find(c) != std::string_view::npos) {
                 *code = c;
                 if (detail)
-                    *detail = strndup(r.body, r.body_len);
+                    *detail = copy_of(r.body, r.body_len);
                 puddle_net_reply_free(&r);
                 return -1;
             }
