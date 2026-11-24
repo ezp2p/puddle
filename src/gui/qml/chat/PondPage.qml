@@ -7,7 +7,9 @@ import "../components"
 import "../theme"
 
 // A Pond's text channel, laid out like a conversation: each message under the name and time of who wrote it, following messages from the same
-// person tucked under the first. Files go with messages as in a conversation (docs/ponds.md, "Files"); no replies or edits yet.
+// person tucked under the first. Files go with messages as in a conversation (docs/ponds.md, "Files"). Our own messages can be edited
+// (their words, and dropping files) and deleted, and anyone's by whoever may manage messages there; whoever may read the message
+// log sees what was edited or deleted (docs/ponds.md, "Editing and deleting"). No replies yet.
 Pane {
     id: page
 
@@ -33,6 +35,21 @@ Pane {
     property var drafts: ({})
     property var people: null     // the Shell: someone's card and menu (showCard, personMenuAt)
     property string draftOwner: ""
+    property string editingId: ""      // the message being edited in place
+    property var editKeep: []          // while editing: the ids of the files it keeps
+
+    function startEdit(m) {
+        editingId = m.id
+        editKeep = (m.files || []).map(f => f.id)
+    }
+    // Up in an empty box edits your last message, as in a conversation
+    function editLast() {
+        if (!ponds.canEditMessages) return
+        for (let i = list.count - 1; i >= 0; i--) {
+            const m = ponds.messages.get(i)
+            if (m && m.mine) { startEdit(m); return }
+        }
+    }
 
     readonly property string timeFormat: Qt.locale().timeFormat(Locale.ShortFormat).replace(/[:.]ss/, "")
     function clock(d) { return Qt.formatTime(d, timeFormat) }
@@ -94,6 +111,7 @@ Pane {
             page.draftOwner = key
             input.text = d[key] || ""
             page.drafts = d
+            page.editingId = ""
             list.stickToEnd = true
             if (page.visible && page.ponds.channel !== "") input.forceActiveFocus()
         }
@@ -118,6 +136,15 @@ Pane {
                 Rectangle { visible: page.ponds.channelTopic !== ""; width: 1; height: 20; color: Theme.hairline }
                 Label { text: page.ponds.channelTopic; opacity: 0.6; elide: Text.ElideRight; Layout.fillWidth: true }
                 Item { Layout.fillWidth: page.ponds.channelTopic === "" }
+                ToolButton {
+                    objectName: "messageLogButton"
+                    visible: page.ponds.canViewLogHere && page.ponds.channel !== ""
+                    icon.source: Theme.icon("history"); icon.width: 20; icon.height: 20
+                    display: AbstractButton.IconOnly
+                    Accessible.name: qsTr("Message log")
+                    ToolTip.text: qsTr("Message log: what was edited or deleted here"); ToolTip.visible: hovered
+                    onClicked: messageLog.show("")
+                }
                 PanelToggle { glyph: "layout-sidebar-right"; label: qsTr("Members"); active: page.contextShown; onClicked: page.toggleContext() }
             }
             Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.hairline }
@@ -238,6 +265,10 @@ Pane {
                 id: msg
                 required property var model
                 readonly property bool grouped: model.grouped === true
+                readonly property bool editing: page.editingId === model.id
+                readonly property bool mayEdit: page.ponds.canEditMessages && model.mine === true && page.ponds.currentStatus !== "removed"
+                readonly property bool mayDelete: page.ponds.canEditMessages && (model.mine === true || page.ponds.canDeleteAnyHere) &&
+                                                  page.ponds.currentStatus !== "removed"
                 width: ListView.view.width
                 implicitHeight: col.implicitHeight
 
@@ -259,13 +290,27 @@ Pane {
                         text: bodyText.selectedText !== "" ? qsTr("Copy") : qsTr("Copy text")
                         onTriggered: bodyText.selectedText !== "" ? bodyText.copy() : page.chats.copy(msg.model.text)
                     }
+                    MenuItem { objectName: "pondMsgEdit"; text: qsTr("Edit"); visible: msg.mayEdit; height: visible ? implicitHeight : 0; onTriggered: page.startEdit(msg.model) }
+                    MenuItem {
+                        text: qsTr("Edit history")
+                        visible: page.ponds.canViewLogHere && msg.model.edited > 0
+                        height: visible ? implicitHeight : 0
+                        onTriggered: messageLog.show(msg.model.id)
+                    }
+                    MenuSeparator { visible: msg.mayDelete; height: visible ? implicitHeight : 0 }
+                    MenuItem {
+                        objectName: "pondMsgDelete"
+                        text: qsTr("Delete…"); palette.text: Theme.danger
+                        visible: msg.mayDelete; height: visible ? implicitHeight : 0
+                        onTriggered: page.askDelete(msg.model)
+                    }
                 }
                 // under the day's line, when there is one: it marks the message, not the day
                 Rectangle {
                     y: dayLine.visible ? dayLine.y + dayLine.height + 4 : 0
                     width: parent.width
                     height: parent.height - y
-                    color: hover.hovered ? Theme.tint(palette.text, 0.05) : "transparent"
+                    color: hover.hovered || msg.editing ? Theme.tint(palette.text, 0.05) : "transparent"
                 }
 
                 ColumnLayout {
@@ -331,7 +376,7 @@ Pane {
                             TextEdit {
                                 id: bodyText
                                 objectName: "pondMessageText"
-                                visible: text !== ""
+                                visible: text !== "" && !msg.editing
                                 Layout.fillWidth: true
                                 readOnly: true
                                 selectByMouse: true
@@ -344,8 +389,76 @@ Pane {
                                 Accessible.role: Accessible.StaticText
                                 Accessible.name: msg.model.name + ": " + text
                             }
+                            Label {
+                                objectName: "pondMessageEdited"
+                                visible: msg.model.edited > 0 && !msg.editing
+                                text: qsTr("(edited)")
+                                font.pixelSize: 10
+                                opacity: 0.5
+                                ToolTip.text: new Date(msg.model.edited).toLocaleString(Qt.locale(), Locale.ShortFormat)
+                                ToolTip.visible: editedHover.hovered
+                                HoverHandler { id: editedHover }
+                            }
+                            // editing in place: the words, and the files it keeps (an edit only drops them)
+                            ColumnLayout {
+                                visible: msg.editing
+                                Layout.fillWidth: true
+                                TextArea {
+                                    id: editor
+                                    objectName: "pondEditor"
+                                    Layout.fillWidth: true
+                                    wrapMode: TextArea.Wrap
+                                    selectByMouse: true
+                                    onTextChanged: if (length > 4000) remove(4000, length)
+                                    text: msg.editing ? (msg.model.text || "") : ""
+                                    onVisibleChanged: if (visible) { forceActiveFocus(); cursorPosition = length }
+                                    FieldMenu {}
+                                    Keys.onPressed: event => {
+                                        if (event.key === Qt.Key_Escape) { page.editingId = ""; event.accepted = true }
+                                        else if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && !(event.modifiers & Qt.ShiftModifier) && !inputMethodComposing) {
+                                            page.saveEdit(msg.model, text)
+                                            event.accepted = true
+                                        }
+                                    }
+                                }
+                                Flow {
+                                    visible: !!msg.model.files && msg.model.files.length > 0
+                                    Layout.fillWidth: true
+                                    spacing: 6
+                                    Repeater {
+                                        model: msg.editing ? (msg.model.files || []) : []
+                                        delegate: Rectangle {
+                                            required property var modelData
+                                            readonly property bool kept: page.editKeep.indexOf(modelData.id) >= 0
+                                            height: 28; radius: Theme.radius
+                                            width: chip.implicitWidth + 12
+                                            color: Theme.card; border.color: Theme.hairline
+                                            opacity: kept ? 1 : 0.45
+                                            RowLayout {
+                                                id: chip
+                                                anchors.centerIn: parent
+                                                spacing: 4
+                                                Label { text: modelData.name; font.strikeout: !parent.parent.kept; elide: Text.ElideMiddle; Layout.maximumWidth: 220 }
+                                                ToolButton {
+                                                    objectName: "pondEditDropFile"
+                                                    icon.source: Theme.icon(parent.parent.kept ? "x" : "arrow-back-up"); icon.width: 14; icon.height: 14
+                                                    display: AbstractButton.IconOnly
+                                                    implicitWidth: 22; implicitHeight: 22
+                                                    Accessible.name: parent.parent.kept ? qsTr("Take this file off") : qsTr("Keep this file")
+                                                    ToolTip.text: Accessible.name; ToolTip.visible: hovered
+                                                    onClicked: {
+                                                        const id = modelData.id
+                                                        page.editKeep = parent.parent.kept ? page.editKeep.filter(x => x !== id) : page.editKeep.concat([id])
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                Label { font.pixelSize: 11; opacity: 0.6; text: qsTr("Enter to save, Esc to cancel") }
+                            }
                             MessageFiles {
-                                visible: !!msg.model.files && msg.model.files.length > 0
+                                visible: !!msg.model.files && msg.model.files.length > 0 && !msg.editing
                                 Layout.fillWidth: true
                                 Layout.topMargin: 4
                                 chats: page.chats
@@ -356,6 +469,24 @@ Pane {
                                 onSaveFile: f => fileActions.save(f)
                                 onOpenFile: f => fileActions.open(f)
                             }
+                        }
+                    }
+                }
+
+                // hover tools
+                Row {
+                    visible: hover.hovered && !msg.editing && (msg.mayEdit || msg.mayDelete)
+                    anchors.right: parent.right
+                    anchors.rightMargin: 16
+                    y: msg.model.dayStart === true ? 34 : 0
+                    Rectangle {
+                        width: tools.implicitWidth + 4; height: 30; radius: Theme.radius
+                        color: Theme.card; border.color: Theme.hairline
+                        Row {
+                            id: tools
+                            anchors.centerIn: parent
+                            ToolButton { objectName: "pondEditButton"; visible: msg.mayEdit; icon.source: Theme.icon("pencil"); icon.width: Theme.iconSize; icon.height: Theme.iconSize; display: AbstractButton.IconOnly; Accessible.name: qsTr("Edit"); ToolTip.text: qsTr("Edit"); ToolTip.visible: hovered; onClicked: page.startEdit(msg.model) }
+                            ToolButton { objectName: "pondDeleteButton"; visible: msg.mayDelete; icon.source: Theme.icon("trash"); icon.width: Theme.iconSize; icon.height: Theme.iconSize; display: AbstractButton.IconOnly; Accessible.name: qsTr("Delete"); ToolTip.text: qsTr("Delete"); ToolTip.visible: hovered; onClicked: page.askDelete(msg.model) }
                         }
                     }
                 }
@@ -416,6 +547,9 @@ Pane {
                         if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && !(event.modifiers & Qt.ShiftModifier) && !inputMethodComposing) {
                             page.send()
                             event.accepted = true
+                        } else if (event.key === Qt.Key_Up && text === "") {
+                            page.editLast()
+                            event.accepted = true
                         } else if (event.matches(StandardKey.Paste) && composer.canPaste()) { // a picture or files: they go with the message
                             composer.paste()
                             event.accepted = true
@@ -462,6 +596,29 @@ Pane {
                 }
             }
         }
+    }
+
+    function saveEdit(m, text) {
+        const t = text.trim(), had = (m.files || []).map(f => f.id)
+        const dropped = had.some(id => editKeep.indexOf(id) < 0)
+        if (t === "" && editKeep.length === 0) { editingId = ""; askDelete(m); return } // nothing left: that's deleting it
+        if (t !== (m.text || "") || dropped) ponds.editMessage(m.id, t, editKeep)
+        editingId = ""
+    }
+    function askDelete(m) {
+        const theirs = !m.mine
+        deleteConfirm.ask(qsTr("Delete message"),
+                          theirs ? qsTr("Delete %1's message for everyone here? It stays in the message log, for those who may read it.").arg(m.name)
+                                 : qsTr("Delete this message for everyone here?"),
+                          qsTr("Delete"), () => page.ponds.deleteMessage(m.id))
+    }
+    ConfirmDialog { id: deleteConfirm; objectName: "pondDeleteConfirm" }
+    MessageLog {
+        id: messageLog
+        ponds: page.ponds
+        chats: page.chats
+        onSaveFile: f => fileActions.save(f)
+        onOpenFile: f => fileActions.open(f)
     }
 
     // files dropped anywhere on the channel go with the next message

@@ -490,6 +490,22 @@ static int64_t size_from_pond(puddle_ctx *ctx, Follower *f, int64_t channel, int
         }
     }
     puddle_net_reply_free(&r);
+    if (size > 0)
+        return size;
+    /* a deleted message, or a file an edit dropped: the message log has it, for an owner who may read it (protocol 14) */
+    target = "/pond/v1/channels/" + std::to_string(channel) + "/messages/" + std::to_string(message) + "/versions";
+    if (follow_call(ctx, f, "GET", target, "", 1u << 20, 20, &r, true) == GOT && r.status == 200 && r.body) {
+        puddle_span item = {r.body, r.body_len}, files, fv, v;
+        size_t fcur = 0;
+        if (puddle_json_member(item.p, item.len, "files", &files) == 0)
+            while (puddle_json_array_next(files, &fcur, &fv) == 1) {
+                char fid[PUDDLE_FILE_ID_LEN + 1];
+                if (puddle_json_member(fv.p, fv.len, "id", &v) == 0 && puddle_json_string(v, fid, sizeof fid) == 0 && file == fid &&
+                    puddle_json_member(fv.p, fv.len, "size", &v) == 0)
+                    puddle_json_int64(v, &size);
+            }
+    }
+    puddle_net_reply_free(&r);
     return size;
 }
 
@@ -1172,7 +1188,7 @@ int puddle_pond_admin(puddle_ctx *ctx, const char *pond, const char *method, con
 {
     if (strncmp(target, "/pond/v1/admin/", 15) != 0 && strcmp(target, "/pond/v1/roles/answer") != 0 && strcmp(target, "/pond/v1/pictures") != 0 &&
         strncmp(target, "/pond/v1/pages/", 15) != 0 && strcmp(target, "/pond/v1/role_color") != 0 && strcmp(target, "/pond/v1/orders") != 0 &&
-        strncmp(target, "/pond/v1/voice/members/", 23) != 0) {
+        strncmp(target, "/pond/v1/voice/members/", 23) != 0 && strncmp(target, "/pond/v1/channels/", 18) != 0) {
         *code = "failed";
         return -1;
     }

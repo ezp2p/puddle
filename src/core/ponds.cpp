@@ -35,6 +35,7 @@ namespace {
 
 struct Msg {
     int64_t id = 0, ts = 0;
+    int64_t edited = 0; /* when it was last edited, as the Pond says (protocol 14); 0 never */
     std::string author, text;
     std::string files; /* the cleaned "files" array, or "" for none */
 };
@@ -461,6 +462,8 @@ static bool parse_message(puddle_span v, Msg &m, int64_t *channel)
           puddle_id_valid(author.c_str()) && get_text(v, "text", PUDDLE_POND_TEXT_MAX, 1, m.text) && get_int(v, "ts", &m.ts)))
         return false;
     m.author = author;
+    if (!get_int(v, "edited", &m.edited) || m.edited < 0)
+        m.edited = 0;
     clean_files(v, m.files);
     return true;
 }
@@ -708,6 +711,30 @@ static bool append(Channel &c, Msg m)
     return true;
 }
 
+/* An edit of a message that is kept (protocol 14): it takes the place of what is held of it. false if it is not held. */
+static bool replace_message(Channel &c, Msg m)
+{
+    for (auto &held : c.recent)
+        if (held.id == m.id) {
+            if (held.author != m.author)
+                return false; /* not the same message: the Pond would never say so */
+            held = std::move(m);
+            return true;
+        }
+    return false;
+}
+
+/* A message deleted (protocol 14): no longer kept. Its files are let go by the fetcher, as for any message no longer kept. */
+static bool drop_message(Channel &c, int64_t id)
+{
+    for (auto it = c.recent.begin(); it != c.recent.end(); ++it)
+        if (it->id == id) {
+            c.recent.erase(it);
+            return true;
+        }
+    return false;
+}
+
 /* ---------------------------------------------------------------- keeping it on disk */
 
 static void write_profile(puddle_jw *w, const std::string &profile)
@@ -771,6 +798,8 @@ static void write_message(puddle_jw *w, int64_t channel, const Msg &m, const pud
     puddle_jw_str(w, "author", m.author.c_str());
     puddle_jw_str(w, "text", m.text.c_str());
     puddle_jw_num(w, "ts", m.ts);
+    if (m.edited > 0)
+        puddle_jw_num(w, "edited", m.edited);
     if (!m.files.empty()) {
         puddle_jw_key(w, "files");
         if (!files) {
@@ -1277,6 +1306,38 @@ int puddle_ponds_sent(puddle_ponds *p, const char *id, const char *json, size_t 
     return 0;
 }
 
+int puddle_ponds_edited(puddle_ponds *p, const char *id, const char *json, size_t len)
+{
+    Msg m;
+    int64_t ch;
+    if (!puddle_json_valid_object(json, len) || !parse_message(puddle_span{json, len}, m, &ch))
+        return -1;
+    std::lock_guard<std::mutex> g(p->mu);
+    auto it = p->ponds.find(id);
+    Channel *c = it == p->ponds.end() ? nullptr : find_channel(it->second, ch);
+    if (!c)
+        return -1;
+    if (replace_message(*c, std::move(m))) {
+        save_channel(p, it->second, *c);
+        p->version++;
+    }
+    return 0;
+}
+
+int puddle_ponds_deleted(puddle_ponds *p, const char *id, int64_t channel, int64_t message)
+{
+    std::lock_guard<std::mutex> g(p->mu);
+    auto it = p->ponds.find(id);
+    Channel *c = it == p->ponds.end() ? nullptr : find_channel(it->second, channel);
+    if (!c)
+        return -1;
+    if (drop_message(*c, message)) {
+        save_channel(p, it->second, *c);
+        p->version++;
+    }
+    return 0;
+}
+
 int puddle_ponds_events(puddle_ponds *p, const char *id, const char *json, size_t len)
 {
     puddle_span all = {json, len}, arr, item, v;
@@ -1307,6 +1368,17 @@ int puddle_ponds_events(puddle_ponds *p, const char *id, const char *json, size_
             int64_t ch;
             Channel *c = parse_message(data, m, &ch) ? find_channel(pd, ch) : nullptr;
             if (c && c->filled && append(*c, std::move(m)))
+                touched.push_back(c->id);
+        } else if (kind == "message_edited") { /* the message as it reads now (protocol 14): in place of what is kept of it */
+            Msg m;
+            int64_t ch;
+            Channel *c = parse_message(data, m, &ch) ? find_channel(pd, ch) : nullptr;
+            if (c && replace_message(*c, std::move(m)))
+                touched.push_back(c->id);
+        } else if (kind == "message_deleted") { /* {id, channel}: gone, and what is kept of it with it */
+            int64_t mid, ch;
+            Channel *c = get_int(data, "id", &mid) && get_int(data, "channel", &ch) ? find_channel(pd, ch) : nullptr;
+            if (c && drop_message(*c, mid))
                 touched.push_back(c->id);
         } else if (kind == "channel") {
             Channel n;
@@ -1837,6 +1909,127 @@ int puddle_ponds_write_page(const char *json, size_t len, int asked, puddle_jw *
     puddle_jw_flag(w, "more", (int)page.size() >= asked);
     puddle_jw_end_object(w);
     return 0;
+}
+
+int puddle_ponds_write_message(const char *json, size_t len, puddle_jw *w, const puddle_pond_file_writer *files)
+{
+    Msg m;
+    int64_t ch;
+    if (!puddle_json_valid_object(json, len) || !parse_message(puddle_span{json, len}, m, &ch))
+        return -1;
+    write_message(w, ch, m, files);
+    return 0;
+}
+
+/* One message of the log, cleaned: as a message, with `deleted` ({ts, by}), its `versions` ({text, ts, until, files: [ids]},
+ * oldest first), and `removed`, the ids of its files an edit dropped. false if it is malformed. */
+static bool write_logged(puddle_jw *w, puddle_span v, const puddle_pond_file_writer *files)
+{
+    Msg m;
+    int64_t ch;
+    if (!parse_message(v, m, &ch))
+        return false;
+    puddle_span dv, vers, item;
+    int64_t dts = 0;
+    std::string by;
+    bool deleted = member(v, "deleted", &dv) && get_int(dv, "ts", &dts) && get_text(dv, "by", PUDDLE_USER_ID_LEN, 0, by);
+    /* `files` as kept drops what does not look like a file; `removed` is read again from what the Pond said */
+    std::map<std::string, int64_t> removed;
+    puddle_span fa;
+    if (member(v, "files", &fa)) {
+        size_t cur = 0;
+        while (puddle_json_array_next(fa, &cur, &item) == 1) {
+            std::string fid;
+            int64_t at = 0;
+            if (get_text(item, "id", PUDDLE_POND_FILE_ID_LEN, 0, fid) && get_int(item, "removed", &at) && at > 0)
+                removed[fid] = at;
+        }
+    }
+    puddle_jw_object(w);
+    puddle_jw_num(w, "id", m.id);
+    puddle_jw_num(w, "channel", ch);
+    puddle_jw_str(w, "author", m.author.c_str());
+    puddle_jw_str(w, "text", m.text.c_str());
+    puddle_jw_num(w, "ts", m.ts);
+    if (m.edited > 0)
+        puddle_jw_num(w, "edited", m.edited);
+    if (deleted) {
+        puddle_jw_key(w, "deleted");
+        puddle_jw_object(w);
+        puddle_jw_num(w, "ts", dts);
+        puddle_jw_str(w, "by", by.c_str());
+        puddle_jw_end_object(w);
+    }
+    puddle_jw_key(w, "files");
+    puddle_jw_array(w);
+    puddle_span arr = {m.files.data(), m.files.size()};
+    size_t cur = 0;
+    while (!m.files.empty() && puddle_json_array_next(arr, &cur, &item) == 1) {
+        if (files)
+            files->write(files->user, w, ch, m.id, item.p, item.len);
+        else
+            puddle_jw_raw(w, item.p, item.len);
+    }
+    puddle_jw_end_array(w);
+    std::vector<std::string> dropped;
+    for (auto &[fid, at] : removed)
+        dropped.push_back(fid);
+    write_names(w, "removed", dropped); /* the files an edit dropped */
+    puddle_jw_key(w, "versions");
+    puddle_jw_array(w);
+    if (member(v, "versions", &vers)) {
+        size_t vc = 0;
+        while (puddle_json_array_next(vers, &vc, &item) == 1) {
+            std::string text;
+            int64_t ts = 0, until = 0;
+            puddle_span ids;
+            if (!get_text(item, "text", PUDDLE_POND_TEXT_MAX, 1, text) || !get_int(item, "ts", &ts) || !get_int(item, "until", &until))
+                continue;
+            puddle_jw_object(w);
+            puddle_jw_str(w, "text", text.c_str());
+            puddle_jw_num(w, "ts", ts);
+            puddle_jw_num(w, "until", until);
+            std::vector<std::string> fids;
+            if (member(item, "files", &ids)) {
+                size_t ic = 0;
+                puddle_span one;
+                char fid[PUDDLE_POND_FILE_ID_LEN + 1];
+                while (puddle_json_array_next(ids, &ic, &one) == 1 && fids.size() < 16)
+                    if (puddle_json_string(one, fid, sizeof fid) == 0 && strlen(fid) == PUDDLE_POND_FILE_ID_LEN &&
+                        std::all_of(fid, fid + PUDDLE_POND_FILE_ID_LEN, [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); }))
+                        fids.push_back(fid);
+            }
+            write_names(w, "files", fids);
+            puddle_jw_end_object(w);
+        }
+    }
+    puddle_jw_end_array(w);
+    puddle_jw_end_object(w);
+    return true;
+}
+
+int puddle_ponds_write_log(const char *json, size_t len, int one, puddle_jw *w, const puddle_pond_file_writer *files)
+{
+    puddle_span all = {json, len}, arr, item;
+    if (!puddle_json_valid_object(json, len))
+        return -1;
+    if (one) {
+        if (!write_logged(w, all, files))
+            return -1;
+        return 0;
+    }
+    if (!member(all, "messages", &arr))
+        return -1;
+    puddle_jw_object(w);
+    puddle_jw_key(w, "items");
+    puddle_jw_array(w);
+    size_t cur = 0;
+    int r;
+    while ((r = puddle_json_array_next(arr, &cur, &item)) == 1)
+        write_logged(w, item, files); /* newest first, as the Pond gives them */
+    puddle_jw_end_array(w);
+    puddle_jw_end_object(w);
+    return r == 0 ? 0 : -1;
 }
 
 int64_t puddle_ponds_files_max(puddle_ponds *p, const char *id)

@@ -39,6 +39,16 @@ class Ponds : public QObject {
     Q_PROPERTY(bool shopTest READ shopTest NOTIFY currentInfoChanged)            // ...in Stripe's test mode
     Q_PROPERTY(bool canSendHere READ canSendHere NOTIFY channelChanged)          // in the open channel
     Q_PROPERTY(bool canAttachHere READ canAttachHere NOTIFY channelChanged)
+    // editing and deleting messages (protocol 14, feature `message_edits`; docs/ponds.md, "Editing and deleting"): whether the
+    // open Pond has them; whether we may delete anyone's in the open channel; whether we may read its message log, and purge
+    Q_PROPERTY(bool canEditMessages READ canEditMessages NOTIFY currentInfoChanged)
+    Q_PROPERTY(bool canDeleteAnyHere READ canDeleteAnyHere NOTIFY channelChanged)
+    Q_PROPERTY(bool canViewLogHere READ canViewLogHere NOTIFY channelChanged)
+    Q_PROPERTY(bool canPurgeHere READ canPurgeHere NOTIFY channelChanged)
+    // the open channel's message log, once loadLog() has asked, newest first: id, author, name, text, ts, edited, deleted,
+    // deletedTs, deletedBy, deletedByName, files, removed (ids of files an edit dropped), versions ([{text, ts, until, files}])
+    Q_PROPERTY(QObject *log READ log CONSTANT)
+    Q_PROPERTY(bool logHasOlder READ logHasOlder NOTIFY logChanged)
     Q_PROPERTY(QObject *orders READ orders CONSTANT)              // once loadOrders() has asked: id, item, title, quantity, amount, currency, status, url, created, paid, member, memberName
     Q_PROPERTY(QObject *applications READ applications CONSTANT)  // once loadApplications() has asked: member, name, answers, status, reason, created
     Q_PROPERTY(int applicationsWaiting READ applicationsWaiting NOTIFY applicationsChanged)
@@ -125,6 +135,12 @@ public:
     bool shopTest() const { return info_.value("shop").toObject().value("test").toBool(true); }
     bool canSendHere() const { return mayIn(channel_, QStringLiteral("send_messages")); }
     bool canAttachHere() const { return mayIn(channel_, QStringLiteral("attach_files")); }
+    bool canEditMessages() const { return feature("message_edits"); }
+    bool canDeleteAnyHere() const { return canEditMessages() && mayIn(channel_, QStringLiteral("manage_messages")); }
+    bool canViewLogHere() const { return canEditMessages() && mayIn(channel_, QStringLiteral("view_message_log")); }
+    bool canPurgeHere() const { return canDeleteAnyHere() && canViewLogHere(); }
+    QObject *log() { return &log_; }
+    bool logHasOlder() const { return logHasOlder_; }
     QObject *orders() { return &orders_; }
     QObject *applications() { return &applications_; }
     int applicationsWaiting() const { return applicationsWaiting_; }
@@ -191,6 +207,14 @@ public:
     Q_INVOKABLE void loadOlder();
     Q_INVOKABLE QString sendPath() const;                   // the open channel's send route (for sending files)
     Q_INVOKABLE void fetchFile(const QString &messageId, const QString &fileId); // one that did not come by itself
+    // in the open channel: change one of ours (its text, and the files it keeps, by id); delete one (ours, or anyone's where we
+    // may manage messages); read the message log (`older`: the next page back), or erase a deleted message for good
+    Q_INVOKABLE void editMessage(const QString &messageId, const QString &text, const QStringList &keepFiles);
+    Q_INVOKABLE void deleteMessage(const QString &messageId);
+    Q_INVOKABLE void loadLog(bool older = false);
+    Q_INVOKABLE void loadVersions(const QString &messageId); // the log of that one message alone
+    Q_INVOKABLE void purgeMessage(const QString &messageId);
+    Q_INVOKABLE void fetchLogFile(const QString &messageId, const QString &fileId); // a file the log shows, to save
     Q_INVOKABLE void leave(const QString &pondId);
     Q_INVOKABLE void setProfile(const QString &pondId, const QString &profile);
     Q_INVOKABLE QString nameAt(int row) const { return list_.at(row).value("name").toString(); }
@@ -316,6 +340,8 @@ signals:
     void checkout(const QString &url);  // pay here (a Stripe link for one order)
     void settingsWanted(const QString &section); // open Server Settings at this section
     void applicationsChanged();
+    void logChanged();
+    void messageEdited(const QString &messageId);  // an edit of ours went through
     // joining asked for an application, or says where it stands: code application_required, _pending, _declined, _refused or
     // bad_answers; `pond` what the Pond said (form: {intro, questions}, reason, message)
     void application(const QString &link, const QString &profile, const QString &code, const QVariantMap &pond);
@@ -343,7 +369,10 @@ private:
 
     ApiClient *api_;
     QTimer timer_;
-    JsonListModel list_, channels_, members_, messages_, bans_, invites_, roles_, pages_, orders_, applications_;
+    JsonListModel list_, channels_, members_, messages_, bans_, invites_, roles_, pages_, orders_, applications_, log_;
+    QList<QJsonObject> logLoaded_;                 // the open channel's message log, newest first, as the API gives it
+    bool logHasOlder_ = false, busyLog_ = false;
+    void rebuildLog();
     int applicationsWaiting_ = 0;
     void post(const QString &path, const QJsonObject &body, const QString &done, const QString &doing, std::function<void()> then = {});
     qint64 version_ = -1;

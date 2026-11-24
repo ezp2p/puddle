@@ -93,7 +93,9 @@ RowLayout {
         ] },
         { title: qsTr("Text"), items: [
             { id: "send_messages", title: qsTr("Send messages"), note: qsTr("Write in the channels they see."), p13: true },
-            { id: "attach_files", title: qsTr("Attach files"), note: qsTr("Send pictures and files with their messages."), p13: true }
+            { id: "attach_files", title: qsTr("Attach files"), note: qsTr("Send pictures and files with their messages."), p13: true },
+            { id: "manage_messages", title: qsTr("Manage messages"), note: qsTr("Delete anyone's messages, and erase deleted ones for good (with View message log)."), edits: true },
+            { id: "view_message_log", title: qsTr("View message log"), note: qsTr("See what messages said before they were edited or deleted, and their files."), edits: true }
         ] },
         { title: qsTr("Voice"), items: [
             { id: "connect", title: qsTr("Connect"), note: qsTr("Join voice channels."), p13: true },
@@ -107,7 +109,7 @@ RowLayout {
             { id: "manage_shop", title: qsTr("Manage the shop"), note: qsTr("Add, change and take off items, and see every order."), p13: true }
         ] }
     ]
-    function shown(item) { return (!item.p13 || ponds.canOverrides) && (!item.pages || ponds.canPages) }
+    function shown(item) { return (!item.p13 || ponds.canOverrides) && (!item.pages || ponds.canPages) && (!item.edits || ponds.canEditMessages) }
 
     // ---- the roles ----
     ColumnLayout {
