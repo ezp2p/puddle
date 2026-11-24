@@ -8,6 +8,7 @@ ghcr.io/ezp2p/puddle:0.1.0           one release
 ghcr.io/ezp2p/puddle:0.1             the newest 0.1.x
 ghcr.io/ezp2p/puddle:dev             the newest build of the dev branch, replaced on every push to it: for trying
 ghcr.io/ezp2p/puddle:dev-<commit>    the build of that commit of dev
+ghcr.io/ezp2p/puddle:dev-pools      the newest build of the dev-pools branch (Pools, not yet in dev), likewise
 ```
 
 Prereleases (tags with a `-`, such as `0.2.0-rc.1`) get only their own tag, never `latest`. A pull request builds the

@@ -3,12 +3,13 @@ name: build
 # Every platform's build, tested, and what can be downloaded (docs/releases.md):
 #   a pull request        built and tested, nothing published
 #   a push to dev         the "dev-build" prerelease is replaced with this commit's downloads (one link to hand friends)
+#   a push to dev-pools   the same for the Pools branch, as the "dev-pools-build" prerelease
 #   a tag like 0.3.0      a release of that version (a tag with a "-", such as 0.3.0-rc.1, a prerelease)
 # Downloads: the desktop app for Linux (AppImage), macOS (arm64 and Intel) and Windows; puddled alone for Linux servers.
 
 on:
   push:
-    branches: [dev, main]
+    branches: [dev, dev-pools, main]
     tags: ['[0-9]*.[0-9]*.[0-9]*']   # releases are tags like 0.0.0 (no "v")
   pull_request:
   workflow_dispatch:
@@ -45,7 +46,7 @@ jobs:
 
       - name: Version
         run: |
-          if [ "${{ github.ref_type }}" = tag ]; then V="${{ github.ref_name }}"; else V="dev-${GITHUB_SHA::7}"; fi
+          if [ "${{ github.ref_type }}" = tag ]; then V="${{ github.ref_name }}"; elif [ "${{ github.ref_name }}" = dev-pools ]; then V="dev-pools-${GITHUB_SHA::7}"; else V="dev-${GITHUB_SHA::7}"; fi
           echo "VERSION=$V" >> "$GITHUB_ENV"
 
       - name: Install dependencies (Linux server)
@@ -183,7 +184,7 @@ jobs:
 
       - name: Version
         run: |
-          if [ "${{ github.ref_type }}" = tag ]; then V="${{ github.ref_name }}"; else V="dev-${GITHUB_SHA::7}"; fi
+          if [ "${{ github.ref_type }}" = tag ]; then V="${{ github.ref_name }}"; elif [ "${{ github.ref_name }}" = dev-pools ]; then V="dev-pools-${GITHUB_SHA::7}"; else V="dev-${GITHUB_SHA::7}"; fi
           echo "VERSION=$V" >> "$GITHUB_ENV"
 
       - name: libdatachannel
@@ -231,13 +232,13 @@ jobs:
           if-no-files-found: error
 
   release:
-    if: github.event_name == 'push' && (github.ref_type == 'tag' || github.ref == 'refs/heads/dev')
+    if: github.event_name == 'push' && (github.ref_type == 'tag' || github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/dev-pools')
     needs: [build, windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    concurrency:   # one dev-build at a time; a newer one waits rather than racing it
-      group: release-${{ github.ref_type == 'tag' && github.ref_name || 'dev-build' }}
+    concurrency:   # one dev build per branch at a time; a newer one waits rather than racing it
+      group: release-${{ github.ref_type == 'tag' && github.ref_name || format('{0}-build', github.ref_name) }}
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -255,23 +256,26 @@ jobs:
           case "$TAG" in *-*) PRE=--prerelease ;; *) PRE= ;; esac
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes $PRE *
 
-      - name: Replace the dev build
-        if: github.ref == 'refs/heads/dev'
+      - name: Replace the dev build (dev, or dev-pools)
+        if: github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/dev-pools'
         env:
           GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.ref_name }}
+          BUILD: ${{ github.ref_name }}-build
+          TITLE: ${{ github.ref_name == 'dev-pools' && 'Pools dev build' || 'Dev build' }}
         run: |
           cd out
           sha256sum * > SHA256SUMS
           SHORT="${GITHUB_SHA::7}"
           cat > ../notes.md <<EOF
-          The newest build of \`dev\`: commit [\`$SHORT\`](https://github.com/$GITHUB_REPOSITORY/commit/$GITHUB_SHA), built $(date -u '+%Y-%m-%d %H:%M UTC').
-          Untested beyond the automated tests, and replaced by the next push to \`dev\`. It doesn't update itself: download it again for a newer one.
+          The newest build of \`$BRANCH\`: commit [\`$SHORT\`](https://github.com/$GITHUB_REPOSITORY/commit/$GITHUB_SHA), built $(date -u '+%Y-%m-%d %H:%M UTC').
+          Untested beyond the automated tests, and replaced by the next push to \`$BRANCH\`. It doesn't update itself: download it again for a newer one.
 
           - **Windows**: \`Puddle-…-windows-x64.zip\`. Unzip it anywhere and run \`Puddle.exe\`. Windows may say it "protected your PC": *More info* → *Run anyway* (the build isn't signed).
           - **macOS**: \`…-macos-arm64.zip\` (Apple silicon) or \`…-macos-intel.zip\`. Unzip, then right-click \`Puddle.app\` → *Open* the first time (it isn't notarized).
           - **Linux**: \`Puddle-…-linux-x86_64.AppImage\`. \`chmod +x\` it and run it.
           - **Linux servers**: \`puddled-…\` is the Puddle without a window (\`puddled.service\` inside runs it under systemd --user).
           EOF
-          gh release delete dev-build --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes || true
-          gh release create dev-build --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \
-            --title "Dev build ($SHORT)" --notes-file ../notes.md *
+          gh release delete "$BUILD" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes || true
+          gh release create "$BUILD" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \
+            --title "$TITLE ($SHORT)" --notes-file ../notes.md *

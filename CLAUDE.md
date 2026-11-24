@@ -63,5 +63,13 @@ or looks like it conflicts with this list, ask rather than guess.
 - `docs/protocol.md`: which parts of the Puddle Protocol (`ezp2p/protocol`, the submodule `third_party/protocol`) Puddle implements. The protocol is what Pond, Levee and phone clients rely on: change the wire there first, then here
 - Build and test: `scripts/build.sh` (after `git submodule update --init`)
 - `third_party/protocol`: the protocol repository as a submodule; its `lib/` is libpuddle-proto (ids, chains, signatures, receipts, sealing), which `base/encoding.h`, `base/hash.h`, `base/seal.h` and `http/reqsig.h` put Puddle's names on
-- `.github/workflows/build.yml`: every platform built and tested; a push to `dev` replaces the `dev-build` prerelease, a tag makes a release; `scripts/package-*.sh` package them. See `docs/releases.md`
-- `Dockerfile`, `dist/docker-entrypoint.sh`: the `puddled` image, published to ghcr by `.github/workflows/docker.yml` (`:dev` on a push to dev, the version on a release tag); see `docs/docker.md`. `compose.yaml` (with `.env.example`) is the quick start for running one; `compose.test.yaml` is two Puddles for testing only
+- `.github/workflows/build.yml`: every platform built and tested; a push to `dev` replaces the `dev-build` prerelease (and `dev-pools` the `dev-pools-build` one), a tag makes a release; `scripts/package-*.sh` package them. See `docs/releases.md`
+- `Dockerfile`, `dist/docker-entrypoint.sh`: the `puddled` image, published to ghcr by `.github/workflows/docker.yml` (`:dev` on a push to dev, `:dev-pools` on a push to dev-pools, the version on a release tag); see `docs/docker.md`. `compose.yaml` (with `.env.example`) is the quick start for running one; `compose.test.yaml` is two Puddles for testing only
+
+## Branches
+
+- `master` takes pull requests only from `dev` or `hotpatch/*`. Ordinary work branches off `dev` and goes back into it.
+- **Pools** (ezp2p/puddle#52, the "Pools" project) are built on `dev-pools`, tracked apart from `dev`: a Pool issue's
+  branch is cut from `dev-pools` and its pull request goes into `dev-pools`, never `dev`. When Pools are done,
+  `dev-pools` is merged into `dev` in one pull request. Until then, `dev` is merged into `dev-pools` now and then so they
+  don't drift.
