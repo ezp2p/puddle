@@ -80,6 +80,7 @@ $defs:
       name: { type: string, pattern: "^[a-z0-9-]{1,32}$" }
       topic: { type: string, maxLength: 1024 }
       last: { type: integer, description: The newest message id kept; 0 for none }
+      mentions: { type: integer, description: 'Messages here that mention the owner, not yet seen (protocol 15; docs/ponds.md, "Replies, reactions and mentions"): 0 once the owner has seen the channel' }
       kind: { enum: [text, voice], description: "A voice channel (docs/ponds.md, \"Voice channels\") takes messages too" }
       roles: { type: array, items: { type: integer }, description: "Present when it is not open to everyone: operators, administrators and members with one of these roles see it" }
       overrides: { type: array, items: { type: object, properties: { role: { type: integer, description: "0 for everyone" }, allow: { type: array, items: { type: string } }, deny: { type: array, items: { type: string } } } }, description: "What it allows and denies everyone and each role (protocol 13); absent for none" }
@@ -119,6 +120,35 @@ $defs:
       text: { type: string, maxLength: 4000, description: May be empty when there are files }
       ts: { type: integer, description: ms, by the Pond's clock }
       edited: { type: integer, description: "When it was last edited (ms), as the Pond says (protocol 14); left out when it never was" }
+      reply:
+        type: object
+        description: |
+          Protocol 15: the message it replies to, as that reads now: {id, author, text (its first 200 characters), files (how many it
+          carries, left out for none)}, or only {id, deleted: true} once it is deleted. Left out on a message that replies to none.
+        properties:
+          id: { type: integer }
+          author: { $ref: "../wire/ids.yaml#/$defs/UserId" }
+          text: { type: string }
+          files: { type: integer }
+          deleted: { type: boolean }
+      reactions:
+        type: array
+        description: Protocol 15. Each emoji in the order it was first used, with every member who used it; left out when there are none
+        items:
+          type: object
+          properties:
+            emoji: { type: string }
+            count: { type: integer }
+            members: { type: array, items: { $ref: "../wire/ids.yaml#/$defs/UserId" } }
+      mentions:
+        type: object
+        description: |
+          Protocol 15: whom it mentions, as the Pond worked out ({members?, roles?, everyone?}); left out when nobody. The text keeps
+          them as `<@member id>`, `<@&role id>` and `@everyone`, for the app to show as names.
+        properties:
+          members: { type: array, items: { $ref: "../wire/ids.yaml#/$defs/UserId" } }
+          roles: { type: array, items: { type: integer } }
+          everyone: { type: boolean }
       files:
         type: array
         description: Left out when there are none. Each as a conversation's message has them, with what is here of it.

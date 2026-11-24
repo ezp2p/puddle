@@ -45,6 +45,15 @@ class Ponds : public QObject {
     Q_PROPERTY(bool canDeleteAnyHere READ canDeleteAnyHere NOTIFY channelChanged)
     Q_PROPERTY(bool canViewLogHere READ canViewLogHere NOTIFY channelChanged)
     Q_PROPERTY(bool canPurgeHere READ canPurgeHere NOTIFY channelChanged)
+    // replies, reactions and mentions (protocol 15; docs/ponds.md, "Replies, reactions and mentions"): whether the open Pond has
+    // them; whether we may react in the open channel, and mention everyone and roles there
+    Q_PROPERTY(bool canReply READ canReply NOTIFY currentInfoChanged)
+    Q_PROPERTY(bool canMention READ canMention NOTIFY currentInfoChanged)
+    Q_PROPERTY(bool canReactHere READ canReactHere NOTIFY channelChanged)
+    Q_PROPERTY(bool canMentionEveryoneHere READ canMentionEveryoneHere NOTIFY channelChanged)
+    // the window is in front: messages that mention us in the open channel are seen at once (Main.qml sets it)
+    Q_PROPERTY(bool windowActive READ windowActive WRITE setWindowActive NOTIFY windowActiveChanged)
+    Q_PROPERTY(int mentionsTotal READ mentionsTotal NOTIFY listChanged) // messages mentioning us not yet seen, in every Pond
     // the open channel's message log, once loadLog() has asked, newest first: id, author, name, text, ts, edited, deleted,
     // deletedTs, deletedBy, deletedByName, files, removed (ids of files an edit dropped), versions ([{text, ts, until, files}])
     Q_PROPERTY(QObject *log READ log CONSTANT)
@@ -139,6 +148,17 @@ public:
     bool canDeleteAnyHere() const { return canEditMessages() && mayIn(channel_, QStringLiteral("manage_messages")); }
     bool canViewLogHere() const { return canEditMessages() && mayIn(channel_, QStringLiteral("view_message_log")); }
     bool canPurgeHere() const { return canDeleteAnyHere() && canViewLogHere(); }
+    bool canReply() const { return feature("replies"); }
+    bool canMention() const { return feature("mentions"); }
+    bool canReactHere() const { return feature("reactions") && mayIn(channel_, QStringLiteral("add_reactions")); }
+    bool canMentionEveryoneHere() const { return feature("mentions") && mayIn(channel_, QStringLiteral("mention_everyone")); }
+    bool windowActive() const { return windowActive_; }
+    void setWindowActive(bool on) { if (on != windowActive_) { windowActive_ = on; emit windowActiveChanged(); if (on) markSeen(); } }
+    int mentionsTotal() const { return mentionsTotal_; }
+    Q_INVOKABLE void toggleReaction(const QString &messageId, const QString &emoji); // ours added, or taken back
+    // what @ can name in the open channel, whose name starts with `prefix` (case aside): members, and roles and everyone
+    // where we may; each {kind (member, role, everyone), id, name, avatar, color}, at most `max`
+    Q_INVOKABLE QVariantList mentionables(const QString &prefix, int max = 8) const;
     QObject *log() { return &log_; }
     bool logHasOlder() const { return logHasOlder_; }
     QObject *orders() { return &orders_; }
@@ -203,7 +223,7 @@ public:
     Q_INVOKABLE void open(const QString &pondId);            // its first channel, or the one open there last
     Q_INVOKABLE void openChannel(const QString &channelId);
     Q_INVOKABLE void close();
-    Q_INVOKABLE void send(const QString &text);              // to the open channel
+    Q_INVOKABLE void send(const QString &text, const QString &replyTo = QString()); // to the open channel; a reply to one there
     Q_INVOKABLE void loadOlder();
     Q_INVOKABLE QString sendPath() const;                   // the open channel's send route (for sending files)
     Q_INVOKABLE void fetchFile(const QString &messageId, const QString &fileId); // one that did not come by itself
@@ -342,6 +362,9 @@ signals:
     void applicationsChanged();
     void logChanged();
     void messageEdited(const QString &messageId);  // an edit of ours went through
+    void windowActiveChanged();
+    // a new message mentions us (protocol 15), in a channel not in front of the owner
+    void mentioned(const QString &pondId, const QString &channelId, const QString &pondName, const QString &channelName);
     // joining asked for an application, or says where it stands: code application_required, _pending, _declined, _refused or
     // bad_answers; `pond` what the Pond said (form: {intro, questions}, reason, message)
     void application(const QString &link, const QString &profile, const QString &code, const QVariantMap &pond);
@@ -389,6 +412,12 @@ private:
     void updateVoicePeople();
     int voiceGen_ = 0;                             // the owner changed something since a request for it went out: drop its answer
     QList<QJsonObject> loaded_;                    // the open channel's messages, oldest first, as the API gives them
+    bool windowActive_ = false;
+    int mentionsTotal_ = 0;
+    QHash<QString, int> mentions_;                 // "pond/channel" -> messages mentioning us not yet seen, as the list last said
+    bool mentionsRead_ = false;                    // the list has been read once (what was there before is not news)
+    void markSeen();                               // the open channel's mentions, seen, if it is in front
+    QString render(const QString &text, bool html) const; // <@id>, <@&role>: @names; html escaped and the mentions marked
     bool hasOlder_ = false, joining_ = false, busyList_ = false, busyMessages_ = false, busyOlder_ = false;
     int generation_ = 0;                           // a channel opened since a request went out: drop its answer
 };

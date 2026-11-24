@@ -47,7 +47,7 @@ Each joined Pond has a thread (`federation/ponds.cpp`) that loops:
    each channel it holds nothing of yet.
 2. It holds `GET /pond/v1/events?after=<cursor>` open. The Pond answers the moment anything happens, or empty after
    25 seconds.
-3. It applies the events (messages sent, edited and deleted, channels made, changed and deleted, members joining, leaving or
+3. It applies the events (messages sent, edited and deleted, their reactions, channels made, changed and deleted, members joining, leaving or
    changing their profile, the Pond renamed) and moves the cursor. A new channel's newest messages are fetched next.
 
 If the Pond can't be reached, the status is `unreachable` and the thread backs off from 2 seconds to 60. A `404` that
@@ -167,6 +167,34 @@ read the log there has a clock in the channel's header that opens it (`chat/Mess
 message's menu: each message with who deleted it and when, every earlier text, its files to save, and Erase for good… (asking
 first) for whoever may also manage messages. Roles and a channel's Permissions show the two new permissions where the Pond
 has them.
+
+## Replies, reactions and mentions
+
+A Pond of protocol 15 (features `replies`, `reactions` and `mentions`; the Pond's design, "Replies, reactions and mentions")
+lets a message answer another, members react with an emoji, and a message name members, roles or everyone.
+
+- **Replies.** A send may say `reply_to`: a message in the same channel. The reply carries `reply`, the Pond's quote of what it
+  answers as that reads now (`{id, author, text, files?}`, or `{id, deleted: true}`). The Puddle keeps it with the message and
+  keeps it in step itself: after a `message_edited`, the replies kept here to that message quote it as it now reads, and after a
+  `message_deleted` their quotes say it is gone (the Pond rewrites its own earlier events the same way).
+- **Reactions.** `POST .../messages/{message}/react {emoji}` and `/unreact`, relayed; the answer, and the event
+  `message_reactions`, say the message's reactions as they are now (`[{emoji, count, members}]`), which the Puddle keeps in
+  place of what it had. A Pond without the feature is `409 no_reactions`.
+- **Mentions.** Written in the text as `<@member id>`, `<@&role id>` and `@everyone`; the Pond says whom a message mentions in
+  `mentions`, and the Puddle keeps that with it. A new message (a `message` event, newer than what is kept) from someone else
+  that names us, a role we hold, or everyone is **counted** for its channel: `mentions` in each channel of the Pond's summary,
+  kept in `pond.json` across restarts, until the owner has seen it (`POST .../channels/{channel}/seen`). An edit that adds a
+  mention tells nobody, as on Discord.
+
+In the window (`chat/PondPage.qml`): hovering a message shows a smile (react) and a curved arrow (reply) beside the pencil and
+bin, and its menu Reply and Add reaction. Replying puts a "Replying to" bar over the box (Esc cancels); a reply shows the line it
+quotes above it, and clicking that brings the message into view if it is loaded. Reactions are chips under a message, ours
+marked; clicking one adds or takes back ours, and hovering says who. The picker (`chat/EmojiPicker.qml`) is a small set, the
+last ones used first. Mentions show as `@name`; a message that mentions us is tinted, with a bar down its side. Typing `@` in the
+box offers members whose name starts so (and, for whoever may `mention_everyone`, `@everyone` and roles); Up and Down choose,
+Tab or Enter takes one, and `@Name` in the box is sent as `<@id>`. A channel with mentions not seen has a red count in the
+channel list and the Pond on the rail; the window's title and the Dock count them. A new one in a channel not in front of the
+owner is a notification, which clicked opens that channel. A channel open in a window in front is seen at once.
 
 ## Pictures
 
@@ -316,7 +344,7 @@ stream it already follows.
 - `pond.json`: the Pond as it last told us (with its protocol and features), our cursor, its address and certificate.
 - `members.jsonl`: one member per line, with the profile they chose for the Pond.
 - `<channel id>.jsonl`: the newest messages of a channel, at most 200, with what each says of its files, and when it was last
-  edited. A deleted one is taken out.
+  edited; what it replies to, its reactions and its mentions (protocol 15). A deleted one is taken out.
 - `files.txt`: the files the fetcher holds in the file store for this Pond's messages (see "Files"). The files
   themselves are in `<data_dir>/files/`, with every other file.
 
@@ -334,10 +362,12 @@ Leaving deletes the folder.
 | `POST /api/v1/ponds/join` | `{link, profile}` → the Pond (`201`) |
 | `GET /api/v1/ponds/{pond}` | The Pond, with `me` and its `members` |
 | `GET /api/v1/ponds/{pond}/channels/{channel}/messages?before=&limit=` | Oldest first, `{items, more}`. From what is kept when it can answer, else from the Pond. |
-| `POST /api/v1/ponds/{pond}/channels/{channel}/messages/send` | `{body, files}`. Each file is sent to the Pond first; the message is sent with a nonce, so a retry never posts twice. |
+| `POST /api/v1/ponds/{pond}/channels/{channel}/messages/send` | `{body, files, reply_to?}`. Each file is sent to the Pond first; the message is sent with a nonce, so a retry never posts twice. |
 | `POST /api/v1/ponds/{pond}/channels/{channel}/messages/{message}/files/{file}/download` | Fetch a file that did not come by itself, or one the message log shows (`204`) |
 | `POST /api/v1/ponds/{pond}/channels/{channel}/messages/{message}/edit` | `{body?, files?}`: ours; answers the message as it now reads (protocol 14) |
 | `POST /api/v1/ponds/{pond}/channels/{channel}/messages/{message}/delete`, `/purge` | Delete (ours, or with `manage_messages`); erase a deleted one for good |
+| `POST /api/v1/ponds/{pond}/channels/{channel}/messages/{message}/react`, `/unreact` | `{emoji}`: our reaction, added or taken back (protocol 15) |
+| `POST /api/v1/ponds/{pond}/channels/{channel}/seen` | The owner has seen the channel: its mentions of us are no longer counted (protocol 15) |
 | `GET /api/v1/ponds/{pond}/channels/{channel}/log`, `.../messages/{message}/versions` | The message log, `?before=&limit=`; one message's (with `view_message_log`) |
 | `POST /api/v1/ponds/{pond}/profile` | `{profile}`: id or null |
 | `POST /api/v1/ponds/{pond}/leave` | Tells the Pond if it can be reached, and forgets it either way |
@@ -360,7 +390,7 @@ Leaving deletes the folder.
 | `POST /api/v1/ponds/{pond}/admin/invites/{token}/revoke` | It stops working at once |
 
 Errors: `no_pond`, `no_channel` and `no_profile` are `404`. `bad_text` is `400`. `slow_down` is `429`.
-`invite_refused`, `removed`, `muted`, `no_file`, `files_off`, `too_large`, `no_pictures`, `no_role` and `no_edits` are `409`. `no_picture` is `404`. The admin routes pass on
+`invite_refused`, `removed`, `muted`, `no_file`, `files_off`, `too_large`, `no_pictures`, `no_role`, `no_edits`, `no_replies` and `no_reactions` are `409`. `bad_reply` and `bad_emoji` are `400`. `no_picture` is `404`. The admin routes pass on
 what the Pond says: `204` when done, `400` with a `message` to show, `404 no_channel` or `unknown_role`, `409 outranked`, `not_yourself` or `channels_changed`. `unreachable`, `not_a_pond`, `certificate_changed`, `not_proven` and `failed` are `502`.
 
 ## Voice channels
@@ -447,7 +477,8 @@ open channel instead of the open chat.
 - Thumbnails, so a channel of large photos does not fetch each whole to show it.
 - Asking again, refusals and the other notes between Puddles (`docs/files.md`) do not apply to a Pond: it serves
   any member.
-- Mentions, replies and reactions.
+- Jumping to a message a reply quotes that is further back than what is loaded; a mention of a message later deleted stays
+  counted until the channel is seen; `@here`, and custom emoji.
 - A message deleted while the window shows it from further back than the newest page stays on screen until the channel is
   opened again (it is gone from what is kept, and from the Pond).
 - In a voice channel: a phone (roadmap 9.3). Push to talk works only while the window is in front. More than 16 cameras and

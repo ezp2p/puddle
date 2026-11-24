@@ -432,6 +432,18 @@ Pane {
                             color: pondIcon.model.status === "removed" ? Theme.danger : Theme.warning
                             border.width: 3; border.color: Theme.card
                         }
+                        // messages that mention us, not yet seen (protocol 15)
+                        Rectangle {
+                            objectName: "pondMentions_" + pondIcon.model.name
+                            visible: (pondIcon.model.mentions || 0) > 0
+                            anchors.right: parent.right; anchors.bottom: parent.bottom
+                            anchors.rightMargin: -4; anchors.bottomMargin: -4
+                            border.width: 3; border.color: Theme.card
+                            implicitWidth: Math.max(18, mentionCount.implicitWidth + 10); implicitHeight: 18; width: implicitWidth; height: implicitHeight
+                            radius: 9
+                            color: Theme.danger
+                            Label { id: mentionCount; anchors.centerIn: parent; text: (pondIcon.model.mentions || 0) > 99 ? "99+" : (pondIcon.model.mentions || 0); color: "white"; font.pixelSize: 11; font.bold: true }
+                        }
                         HoverHandler { id: pondHover }
                         TapHandler { onTapped: shell.openPond(pondIcon.model.id) }
                         ToolTip.visible: pondHover.hovered
@@ -611,7 +623,15 @@ Pane {
     Shortcut { sequences: ["Ctrl+B"]; onActivated: shell.toggleSidebar() }
     Shortcut { sequences: ["Ctrl+U"]; enabled: shell.contextWanted; onActivated: shell.toggleContext() }
     // a way to get somewhere from outside (a notification was clicked)
-    function showPerson(id) { id === "" ? goHome() : openChat(id) }
+    function showPerson(id) {
+        if (id.startsWith("pond:")) { // a mention in a Pond's channel: "pond:<pond>/<channel>"
+            const [pond, channel] = id.slice(5).split("/")
+            openPond(pond)
+            ponds.openChannel(channel)
+            return
+        }
+        id === "" ? goHome() : openChat(id)
+    }
 
     // a short message at the bottom
     Rectangle {

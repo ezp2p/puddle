@@ -1,5 +1,5 @@
 /* What a Puddle keeps of a Pond (core/ponds): here, editing and deleting messages (protocol 14; docs/ponds.md, "Editing and
- * deleting"). The events `message_edited` and `message_deleted` change what is kept, an edit of ours or a deletion is kept at once,
+ * deleting"), and replies, reactions and mentions (protocol 15). The events `message_edited` and `message_deleted` change what is kept, an edit of ours or a deletion is kept at once,
  * and the message log is cleaned before the owner sees it. The rest of following a Pond is tested against a real one, in the
  * pond repository's e2e_test. */
 
@@ -131,6 +131,62 @@ int main(void)
     CHECK(strstr(buf, "{\"text\":\"teh frogs\",\"ts\":20,\"until\":25,\"files\":[\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"]}"));
     CHECK(!strstr(buf, "../x"));
     CHECK(puddle_ponds_write_log("{\"messages\":7}", 14, 0, &w, NULL) == -1);
+
+    /* ---- replies, reactions and mentions (protocol 15; docs/ponds.md, "Replies, reactions and mentions") ---- */
+    /* a reply to ours, with its quote; reactions; and a mention of us, from someone else: counted until the owner sees it */
+    snprintf(ev, sizeof ev,
+             "{\"id\":20,\"kind\":\"message\",\"data\":{\"id\":10,\"channel\":1,\"author\":\"%s\",\"text\":\"so many frogs <@%s>\",\"ts\":50,"
+             "\"reply\":{\"id\":2,\"author\":\"%s\",\"text\":\"the frogs!\",\"files\":1},\"mentions\":{\"members\":[\"%s\",\"../x\"]},"
+             "\"reactions\":[{\"emoji\":\"\xF0\x9F\x90\xB8\",\"count\":1,\"members\":[\"%s\"]},{\"emoji\":\"x\",\"count\":1,\"members\":[]}]}}",
+             them, me, me, me, me);
+    CHECK(events(p, pond, ev, 20) == 0);
+    const char *k = kept(p, pond);
+    CHECK(strstr(k, "\"reply\":{\"id\":2,\"author\":\"aaaa") && strstr(k, "\"files\":1}"));
+    CHECK(strstr(k, "\"mentions\":{\"members\":[\"aaaa") && !strstr(k, "../x"));
+    CHECK(strstr(k, "\"reactions\":[{\"emoji\":\"\xF0\x9F\x90\xB8\",\"count\":1,\"members\":[\"aaaa") && !strstr(k, "\"emoji\":\"x\""));
+    puddle_jw_init(&w, buf, sizeof buf);
+    puddle_ponds_write_list(p, &w);
+    buf[puddle_jw_finish(&w)] = '\0';
+    CHECK(strstr(buf, "\"name\":\"general\"") && strstr(buf, "\"mentions\":1"));
+    /* ours, and @everyone from someone else */
+    snprintf(ev, sizeof ev,
+             "{\"id\":21,\"kind\":\"message\",\"data\":{\"id\":11,\"channel\":1,\"author\":\"%s\",\"text\":\"@everyone\",\"ts\":51,\"mentions\":{\"everyone\":true}}},"
+             "{\"id\":22,\"kind\":\"message\",\"data\":{\"id\":12,\"channel\":1,\"author\":\"%s\",\"text\":\"@everyone\",\"ts\":52,\"mentions\":{\"everyone\":true}}},"
+             "{\"id\":23,\"kind\":\"message\",\"data\":{\"id\":13,\"channel\":1,\"author\":\"%s\",\"text\":\"<@&4>\",\"ts\":53,\"mentions\":{\"roles\":[4]}}}",
+             me, them, them);
+    CHECK(events(p, pond, ev, 23) == 0);
+    puddle_jw_init(&w, buf, sizeof buf);
+    puddle_ponds_write_list(p, &w);
+    buf[puddle_jw_finish(&w)] = '\0';
+    CHECK(strstr(buf, "\"mentions\":2")); /* not ours, nor a role we don't hold */
+
+    /* the reactions as they are now */
+    CHECK(events(p, pond, "{\"id\":24,\"kind\":\"message_reactions\",\"data\":{\"id\":10,\"channel\":1,\"reactions\":[]}}", 24) == 0);
+    CHECK(!strstr(kept(p, pond), "\"reactions\""));
+    const char *now = "{\"id\":10,\"channel\":1,\"reactions\":[{\"emoji\":\"\xE2\x9D\xA4\xEF\xB8\x8F\",\"count\":1,\"members\":[\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"]}]}";
+    CHECK(puddle_ponds_reacted(p, pond, now, strlen(now)) == 0);
+    CHECK(strstr(kept(p, pond), "\"emoji\":\"\xE2\x9D\xA4\xEF\xB8\x8F\""));
+
+    /* the message replied to, edited and then deleted: the quote follows */
+    snprintf(ev, sizeof ev, "{\"id\":25,\"kind\":\"message_edited\",\"data\":{\"id\":2,\"channel\":1,\"author\":\"%s\",\"text\":\"frogs, edited\",\"ts\":20,\"edited\":60}}", me);
+    CHECK(events(p, pond, ev, 25) == 0);
+    CHECK(strstr(kept(p, pond), "\"reply\":{\"id\":2,\"author\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"text\":\"frogs, edited\"}"));
+    CHECK(events(p, pond, "{\"id\":26,\"kind\":\"message_deleted\",\"data\":{\"id\":2,\"channel\":1}}", 26) == 0);
+    CHECK(strstr(kept(p, pond), "\"reply\":{\"id\":2,\"deleted\":true}") && !strstr(kept(p, pond), "frogs, edited"));
+
+    /* kept on disk, mentions too; seen clears them */
+    puddle_ponds_close(p);
+    p = puddle_ponds_open(root, NULL, err, sizeof err);
+    CHECK(p && strstr(kept(p, pond), "\"reply\":{\"id\":2,\"deleted\":true}"));
+    puddle_jw_init(&w, buf, sizeof buf);
+    puddle_ponds_write_list(p, &w);
+    buf[puddle_jw_finish(&w)] = '\0';
+    CHECK(strstr(buf, "\"mentions\":2"));
+    CHECK(puddle_ponds_seen(p, pond, 1) == 0 && puddle_ponds_seen(p, pond, 9) == -1);
+    puddle_jw_init(&w, buf, sizeof buf);
+    puddle_ponds_write_list(p, &w);
+    buf[puddle_jw_finish(&w)] = '\0';
+    CHECK(strstr(buf, "\"mentions\":0"));
 
     puddle_ponds_close(p);
     nftw(root, rm_cb, 16, FTW_DEPTH | FTW_PHYS);

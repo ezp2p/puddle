@@ -9,6 +9,7 @@
 #include "storage/files.h"
 #include "storage/media.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -32,7 +33,7 @@ static Error failure(const char *code)
 {
     if (!strcmp(code, "no_pond") || !strcmp(code, "no_channel") || !strcmp(code, "no_profile"))
         return Error(404, code);
-    if (!strcmp(code, "bad_text") || !strcmp(code, "bad_query"))
+    if (!strcmp(code, "bad_text") || !strcmp(code, "bad_query") || !strcmp(code, "bad_reply"))
         return Error(400, code);
     if (!strcmp(code, "files_off") || !strcmp(code, "too_large") || !strcmp(code, "no_file"))
         return Error(409, code); /* the Pond takes no files, or not one this large; or it is not here whole */
@@ -210,10 +211,19 @@ static int send_message(const puddle_call *c, puddle_jw *w)
         list = buf.substr(0, puddle_jw_finish(&fw));
     }
     int64_t ch = channelOf(c);
+    /* protocol 15: the message in the channel it answers */
+    int64_t reply_to = 0;
+    if (b.has("reply_to")) {
+        reply_to = b.optInt("reply_to").value_or(0);
+        if (reply_to < 1)
+            throw Error::badRequest("bad_reply");
+        if (!puddle_ponds_has_feature(pondsOf(c), puddle_param(c, "pond"), "replies"))
+            throw Error(409, "no_replies");
+    }
     const char *code = "internal";
     if (!c->ctx->courier || !c->ctx->courier->pond_send ||
         c->ctx->courier->pond_send(c->ctx, puddle_param(c, "pond"), ch, text.c_str(), list.empty() ? nullptr : list.c_str(), list.size(),
-                                   &code) != 0)
+                                   reply_to, &code) != 0)
         throw failure(code);
     puddle_jw_object(w);
     puddle_jw_flag(w, "sent", 1);
@@ -643,6 +653,40 @@ static int message_log(const puddle_call *c, puddle_jw *)
     puddle_pond_file_writer files = {write_file, (void *)c};
     return big_json(c, 200, [&](puddle_jw *jw) { return puddle_ponds_write_log(said.data(), said.size(), 0, jw, &files); });
 }
+/* ---- reactions and mentions (protocol 15; docs/ponds.md, "Replies, reactions and mentions") ---- */
+
+/* {emoji}: add or take back our reaction. Answers the message's reactions as they are now, and keeps them so. */
+static int react(const puddle_call *c, bool add)
+{
+    if (!puddle_ponds_has_feature(pondsOf(c), puddle_param(c, "pond"), "reactions"))
+        throw Error(409, "no_reactions");
+    Body b(c);
+    std::string emoji = b.string("emoji", 64);
+    if (emoji.empty() || emoji.size() > 32 || std::any_of(emoji.begin(), emoji.end(), [](char ch) { return (unsigned char)ch < 0x80; }))
+        throw Error::badRequest("bad_emoji", "a reaction is one emoji");
+    std::string buf(emoji.size() * 6 + 32, '\0');
+    puddle_jw jw;
+    puddle_jw_init(&jw, buf.data(), buf.size());
+    puddle_jw_object(&jw);
+    puddle_jw_str(&jw, "emoji", emoji.c_str());
+    puddle_jw_end_object(&jw);
+    std::string said;
+    int status = ask(c, "POST", message_route(c, add ? "react" : "unreact"), buf.substr(0, puddle_jw_finish(&jw)), said);
+    if (status == 200)
+        puddle_ponds_reacted(pondsOf(c), puddle_param(c, "pond"), said.data(), said.size());
+    return relay_text(c, status, said);
+}
+static int react_message(const puddle_call *c, puddle_jw *) { return react(c, true); }
+static int unreact_message(const puddle_call *c, puddle_jw *) { return react(c, false); }
+
+/* The owner has seen the channel: its messages that mention us are no longer counted */
+static int channel_seen(const puddle_call *c, puddle_jw *)
+{
+    if (puddle_ponds_seen(pondsOf(c), puddle_param(c, "pond"), channelOf(c)) != 0)
+        throw Error::notFound("no_channel");
+    return 204;
+}
+
 static int pass_post(const puddle_call *c, puddle_jw *) { return relay(c, "POST", same_route(c), objectBody(c)); }
 static int admin_invites(const puddle_call *c, puddle_jw *) { return relay(c, "GET", "/pond/v1/admin/invites", ""); }
 static int admin_invite_create(const puddle_call *c, puddle_jw *) { return relay(c, "POST", "/pond/v1/admin/invites/create", objectBody(c)); }
@@ -806,6 +850,10 @@ const puddle_route puddle_pond_api_routes[] = {
     { "POST", POND "/channels/{channel:num}/messages/{message:num}/purge", PUDDLE_AUTH_OWNER, 64,   purge_message,  NULL },
     { "GET",  POND "/channels/{channel:num}/messages/{message:num}/versions", PUDDLE_AUTH_OWNER, 0, message_versions, NULL },
     { "GET",  POND "/channels/{channel:num}/log",                 PUDDLE_AUTH_OWNER, 0,     message_log,      NULL },
+    /* protocol 15: reactions, and the mentions seen */
+    { "POST", POND "/channels/{channel:num}/messages/{message:num}/react", PUDDLE_AUTH_OWNER, 256, react_message, NULL },
+    { "POST", POND "/channels/{channel:num}/messages/{message:num}/unreact", PUDDLE_AUTH_OWNER, 256, unreact_message, NULL },
+    { "POST", POND "/channels/{channel:num}/seen",                PUDDLE_AUTH_OWNER, 0,     channel_seen,     NULL },
     { "POST", POND "/profile",                                    PUDDLE_AUTH_OWNER, 128,   pond_profile,     NULL },
     { "POST", POND "/leave",                                      PUDDLE_AUTH_OWNER, 64,    leave_pond,       NULL },
     { "POST", POND "/offer/accept",                               PUDDLE_AUTH_OWNER, 64,    accept_offer,     NULL },
