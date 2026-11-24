@@ -82,7 +82,6 @@ streams and the app.
 
 ## Carried over from earlier
 
-- Name for the group-only connection (a scoped stream). Options floated: Brook, Rill, Tributary.
 - What the app says if the owner skips writing down the recovery phrase (the format is decided).
 - The exact signature scheme for requests between Puddles.
 - Who may remove someone from a group (leaving is unilateral; kicking is undecided).

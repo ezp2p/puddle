@@ -23,6 +23,8 @@ Use these terms the way the owner does, in code, docs and conversation.
   with no GUI, for someone reasonably competent to run. Not built yet.
 - **Stream**: a connection between two Puddles. (Older docs call this federation or
   server-to-server traffic.)
+- **Scoped stream**: a stream that is only for groups, between two members who are not friends (`docs/groups.md`). It carries
+  group events, key and address updates and profile pictures, nothing else. Also called a group-only connection.
 
 Puddles talk privately to one another (a peer-to-peer chat client); Ponds are public gathering places. In the window, the rail of servers is for Ponds.
 
