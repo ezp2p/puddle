@@ -76,6 +76,11 @@ int puddle_ponds_history(puddle_ponds *p, const char *id, int64_t channel, int64
 /* A message the owner just sent (the Pond's answer to a send): into the cache now, rather than when its event comes back. */
 int puddle_ponds_sent(puddle_ponds *p, const char *id, const char *json, size_t len);
 
+/* A message the owner just edited (the Pond's answer to an edit, protocol 14): in place of what is kept of it now. 0 or -1. */
+int puddle_ponds_edited(puddle_ponds *p, const char *id, const char *json, size_t len);
+/* A message the owner just deleted: no longer kept. 0 or -1 (no such Pond or channel). */
+int puddle_ponds_deleted(puddle_ponds *p, const char *id, int64_t channel, int64_t message);
+
 /* An /events answer. 1 if it says to start again (fetch /info, members and history afresh), 0 applied, -1 malformed. */
 int puddle_ponds_events(puddle_ponds *p, const char *id, const char *json, size_t len);
 
@@ -175,6 +180,13 @@ int puddle_ponds_write_messages(puddle_ponds *p, const char *id, int64_t channel
                                 const puddle_pond_file_writer *files);
 /* Write a page of history as the Pond gave it (newest first) in the same shape, oldest first. 0 or -1 if malformed. */
 int puddle_ponds_write_page(const char *json, size_t len, int asked, puddle_jw *w, const puddle_pond_file_writer *files);
+/* One message as the Pond gave it (an edit's answer), as the owner's routes write messages. 0 or -1 if malformed. */
+int puddle_ponds_write_message(const char *json, size_t len, puddle_jw *w, const puddle_pond_file_writer *files);
+/* The message log as the Pond gave it (protocol 14; the Pond's docs/design.md, "Editing and deleting messages"), cleaned:
+ * {"items": [...]}, newest first; or, with `one`, a single message's versions. Each message as a message, with `deleted`
+ * ({ts, by}), `versions` ([{text, ts, until, files: [ids]}], oldest first) and `removed` (the ids of its files an edit
+ * dropped); its files written by `files`, as a message's. 0 or -1 if malformed. */
+int puddle_ponds_write_log(const char *json, size_t len, int one, puddle_jw *w, const puddle_pond_file_writer *files);
 
 #ifdef __cplusplus
 }

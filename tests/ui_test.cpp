@@ -1271,12 +1271,86 @@ int main(int argc, char **argv)
             return false;
         }, 20000));
 
+        /* editing and deleting our own message (protocol 14, docs/ponds.md, "Editing and deleting"): Up in the empty box edits
+         * the last, Enter saves; "(edited)" shows, here and for Bob; Delete… in its menu asks first, and it is gone for both */
+        if (P.canEditMessages()) {
+            auto *pm = static_cast<JsonListModel *>(P.messages()), *bm = static_cast<JsonListModel *>(PB.messages());
+            CHECK(clickName("pondComposer"));
+            typeText("teh frogs");
+            key(Qt::Key_Return);
+            CHECK(until([&] { return !row(pm, "text", "teh frogs").isEmpty(); }, 10000));
+            CHECK(until([&] { return !row(bm, "text", "teh frogs").isEmpty(); }, 10000));
+            CHECK(clickName("pondComposer"));
+            key(Qt::Key_Up);
+            CHECK(until([&] { QQuickItem *e = find("pondEditor"); return e && e->isVisible() && e->property("text").toString() == "teh frogs"; }, 3000));
+            key(Qt::Key_A, Qt::ControlModifier);
+            typeText("the frogs");
+            key(Qt::Key_Return);
+            CHECK(until([&] { return row(pm, "text", "the frogs").value("edited").toDouble() > 0; }, 10000));
+            CHECK(until([&] { return row(bm, "text", "the frogs").value("edited").toDouble() > 0; }, 10000)); /* Bob's Puddle heard */
+            CHECK(row(pm, "text", "teh frogs").isEmpty());
+            CHECK(until([&] {
+                for (QQuickItem *i : all("pondMessageEdited"))
+                    if (i->isVisible())
+                        return true;
+                return false;
+            }, 3000));
+            settle(300);
+            if (!shot.isEmpty())
+                win->grabWindow().save(shot + "-pond-edited.png");
+            QQuickItem *text = nullptr;
+            for (QQuickItem *i : all("pondMessageText"))
+                if (i->property("text").toString() == "the frogs")
+                    text = i;
+            CHECK(text && rightClick(text));
+            CHECK(until([&] { QQuickItem *d = find("pondMsgDelete"); return d && d->isVisible(); }, 3000));
+            CHECK(click(find("pondMsgDelete")));
+            CHECK(until([&] { return find("confirmOk") != nullptr; }, 3000));
+            CHECK(click(find("confirmOk")));
+            CHECK(until([&] { return row(pm, "text", "the frogs").isEmpty(); }, 10000));
+            CHECK(until([&] { return row(bm, "text", "the frogs").isEmpty(); }, 10000)); /* gone for Bob too */
+            CHECK(!find("messageLogButton") || !find("messageLogButton")->isVisible()); /* a member reads no log */
+        }
+
         /* the owner is made an operator, from pondctl: Server Settings, where the icon is set */
         if (!ctl.isEmpty()) {
             CHECK(system((ctl + " member offer " + backend.myId() + " operator --yes > /dev/null").toUtf8().constData()) == 0);
             CHECK(until([&] { return P.currentOffer() == "operator"; }, 10000));
             P.answerOffer(true);
             CHECK(until([&] { return P.canAdmin(); }, 10000));
+            /* as an operator: Bob's message deleted from its menu, and the message log, with what it said */
+            if (P.canEditMessages()) {
+                auto *pm = static_cast<JsonListModel *>(P.messages());
+                PB.send("bob's secret");
+                CHECK(until([&] { return !row(pm, "text", "bob's secret").isEmpty(); }, 10000));
+                QQuickItem *text = nullptr;
+                for (QQuickItem *i : all("pondMessageText"))
+                    if (i->property("text").toString() == "bob's secret")
+                        text = i;
+                CHECK(text && rightClick(text));
+                CHECK(until([&] { QQuickItem *d = find("pondMsgDelete"); return d && d->isVisible(); }, 3000));
+                CHECK(!find("pondMsgEdit") || !find("pondMsgEdit")->isVisible()); /* his to edit, not ours */
+                CHECK(click(find("pondMsgDelete")));
+                CHECK(until([&] { return find("confirmOk") != nullptr; }, 3000));
+                CHECK(click(find("confirmOk")));
+                CHECK(until([&] { return row(pm, "text", "bob's secret").isEmpty(); }, 10000));
+                CHECK(until([&] { return row(static_cast<JsonListModel *>(PB.messages()), "text", "bob's secret").isEmpty(); }, 10000));
+                CHECK(until([&] { return P.canViewLogHere() && find("messageLogButton") && find("messageLogButton")->isVisible(); }, 5000));
+                CHECK(clickName("messageLogButton"));
+                auto *log = static_cast<JsonListModel *>(P.log());
+                CHECK(until([&] { return row(log, "text", "bob's secret").value("deleted").toBool() && !row(log, "text", "the frogs").isEmpty(); }, 10000));
+                CHECK(until([&] {
+                    for (QQuickItem *i : all("messageLogText"))
+                        if (i->property("text").toString() == "bob's secret")
+                            return true;
+                    return false;
+                }, 5000));
+                settle(300);
+                if (!shot.isEmpty())
+                    win->grabWindow().save(shot + "-pond-log.png");
+                key(Qt::Key_Escape);
+                settle(200);
+            }
             CHECK(P.canIcon());
             P.setIcon(icon);
             CHECK(until([&] { return row(static_cast<JsonListModel *>(PB.list()), "id", pondId).value("icon").toString() == icon; }, 15000));

@@ -15,13 +15,14 @@ Ponds::Ponds(ApiClient *api, QObject *parent)
       list_({ "id", "name", "status", "address", "icon" }),
       channels_({ "id", "name", "topic", "kind", "voice", "restricted", "roles", "overrides" }),
       members_({ "id", "name", "color", "nameColor", "avatar", "isMe", "role", "muted", "mutedUntil", "roles", "group" }),
-      messages_({ "id", "author", "name", "tint", "nameColor", "avatar", "text", "files", "ts", "mine", "grouped", "dayStart" }),
+      messages_({ "id", "author", "name", "tint", "nameColor", "avatar", "text", "files", "ts", "edited", "mine", "grouped", "dayStart" }),
       bans_({ "member", "name", "by", "byName", "reason", "ts" }, nullptr, QStringLiteral("member")),
       invites_({ "token", "link", "uses", "maxUses", "expires", "created" }, nullptr, QStringLiteral("token")),
       roles_({ "id", "name", "count", "color", "hoist", "permissions", "editable" }),
       pages_({ "id", "title", "kind", "updated", "restricted", "roles" }),
       orders_({ "id", "item", "title", "quantity", "amount", "currency", "status", "url", "live", "created", "paid", "member", "memberName" }),
-      applications_({ "member", "name", "answers", "status", "reason", "created" }, nullptr, QStringLiteral("member"))
+      applications_({ "member", "name", "answers", "status", "reason", "created" }, nullptr, QStringLiteral("member")),
+      log_({ "id", "author", "name", "text", "ts", "edited", "deleted", "deletedTs", "deletedBy", "deletedByName", "files", "removed", "versions" })
 {
     timer_.setInterval(1000);
     connect(&timer_, &QTimer::timeout, this, &Ponds::refresh);
@@ -70,6 +71,8 @@ QString Ponds::why(int status, const QJsonDocument &json, const QString &doing) 
         return tr("You're sending messages too quickly. Wait a moment.");
     if (code == QLatin1String("not_proven"))
         return tr("Something answered for the Pond without proving it's the Pond, so nothing was sent.");
+    if (code == QLatin1String("no_edits"))
+        return tr("This Pond is too old to edit or delete messages.");
     if (code == QLatin1String("busy"))
         return tr("You're already in a call.");
     if (code == QLatin1String("full"))
@@ -338,7 +341,13 @@ void Ponds::refreshMessages()
         // the newest page: anything newer than what is loaded is added; if it does not reach back to what is loaded, it replaces it
         const double newest = loaded_.isEmpty() ? 0 : loaded_.last().value("id").toDouble();
         const double oldestOfPage = page.isEmpty() ? 0 : page.first().value("id").toDouble();
-        if (loaded_.isEmpty() || oldestOfPage > newest) {
+        if (page.isEmpty()) { /* nothing in the channel now (the last of it deleted) */
+            loaded_.clear();
+            if (hasOlder_) {
+                hasOlder_ = false;
+                emit hasOlderChanged();
+            }
+        } else if (loaded_.isEmpty() || oldestOfPage > newest) {
             loaded_ = page;
             const bool older = o.value("more").toBool();
             if (older != hasOlder_) {
@@ -355,6 +364,12 @@ void Ponds::refreshMessages()
                 if (it != byId.cend())
                     m = *it;
             }
+            /* one the page should hold and doesn't was deleted (protocol 14) */
+            loaded_.erase(std::remove_if(loaded_.begin(), loaded_.end(), [&](const QJsonObject &m) {
+                              const double id = m.value("id").toDouble();
+                              return id >= oldestOfPage && !byId.contains(id);
+                          }),
+                          loaded_.end());
             for (const QJsonObject &m : page)
                 if (m.value("id").toDouble() > newest)
                     loaded_.append(m);
@@ -385,6 +400,7 @@ void Ponds::rebuildMessages()
                        { "text", m.value("text") },
                        { "files", m.value("files") },
                        { "ts", double(ts) },
+                       { "edited", m.value("edited").toDouble(0) },
                        { "mine", mine },
                        { "dayStart", newDay },
                        { "grouped", !first && !newDay && prev.value("author").toString() == author && ts - qint64(prev.value("ts").toDouble()) < 7 * 60 * 1000 } };
@@ -409,6 +425,157 @@ void Ponds::fetchFile(const QString &messageId, const QString &fileId)
                        emit failed(why(status, json, tr("fetch the file")));
                    else
                        refreshMessages();
+               });
+}
+
+// ---- editing and deleting messages, and the message log (protocol 14) ----
+
+void Ponds::editMessage(const QString &messageId, const QString &text, const QStringList &keepFiles)
+{
+    if (current_.isEmpty() || channel_.isEmpty() || messageId.isEmpty())
+        return;
+    QJsonArray keep;
+    for (const QString &f : keepFiles)
+        keep.append(f);
+    const int gen = generation_;
+    api_->post(pathOfChannel() + QStringLiteral("/%1/edit").arg(messageId), QJsonObject{ { "body", text.trimmed() }, { "files", keep } },
+               [this, gen, messageId](int status, const QJsonDocument &json) {
+                   if (status != 200) {
+                       const QString code = json.object().value("error").toString();
+                       emit failed(code == QLatin1String("bad_text") ? tr("A message needs some words, or a file.")
+                                   : code == QLatin1String("no_message") ? tr("That message isn't there any more.")
+                                                                          : why(status, json, tr("edit that")));
+                       return;
+                   }
+                   emit messageEdited(messageId);
+                   if (gen != generation_)
+                       return;
+                   const QJsonObject now = json.object();
+                   for (QJsonObject &m : loaded_)
+                       if (m.value("id").toDouble() == now.value("id").toDouble())
+                           m = now;
+                   rebuildMessages();
+               });
+}
+
+void Ponds::deleteMessage(const QString &messageId)
+{
+    if (current_.isEmpty() || channel_.isEmpty() || messageId.isEmpty())
+        return;
+    const int gen = generation_;
+    api_->post(pathOfChannel() + QStringLiteral("/%1/delete").arg(messageId), QJsonObject{}, [this, gen, messageId](int status, const QJsonDocument &json) {
+        if (status != 204) {
+            const QString code = json.object().value("error").toString();
+            emit failed(code == QLatin1String("no_permission") ? tr("You may not delete that message.") : why(status, json, tr("delete that")));
+            return;
+        }
+        if (gen != generation_)
+            return;
+        loaded_.erase(std::remove_if(loaded_.begin(), loaded_.end(),
+                                     [&](const QJsonObject &m) { return QString::number(qint64(m.value("id").toDouble())) == messageId; }),
+                      loaded_.end());
+        rebuildMessages();
+        if (!logLoaded_.isEmpty())
+            loadLog();
+    });
+}
+
+void Ponds::loadLog(bool older)
+{
+    if (current_.isEmpty() || channel_.isEmpty() || busyLog_ || (older && (!logHasOlder_ || logLoaded_.isEmpty())))
+        return;
+    busyLog_ = true;
+    const int gen = generation_;
+    QString path = QStringLiteral("/api/v1/ponds/%1/channels/%2/log").arg(current_, channel_);
+    if (older)
+        path += QStringLiteral("?before=") + QString::number(qint64(logLoaded_.last().value("id").toDouble()));
+    api_->get(path, [this, gen, older](int status, const QJsonDocument &json) {
+        busyLog_ = false;
+        if (gen != generation_)
+            return;
+        if (status != 200) {
+            emit failed(why(status, json, tr("read the message log")));
+            return;
+        }
+        QList<QJsonObject> page;
+        for (const QJsonValue &m : json.object().value("items").toArray())
+            page.append(m.toObject());
+        logLoaded_ = older ? logLoaded_ + page : page;
+        logHasOlder_ = page.size() >= 50;
+        rebuildLog();
+        emit logChanged();
+    });
+}
+
+void Ponds::loadVersions(const QString &messageId)
+{
+    if (current_.isEmpty() || channel_.isEmpty() || messageId.isEmpty())
+        return;
+    const int gen = generation_;
+    api_->get(pathOfChannel() + QStringLiteral("/%1/versions").arg(messageId), [this, gen](int status, const QJsonDocument &json) {
+        if (gen != generation_)
+            return;
+        if (status != 200) {
+            emit failed(why(status, json, tr("read the message log")));
+            return;
+        }
+        logLoaded_ = { json.object() };
+        logHasOlder_ = false;
+        rebuildLog();
+        emit logChanged();
+    });
+}
+
+void Ponds::rebuildLog()
+{
+    QList<QJsonObject> rows;
+    for (const QJsonObject &m : logLoaded_) {
+        const QString author = m.value("author").toString(), by = m.value("deleted").toObject().value("by").toString();
+        auto name = [this](const QString &id) {
+            return id == QLatin1String("pondctl") ? tr("The server's admin") : people_.value(id).value("name").toString(id.left(8));
+        };
+        rows.append({ { "id", QString::number(qint64(m.value("id").toDouble())) },
+                      { "author", author },
+                      { "name", name(author) },
+                      { "text", m.value("text") },
+                      { "ts", m.value("ts").toDouble() },
+                      { "edited", m.value("edited").toDouble(0) },
+                      { "deleted", m.contains("deleted") },
+                      { "deletedTs", m.value("deleted").toObject().value("ts").toDouble(0) },
+                      { "deletedBy", by },
+                      { "deletedByName", by.isEmpty() ? QString() : name(by) },
+                      { "files", m.value("files") },
+                      { "removed", m.value("removed") },
+                      { "versions", m.value("versions") } });
+    }
+    log_.setItems(rows);
+}
+
+void Ponds::purgeMessage(const QString &messageId)
+{
+    if (current_.isEmpty() || channel_.isEmpty() || messageId.isEmpty())
+        return;
+    api_->post(pathOfChannel() + QStringLiteral("/%1/purge").arg(messageId), QJsonObject{}, [this](int status, const QJsonDocument &json) {
+        if (status != 204) {
+            const QString code = json.object().value("error").toString();
+            emit failed(code == QLatin1String("not_deleted") ? tr("Delete the message first.") : why(status, json, tr("erase that")));
+            return;
+        }
+        emit adminDone(tr("Erased for good."));
+        loadLog();
+    });
+}
+
+void Ponds::fetchLogFile(const QString &messageId, const QString &fileId)
+{
+    if (channel_.isEmpty() || messageId.isEmpty() || fileId.size() != 64)
+        return;
+    api_->post(pathOfChannel() + QStringLiteral("/%1/files/%2/download").arg(messageId, fileId), QJsonObject{},
+               [this](int status, const QJsonDocument &json) {
+                   if (status != 204)
+                       emit failed(why(status, json, tr("fetch the file")));
+                   else
+                       QTimer::singleShot(1500, this, [this] { loadLog(); }); /* what is here of it, a moment later */
                });
 }
 
@@ -903,6 +1070,9 @@ void Ponds::open(const QString &pondId)
             info_ = p;
     loaded_.clear();
     messages_.clear();
+    logLoaded_.clear();
+    log_.clear();
+    busyLog_ = false;
     channels_.clear();
     bans_.clear();
     invites_.clear();
@@ -927,6 +1097,9 @@ void Ponds::openChannel(const QString &channelId)
         lastChannel_.insert(current_, channelId);
     loaded_.clear();
     messages_.clear();
+    logLoaded_.clear();
+    log_.clear();
+    busyLog_ = false;
     generation_++;
     busyMessages_ = busyOlder_ = false;
     if (hasOlder_) {

@@ -48,6 +48,8 @@ ColumnLayout {
         { id: "view_channels", title: qsTr("View channel"), note: qsTr("See it and read it.") },
         { id: "send_messages", title: qsTr("Send messages"), note: qsTr("Write in it.") },
         { id: "attach_files", title: qsTr("Attach files"), note: qsTr("Send pictures and files in it.") },
+        { id: "manage_messages", title: qsTr("Manage messages"), note: qsTr("Delete anyone's messages in it."), edits: true },
+        { id: "view_message_log", title: qsTr("View message log"), note: qsTr("See what was edited or deleted in it."), edits: true },
         { id: "connect", title: qsTr("Connect"), note: qsTr("Join it (a voice channel)."), voice: true },
         { id: "speak", title: qsTr("Speak"), note: qsTr("Be heard in it."), voice: true },
         { id: "video", title: qsTr("Video"), note: qsTr("Show a camera or share a screen in it."), voice: true },
@@ -258,7 +260,7 @@ ColumnLayout {
                     delegate: RowLayout {
                         id: pRow
                         required property var modelData
-                        visible: !modelData.voice || (ed.channel && ed.channel.kind === "voice")
+                        visible: (!modelData.voice || (ed.channel && ed.channel.kind === "voice")) && (!modelData.edits || ed.ponds.canEditMessages)
                         Layout.fillWidth: true
                         Layout.preferredWidth: parent ? parent.width : 400 // the whole column, so the choices line up on the right
                         spacing: 10

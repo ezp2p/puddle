@@ -254,12 +254,9 @@ static int ask(const puddle_call *c, const char *method, const std::string &targ
     return status;
 }
 
-static int relay(const puddle_call *c, const char *method, const std::string &target, const std::string &body, std::string *answer = nullptr)
+/* Answer the owner with what the Pond said */
+static int relay_text(const puddle_call *c, int status, const std::string &text)
 {
-    std::string text;
-    int status = ask(c, method, target, body, text);
-    if (answer)
-        *answer = text;
     if (status == 204 || text.empty())
         return 204;
     c->blob->data = (unsigned char *)malloc(text.size());
@@ -269,6 +266,15 @@ static int relay(const puddle_call *c, const char *method, const std::string &ta
     c->blob->len = text.size();
     snprintf(c->blob->mime, sizeof c->blob->mime, "application/json");
     return status;
+}
+
+static int relay(const puddle_call *c, const char *method, const std::string &target, const std::string &body, std::string *answer = nullptr)
+{
+    std::string text;
+    int status = ask(c, method, target, body, text);
+    if (answer)
+        *answer = text;
+    return relay_text(c, status, text);
 }
 
 /* The body as sent, if it is a JSON object (the Pond checks what is in it); "{}" for none. */
@@ -524,6 +530,119 @@ static std::string same_route(const puddle_call *c)
     return "/pond/v1/" + path.substr(prefix.size());
 }
 static int pass_get(const puddle_call *c, puddle_jw *) { return relay(c, "GET", same_route(c), ""); }
+
+/* ---- editing and deleting messages, and the message log (protocol 14; docs/ponds.md, "Editing and deleting") ---- */
+
+static std::string message_route(const puddle_call *c, const char *verb)
+{
+    return "/pond/v1/channels/" + std::to_string(channelOf(c)) + "/messages/" + puddle_param(c, "message") + "/" + verb;
+}
+
+static void need_edits(const puddle_call *c)
+{
+    if (!puddle_ponds_has_feature(pondsOf(c), puddle_param(c, "pond"), "message_edits"))
+        throw Error(409, "no_edits"); /* an older Pond: messages can't be edited or deleted there */
+}
+
+/* {body?, files?}: the new text, and the ids of the files it keeps (an edit only drops files). Answers the message as it now
+ * reads, and keeps it so. */
+static int edit_message(const puddle_call *c, puddle_jw *)
+{
+    need_edits(c);
+    Body b(c);
+    std::string out = "{";
+    if (b.has("body")) {
+        /* empty only for a message that keeps a file: the Pond says if it does */
+        std::string text = b.string("body", 64 * 1024);
+        if (!text.empty() && !puddle_message_body_ok(text.data(), text.size()))
+            throw Error::badRequest("bad_body", "a message is 1 to 4000 characters of text, with no control characters");
+        std::string buf(text.size() * 6 + 32, '\0');
+        puddle_jw jw;
+        puddle_jw_init(&jw, buf.data(), buf.size());
+        puddle_jw_object(&jw);
+        puddle_jw_str(&jw, "text", text.c_str());
+        puddle_jw_end_object(&jw);
+        std::string one = buf.substr(0, puddle_jw_finish(&jw));
+        out += one.substr(1, one.size() - 2);
+    }
+    if (b.has("files")) {
+        puddle_span arr = b.raw("files"), item;
+        size_t cur = 0;
+        std::string ids;
+        char fid[PUDDLE_FILE_ID_LEN + 1];
+        int r, n = 0;
+        while ((r = puddle_json_array_next(arr, &cur, &item)) == 1) {
+            if (puddle_json_string(item, fid, sizeof fid) != 0 || !puddle_file_id_valid(fid) || ++n > 10)
+                throw Error::badRequest("bad_file");
+            ids += (ids.empty() ? "\"" : ",\"") + std::string(fid) + "\"";
+        }
+        if (r != 0)
+            throw Error::badRequest("bad_file");
+        out += (out.size() > 1 ? ",\"files\":[" : "\"files\":[") + ids + "]";
+    }
+    out += "}";
+    std::string said;
+    int status = ask(c, "POST", message_route(c, "edit"), out, said);
+    if (status != 200)
+        return relay_text(c, status, said);
+    const char *pond = puddle_param(c, "pond");
+    puddle_ponds_edited(pondsOf(c), pond, said.data(), said.size());
+    puddle_pond_file_writer files = {write_file, (void *)c};
+    return big_json(c, 200, [&](puddle_jw *jw) { return puddle_ponds_write_message(said.data(), said.size(), jw, &files); });
+}
+
+/* Deleting: our own, or anyone's where we may manage messages. Kept no more here once the Pond has said yes. */
+static int delete_message(const puddle_call *c, puddle_jw *)
+{
+    need_edits(c);
+    std::string said;
+    int status = ask(c, "POST", message_route(c, "delete"), "", said); /* the Pond takes no body here */
+    if (status != 204)
+        return relay_text(c, status, said);
+    puddle_ponds_deleted(pondsOf(c), puddle_param(c, "pond"), channelOf(c), strtoll(puddle_param(c, "message"), nullptr, 10));
+    return 204;
+}
+
+static int purge_message(const puddle_call *c, puddle_jw *)
+{
+    need_edits(c);
+    return relay(c, "POST", message_route(c, "purge"), "");
+}
+
+/* One message with every text it had (for whoever may view the log there), its files as a message's */
+static int message_versions(const puddle_call *c, puddle_jw *)
+{
+    need_edits(c);
+    std::string said;
+    int status = ask(c, "GET", message_route(c, "versions"), "", said);
+    if (status != 200)
+        return relay_text(c, status, said);
+    puddle_pond_file_writer files = {write_file, (void *)c};
+    return big_json(c, 200, [&](puddle_jw *jw) { return puddle_ponds_write_log(said.data(), said.size(), 1, jw, &files); });
+}
+
+/* ?before=&limit=: the channel's edited and deleted messages, newest first */
+static int message_log(const puddle_call *c, puddle_jw *)
+{
+    need_edits(c);
+    static const char *const KEYS[] = {"before", "limit"};
+    char q[2][PUDDLE_QUERY_VALUE_MAX];
+    if (puddle_query_parse(c->req->target, KEYS, 2, q) != 0)
+        throw Error::badRequest("bad_query");
+    char *end;
+    int64_t before = *q[0] ? strtoll(q[0], &end, 10) : 0, limit = *q[1] ? strtoll(q[1], &end, 10) : 50;
+    if (before < 0 || limit < 1 || limit > 100)
+        throw Error::badRequest("bad_query");
+    std::string target = "/pond/v1/channels/" + std::to_string(channelOf(c)) + "/log?limit=" + std::to_string(limit);
+    if (before)
+        target += "&before=" + std::to_string(before);
+    std::string said;
+    int status = ask(c, "GET", target, "", said);
+    if (status != 200)
+        return relay_text(c, status, said);
+    puddle_pond_file_writer files = {write_file, (void *)c};
+    return big_json(c, 200, [&](puddle_jw *jw) { return puddle_ponds_write_log(said.data(), said.size(), 0, jw, &files); });
+}
 static int pass_post(const puddle_call *c, puddle_jw *) { return relay(c, "POST", same_route(c), objectBody(c)); }
 static int admin_invites(const puddle_call *c, puddle_jw *) { return relay(c, "GET", "/pond/v1/admin/invites", ""); }
 static int admin_invite_create(const puddle_call *c, puddle_jw *) { return relay(c, "POST", "/pond/v1/admin/invites/create", objectBody(c)); }
@@ -681,6 +800,12 @@ const puddle_route puddle_pond_api_routes[] = {
     { "GET",  POND "/channels/{channel:num}/messages",            PUDDLE_AUTH_OWNER, 0,     channel_messages, NULL },
     { "POST", POND "/channels/{channel:num}/messages/send",       PUDDLE_AUTH_OWNER, 40000, send_message,     NULL },
     { "POST", POND "/channels/{channel:num}/messages/{message:num}/files/{file:event}/download", PUDDLE_AUTH_OWNER, 64, fetch_file, NULL },
+    /* protocol 14: editing and deleting messages, and the message log */
+    { "POST", POND "/channels/{channel:num}/messages/{message:num}/edit", PUDDLE_AUTH_OWNER, 40000, edit_message,  NULL },
+    { "POST", POND "/channels/{channel:num}/messages/{message:num}/delete", PUDDLE_AUTH_OWNER, 64,  delete_message, NULL },
+    { "POST", POND "/channels/{channel:num}/messages/{message:num}/purge", PUDDLE_AUTH_OWNER, 64,   purge_message,  NULL },
+    { "GET",  POND "/channels/{channel:num}/messages/{message:num}/versions", PUDDLE_AUTH_OWNER, 0, message_versions, NULL },
+    { "GET",  POND "/channels/{channel:num}/log",                 PUDDLE_AUTH_OWNER, 0,     message_log,      NULL },
     { "POST", POND "/profile",                                    PUDDLE_AUTH_OWNER, 128,   pond_profile,     NULL },
     { "POST", POND "/leave",                                      PUDDLE_AUTH_OWNER, 64,    leave_pond,       NULL },
     { "POST", POND "/offer/accept",                               PUDDLE_AUTH_OWNER, 64,    accept_offer,     NULL },
