@@ -1,6 +1,6 @@
 #pragma once
 
-// The five events that change a group (model/events/chat.create.yaml and the rest). Messages in a group are the
+// The seven events that change a group (model/events/chat.create.yaml and the rest). Messages in a group are the
 // ordinary chat events with the group's id as `chat`.
 
 #include "events/event.hpp"
@@ -37,6 +37,18 @@ struct MemberJoin : Header {    // "member.join": the invitee, saying yes
 struct MemberLeave : Header {   // "member.leave": a member or invitee, for themselves
     std::string bytes() const;
     static std::optional<MemberLeave> parse(const std::string &bytes, std::string *why = nullptr);
+};
+
+struct MemberRemove : Header {  // "member.remove": the creator, or whoever invited `member`
+    std::string member;
+    std::string bytes() const;
+    static std::optional<MemberRemove> parse(const std::string &bytes, std::string *why = nullptr);
+};
+
+struct MemberVote : Header {    // "member.vote": any member; more than half of the others takes `member` out
+    std::string member;
+    std::string bytes() const;
+    static std::optional<MemberVote> parse(const std::string &bytes, std::string *why = nullptr);
 };
 
 } // namespace puddle::events

@@ -10,7 +10,7 @@ middle, and nothing is public.
   is why the id is not simply the event's hash.)
 - **Its log** is kept on every member's Puddle, like a direct message's: signed events, each stored as it was signed. `message`, `edit` and `redact`
   are exactly the direct-message events, with the group's id as the chat; what a reader sees is worked out from them the same way.
-- **Its members** are worked out from five more events:
+- **Its members** are worked out from seven more events:
 
 | event | by | meaning |
 |---|---|---|
@@ -19,12 +19,36 @@ middle, and nothing is public.
 | `member.invite` | any member | `member` is the invitee |
 | `member.join` | the invitee | yes |
 | `member.leave` | a member or an invitee, for themselves | out (or a no to an invitation) |
+| `member.remove` | the creator, or whoever invited `member` | `member` is out (or their invitation taken back) |
+| `member.vote` | any member, against another `member` | a vote to take them out |
 
 There is no one in charge. The rules (`puddle_group_apply`) are the same on every Puddle, so the same events give the same members:
 only a member can invite or rename; a join counts only from someone invited and only if it is newer than the invitation; a leave newer than
 your last change takes you out; a later invitation can bring a leaver back; the newest name wins (the same moment is broken by the name's own
-order, so everyone picks alike); never more than 50 members and invited together. **A member can invite anyone they are friends with. Nobody can
-remove someone else.** Leaving is up to the one who leaves.
+order, so everyone picks alike); never more than 50 members and invited together. **A member can invite anyone they are friends with.** Leaving is
+up to the one who leaves; taking someone else out is below.
+
+## Taking someone out
+
+Two ways, both events every Puddle folds by the same rules:
+
+- **Straight away**, by `member.remove`: the one who made the group may take anyone out, and so may whoever invited that person (the one
+  whose invitation brought them in last). It takes back an invitation not yet answered the same way. Nobody invited the creator, so only a
+  vote takes the creator out.
+- **By a vote**, `member.vote`: anyone in the group may vote against anyone else in it or invited to it, once. When the votes that count are
+  more than half of the members other than the one voted against (two of three, three of four or five), they are out. A vote counts while
+  the voter is still in and the one voted against has not been invited back since; someone leaving can decide a vote, since fewer are then
+  needed. The one voted against sees the votes too.
+
+Either is stale when it is older than the invitation that brought the person in, so a removal crossing a later invitation does not undo it,
+and a removal crossing the join it answers ends the same on every Puddle (out, at the removal's time). Being voted out takes effect at the
+newest vote that counted. Whoever is taken out is told like everyone else (the event goes to the group as it was before), their own Puddle
+marks the group `removed`, and from then on they are sent nothing and nothing of theirs is taken; a connection that was only for that group is
+closed. **Anyone may invite them back**, as for someone who left, by a later invitation, and blocks hold as everywhere: only a friend can be
+invited, and an invitation is refused while someone in the group is blocked.
+
+So that someone who joins later judges a removal as everyone else does, an invitation's roster says who invited each member and when (`by`,
+`invited`).
 
 ## Invitations
 
@@ -77,4 +101,5 @@ while someone in the group is blocked.
 - A member hears only from members they have a connection with. If a connection cannot be made (the member's address changed while both were
   away), their messages do not arrive until it is.
 - The roster in an invitation is the inviter's word. A forged roster only affects the one who trusts that inviter.
-- Nobody can remove another member; neither can the creator. Decided for now; see `discuss-later.md`.
+- A member who has no connection to a voter does not hear that vote, so may go on believing they are in (and writing, which the others refuse)
+  until they do. The same holds for any event, as above.

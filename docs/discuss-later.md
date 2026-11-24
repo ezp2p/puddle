@@ -62,8 +62,7 @@ would be useful and each needs something new behind it:
 - **Per message:** forward, react with an emoji, "message info" (who it reached and when: the delivery state is already there), copy a link to
   a message, jump to the message a reply points at, select several to copy or delete.
 - **Per person:** a nickname only you see; show their safety code to compare out loud (the short code exists); and "Add friend" on a group
-  member we have no friendship with, which needs a request by user id (we already hold their address from the group connection). Removing someone
-  from a group is the parked question under "Carried over".
+  member we have no friendship with, which needs a request by user id (we already hold their address from the group connection).
 - **Search:** inside a chat (decrypted in memory, so cheap) and across chats (see #3).
 - **Text boxes:** spelling suggestions in the composer, which Qt Quick does not offer on its own.
 - **Menus:** native menus on macOS and Windows (the styled menu looks the same everywhere but is not the system's). Qt 6.9 added a
@@ -85,7 +84,6 @@ streams and the app.
 - Name for the group-only connection (a scoped stream). Options floated: Brook, Rill, Tributary.
 - What the app says if the owner skips writing down the recovery phrase (the format is decided).
 - The exact signature scheme for requests between Puddles.
-- Who may remove someone from a group (leaving is unilateral; kicking is undecided).
 - Whether a block also hides the blocked person's messages in groups you share, or makes you leave.
 - A name for the phone client.
 - Protecting the identity key file at rest (a passphrase or the OS keychain). It is a plain file with

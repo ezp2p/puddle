@@ -875,6 +875,42 @@ int main(int argc, char **argv)
         CHECK(click(find("startConversationButton")));
         CHECK(until([&] { return find("memberList")->property("count").toInt() == 4; }, 5000));      /* Carol is asked: she shows as invited */
 
+        /* taking someone out: we made the group, so each of the others' menus offers Remove (and no vote), and it asks first */
+        {
+            auto memberRow = [&](const QString &name) {
+                QQuickItem *hit = nullptr;
+                walk(find("memberList"), [&](QQuickItem *i) {
+                    if (i->isVisible() && i->property("text").toString() == name && !hit)
+                        hit = i;
+                    return hit != nullptr;
+                });
+                return hit;
+            };
+            QSignalSpy bobOut(&B, &Chats::groupRemoved);
+            CHECK(until([&] { return memberRow("invited") != nullptr; }, 3000));                     /* Carol, asked and not yet in */
+            CHECK(rightClick(memberRow("invited")));
+            CHECK(until([&] { return find("memberRemove") != nullptr; }, 3000));
+            CHECK(find("memberVote") == nullptr);
+            CHECK(click(find("memberRemove")));
+            CHECK(until([&] { return find("confirmOk") != nullptr; }, 3000));
+            CHECK(click(find("confirmOk")));
+            CHECK(until([&] { return find("memberList")->property("count").toInt() == 3; }, 5000));    /* her invitation is taken back */
+            CHECK(until([&] {
+                for (QQuickItem *i : all("groupNotice"))
+                    if (i->property("text").toString().startsWith("You removed "))
+                        return true;
+                return false;
+            }, 5000));
+            /* Bob is told, and his app says so */
+            CHECK(rightClick(memberRow("Bob")));
+            CHECK(until([&] { return find("memberRemove") != nullptr; }, 3000));
+            CHECK(click(find("memberRemove")));
+            CHECK(until([&] { return find("confirmOk") != nullptr; }, 3000));
+            CHECK(click(find("confirmOk")));
+            CHECK(until([&] { return find("memberList")->property("count").toInt() == 2; }, 5000));
+            CHECK(until([&] { B.refresh(); return bobOut.count() == 1 && bobOut.at(0).at(0).toString() == "Weekend away"; }, 10000));
+        }
+
         /* leaving asks first */
         CHECK(clickName("leaveGroupButton"));
         CHECK(until([&] { return find("confirmOk") != nullptr; }, 3000));

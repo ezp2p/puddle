@@ -13,4 +13,4 @@ x-sent-by: a member or invitee, for themselves
 x-rules:
   - From a member or an invitee, for themselves
   - Older than their last change: stale, ignored
-  - Nobody can remove someone else
+  - Taking someone else out is member.remove, or member.vote

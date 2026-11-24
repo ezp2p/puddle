@@ -88,7 +88,7 @@ One JSON object per line, UTF-8, terminated by `\n`:
 
 | field    | meaning |
 |----------|---------|
-| `type`   | `chat.create`, `chat.rename`, `member.join`, `member.leave`, `message`, `edit`, `redact`, ... |
+| `type`   | `chat.create`, `chat.rename`, `member.join`, `member.leave`, `member.remove`, `member.vote`, `message`, `edit`, `redact`, ... |
 | `chat`   | chat id |
 | `sender` | user id (identity.md) |
 | `ts`     | sender's time, UTC ms |

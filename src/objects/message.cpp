@@ -74,6 +74,8 @@ const char *typeName(Message::Type t)
     case Message::Type::GroupInvite: return "group_invite";
     case Message::Type::GroupJoin: return "group_join";
     case Message::Type::GroupLeave: return "group_leave";
+    case Message::Type::GroupRemove: return "group_remove";
+    case Message::Type::GroupVote: return "group_vote";
     default: return "default";
     }
 }
@@ -287,6 +289,8 @@ std::optional<Message> Message::fromNotice(const puddle_event &ev, const std::st
     case PUDDLE_GE_INVITE: m.type_ = Type::GroupInvite; m.member_ = g.member; break;
     case PUDDLE_GE_JOIN: m.type_ = Type::GroupJoin; break;
     case PUDDLE_GE_LEAVE: m.type_ = Type::GroupLeave; break;
+    case PUDDLE_GE_REMOVE: m.type_ = Type::GroupRemove; m.member_ = g.member; break;
+    case PUDDLE_GE_VOTE: m.type_ = Type::GroupVote; m.member_ = g.member; break;
     }
     return m;
 }

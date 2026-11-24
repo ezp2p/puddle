@@ -6,6 +6,7 @@
 //     auto g = puddle::Group::create(ctx, "Climbing");
 //     g.invite(bobId);
 //     g.rename("Climbing (Thursdays)");
+//     g.remove(bobId);       // or, for someone we did not invite: g.voteOut(bobId)
 
 #include "core/group.h"
 #include "core/context.h"
@@ -42,6 +43,8 @@ public:
     Group decline();
     Group leave();
     Group rename(const std::string &name);
+    Group remove(const std::string &userId);  // the creator, or whoever invited them
+    Group voteOut(const std::string &userId); // anyone else in it: more than half of the others takes them out
     // Show the members `profileId` (one of the owner's), or nothing (nullopt); they are told.
     Group showProfile(const std::optional<std::string> &profileId);
     std::string place() const; // "group:<id>": where a profile is shown

@@ -30,6 +30,8 @@ const puddle_courier puddle_federation_courier = {
     puddle_group_decline,
     puddle_group_leave,
     puddle_group_rename,
+    puddle_group_remove,
+    puddle_group_vote,
     puddle_group_send_event,
     puddle_file_fetch,
     puddle_file_request,

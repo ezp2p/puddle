@@ -89,7 +89,7 @@ Chats::Chats(QObject *parent)
       dmBlocks_({ "id", "user", "name", "avatar", "created_at" }, nullptr, "user"),
       profiles_({ "id", "display_name", "avatar", "default", "pronouns", "blurb", "place_count" }),
       invites_({ "id", "name", "invitedBy", "invitedByName" }),
-      members_({ "id", "name", "avatar", "color", "state", "isMe", "friend" }),
+      members_({ "id", "name", "avatar", "color", "state", "isMe", "friend", "canRemove", "votes", "votesNeeded", "voted" }),
       sidebar_({ "key", "kind", "id", "name", "avatar", "color", "preview", "lastTs", "unread", "state", "members", "note", "invitedBy", "section",
                  "pond", "pondName", "pondIcon" }, nullptr, "key"),
       devices_({ "id", "name", "state", "check", "created_at", "last_seen" }, nullptr, "id")
@@ -1518,6 +1518,12 @@ bool Chats::notice(QJsonObject &n) const
     else if (type == QLatin1String("invite")) {
         const QString m = n.value("member").toString();
         text = tr("%1 invited %2").arg(by, m == self_ ? tr("you") : nameOf(m));
+    } else if (type == QLatin1String("remove")) {
+        const QString m = n.value("member").toString();
+        text = tr("%1 removed %2").arg(by, m == self_ ? tr("you") : nameOf(m));
+    } else if (type == QLatin1String("vote")) {
+        const QString m = n.value("member").toString();
+        text = tr("%1 voted to remove %2").arg(by, m == self_ ? tr("you") : nameOf(m));
     } else if (type == QLatin1String("join"))
         text = tr("%1 joined").arg(by);
     else if (type == QLatin1String("leave"))
@@ -1678,6 +1684,10 @@ void Chats::rebuildMembers()
             r.insert("state", m.value("state"));
             r.insert("isMe", me);
             r.insert("friend", friends.contains(id));
+            r.insert("canRemove", m.value("can_remove").toBool());
+            r.insert("votes", m.value("votes").toInt());
+            r.insert("votesNeeded", m.value("votes_needed").toInt());
+            r.insert("voted", m.value("voted").toBool());
             rows.append(r);
         }
     }
@@ -1714,8 +1724,20 @@ void Chats::refreshGroups()
                     emit newGroupInvite(id);
             }
         }
+        /* a group we were in that is gone from the list, and not because we left it: someone took us out */
+        QString removedFromOpen;
+        for (auto it = groups_.cbegin(); it != groups_.cend(); ++it)
+            if (it.value().value("my").toString() == QLatin1String("in") && !groups.contains(it.key()) && !leaving_.contains(it.key())) {
+                emit groupRemoved(it.value().value("name").toString());
+                if (it.key() == current_)
+                    removedFromOpen = it.key();
+            }
+        for (auto it = leaving_.begin(); it != leaving_.end();)
+            it = groups.contains(*it) ? std::next(it) : leaving_.erase(it);
         groups_ = groups;
         invitedTo_ = invitedTo;
+        if (!removedFromOpen.isEmpty())
+            close();
         groupsLoaded_ = true;
         invites_.setItems(invites);
         rebuildSidebar();
@@ -1770,6 +1792,7 @@ void Chats::leaveGroup()
 
 void Chats::leaveGroup(const QString &id)
 {
+    leaving_.insert(id);
     api_.post(path("groups", id, "leave"), QJsonObject{}, [this, id](int status, const QJsonDocument &) {
         if (status == 0 || status >= 400) {
             emit failed(tr("Could not leave the group."));
@@ -1780,6 +1803,18 @@ void Chats::leaveGroup(const QString &id)
         }
         refresh();
     });
+}
+
+void Chats::removeFromGroup(const QString &userId)
+{
+    if (currentIsGroup())
+        post(path("groups", current_, "remove"), QJsonObject{ { "user", userId } }, tr("They could not be removed."));
+}
+
+void Chats::voteToRemove(const QString &userId)
+{
+    if (currentIsGroup())
+        post(path("groups", current_, "vote"), QJsonObject{ { "user", userId } }, tr("Your vote could not be cast."));
 }
 
 void Chats::renameGroup(const QString &name)

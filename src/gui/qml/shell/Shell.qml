@@ -163,6 +163,7 @@ Pane {
         function onCurrentChanged() { if (shell.page === "chat" && shell.chats.current === "") { shell.lastChat = ({}); shell.goHome() } }
         function onFailed(what) { toast.show(what) }
         function onGroupCreated(id) { shell.openChat(id, "group") }
+        function onGroupRemoved(name) { toast.show(qsTr("You were removed from “%1”.").arg(name)) }
         function onPondDmOpened(id) { shell.openChat(id, "pond_dm") }
     }
     Connections {

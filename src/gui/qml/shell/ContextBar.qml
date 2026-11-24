@@ -100,6 +100,12 @@ Rectangle {
                         Avatar { chats: bar.chats; name: mrow.model.name; hash: mrow.model.avatar || ""; tint: mrow.model.color || ""; size: 32 }
                         Label { text: mrow.model.name; Layout.fillWidth: true; elide: Text.ElideRight }
                         Label { visible: mrow.model.state === "invited"; text: qsTr("invited"); opacity: 0.6; font.pixelSize: 12 }
+                        Label {
+                            objectName: "memberVotes"
+                            visible: (mrow.model.votes || 0) > 0
+                            text: qsTr("%1 of %2 votes to remove").arg(mrow.model.votes).arg(mrow.model.votesNeeded)
+                            color: Theme.danger; font.pixelSize: 12
+                        }
                     }
                     HoverHandler { id: mhover; cursorShape: Qt.PointingHandCursor }
                     TapHandler { onTapped: if (bar.people) bar.people.showCard(mrow, mrow.model.id) }
@@ -131,6 +137,25 @@ Rectangle {
                             objectName: "memberCopyId"; text: qsTr("Copy ID")
                             visible: bar.developer; height: visible ? implicitHeight : 0
                             onTriggered: bar.chats.copy(mrow.model.id)
+                        }
+                        MenuSeparator { visible: !mrow.me && bar.chats.currentState === "active"; height: visible ? implicitHeight : 0 }
+                        MenuItem {
+                            objectName: "memberRemove"; text: qsTr("Remove from group…"); palette.text: Theme.danger
+                            visible: !mrow.me && mrow.model.canRemove === true; height: visible ? implicitHeight : 0
+                            onTriggered: confirm.ask(qsTr("Remove from group"),
+                                                     qsTr("Remove %1 from “%2”? Everyone in it is told, %1 too. Anyone can invite them back.").arg(mrow.model.name).arg(bar.chats.currentName),
+                                                     qsTr("Remove"), () => bar.chats.removeFromGroup(mrow.model.id))
+                        }
+                        MenuItem {
+                            objectName: "memberVote"
+                            /* the others decide: once more than half of them have voted, they are out */
+                            text: mrow.model.voted ? qsTr("You voted to remove (%1 of %2)").arg(mrow.model.votes).arg(mrow.model.votesNeeded)
+                                                   : qsTr("Vote to remove (%1 of %2)").arg(mrow.model.votes).arg(mrow.model.votesNeeded)
+                            enabled: !mrow.model.voted
+                            visible: !mrow.me && mrow.model.canRemove !== true && bar.chats.currentState === "active"; height: visible ? implicitHeight : 0
+                            onTriggered: confirm.ask(qsTr("Vote to remove"),
+                                                     qsTr("Vote to remove %1 from “%2”? Everyone in it sees your vote, %1 too. They are out once %3 of the others have voted.").arg(mrow.model.name).arg(bar.chats.currentName).arg(mrow.model.votesNeeded),
+                                                     qsTr("Vote"), () => bar.chats.voteToRemove(mrow.model.id))
                         }
                         MenuSeparator { visible: !mrow.me; height: visible ? implicitHeight : 0 }
                         MenuItem {

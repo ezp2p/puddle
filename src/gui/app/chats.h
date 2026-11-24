@@ -25,7 +25,8 @@ class Chats : public QObject {
     Q_PROPERTY(QObject *blocked READ blocked CONSTANT)              // people we blocked: user, name, avatar, created_at
     Q_PROPERTY(QObject *dmBlocks READ dmBlocks CONSTANT)            // people whose direct messages through Ponds we drop: user, name, avatar, created_at
     Q_PROPERTY(QObject *groupInvites READ groupInvites CONSTANT)    // invitations to groups waiting for an answer
-    Q_PROPERTY(QObject *members READ members CONSTANT)              // the open group's members: id, name, avatar, color, state, isMe, friend
+    Q_PROPERTY(QObject *members READ members CONSTANT)              // the open group's members: id, name, avatar, color, state, isMe, friend,
+                                                                    // canRemove, votes, votesNeeded, voted
     Q_PROPERTY(bool currentIsGroup READ currentIsGroup NOTIFY currentChanged)
     Q_PROPERTY(bool currentIsPondDm READ currentIsPondDm NOTIFY currentChanged)  // with a member of a Pond, through it (docs/pond-dms.md)
     // the open conversation through a Pond: pond, pondName, member, closed ("left", "not_accepted", "dms_off" or ""), offer (their
@@ -203,6 +204,10 @@ public:
     Q_INVOKABLE void leaveGroup(const QString &groupId);     // any group we are in (from a menu on its row)
     Q_INVOKABLE void renameGroup(const QString &name);       // the open one
     Q_INVOKABLE void renameGroup(const QString &groupId, const QString &name);
+    // Take someone out of the open group: straight away if we made it or invited them (their row's canRemove), else a vote
+    // (votes, votesNeeded, voted) that takes them out once more than half of the others have voted.
+    Q_INVOKABLE void removeFromGroup(const QString &userId);
+    Q_INVOKABLE void voteToRemove(const QString &userId);
 
     Q_INVOKABLE void accept(const QString &userId, const QString &profile = QString());
     Q_INVOKABLE void decline(const QString &userId);
@@ -278,6 +283,7 @@ signals:
     void pondDmOpened(const QString &conversationId);
     void blockedChanged();
     void groupLeft();
+    void groupRemoved(const QString &name); // someone else took us out of a group, or the others voted us out
     void avatarReady(const QString &hash);
     void cardLoaded(const QString &userId, const QVariantMap &card);
     void uploadProgress(const QString &key, double fraction);
@@ -329,6 +335,7 @@ private:
     QString leveeError_;
     QHash<QString, QJsonObject> groups_;   // the groups we are in or invited to, by id
     QSet<QString> invitedTo_;
+    QSet<QString> leaving_; // groups we asked to leave: their going from the list is not news
     QString currentKind_ = QStringLiteral("dm"), self_;
     QSet<QString> dmBlocked_;              // whose direct messages through Ponds are dropped
     QHash<QString, QJsonObject> pondDms_; // conversations through a Pond, by id, as the Puddle said them

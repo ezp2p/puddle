@@ -244,6 +244,9 @@ static char *invite_package(puddle_ctx *ctx, const puddle_group *g, const char *
         puddle_jw_str(&w, "id", m->id);
         puddle_jw_str(&w, "state", puddle_gm_state_name(m->state));
         puddle_jw_num(&w, "ts", m->ts);
+        puddle_jw_num(&w, "invited", m->invited);
+        if (m->by[0])
+            puddle_jw_str(&w, "by", m->by);
         if (addr[0])
             puddle_jw_str(&w, "address", addr);
         puddle_jw_end_object(&w);
@@ -505,6 +508,79 @@ int puddle_group_rename(puddle_ctx *ctx, const char *gid, const char *name, cons
 done:
     puddle_group_free(&g);
     return rc;
+}
+
+/* ---- remove, vote ---- */
+
+static int about_member(puddle_ctx *ctx, const char *gid, const char *target, puddle_ge_type type, const char **code)
+{
+    puddle_group g;
+    int status;
+    char me[PUDDLE_USER_ID_LEN + 1];
+    if (load(ctx, gid, &g, code, &status) != 0)
+        return status;
+    puddle_identity_id(ctx->identity, me);
+    int rc = 0;
+    const puddle_gmember *m;
+    if (g.my != PUDDLE_GROUP_IN) {
+        rc = fail(code, 409, "not_in_group");
+        goto done;
+    }
+    if (!puddle_id_valid(target) || !strcmp(target, me)) {
+        rc = fail(code, 400, "bad_request"); /* taking ourselves out is leaving */
+        goto done;
+    }
+    m = puddle_group_member(&g, target);
+    if (!m || m->state == PUDDLE_GM_LEFT) {
+        rc = fail(code, 404, "not_a_member");
+        goto done;
+    }
+    if (type == PUDDLE_GE_REMOVE && !puddle_group_may_remove(&g, me, target)) {
+        rc = fail(code, 403, "not_allowed"); /* the others can only vote */
+        goto done;
+    }
+    if (type == PUDDLE_GE_VOTE && puddle_group_has_voted(&g, me, target)) {
+        rc = fail(code, 409, "already_voted");
+        goto done;
+    }
+    {
+        char ev[512], sig[PUDDLE_SIG_TEXT_MAX], id[65], err[300];
+        int64_t ts = stamp(ctx, m->invited);
+        size_t el = type == PUDDLE_GE_REMOVE ? puddle_group_remove_build(g.id, me, ts, target, ev, sizeof ev)
+                                             : puddle_group_vote_build(g.id, me, ts, target, ev, sizeof ev);
+        change c = { .set_my = 0 };
+        const char *why;
+        if (!el || puddle_group_event_parse(ev, el, &c.ev, &why) != 0) {
+            rc = fail(code, 500, "internal");
+            goto done;
+        }
+        int ur = puddle_groups_update(ctx->groups, g.id, change_fn, &c, err, sizeof err);
+        if (ur != 0) {
+            rc = fail(code, ur == 3 ? 409 : 500, ur == 3 ? c.why : "internal");
+            goto done;
+        }
+        /* told from the group as it was before: the one taken out hears it too, or they would go on writing to a group that has
+         * let them go (they are sent it before the connection that was only for this group is closed: one peer's sends keep their order) */
+        int sent;
+        rc = emit(ctx, &g, ev, el, NULL, 1, id, sig, &sent, code);
+        if (rc != 0 && strcmp(*code, "not_queued") != 0)
+            goto done;
+        rc = 0;
+    }
+    puddle_group_reconcile(ctx);
+done:
+    puddle_group_free(&g);
+    return rc;
+}
+
+int puddle_group_remove(puddle_ctx *ctx, const char *gid, const char *member, const char **code)
+{
+    return about_member(ctx, gid, member, PUDDLE_GE_REMOVE, code);
+}
+
+int puddle_group_vote(puddle_ctx *ctx, const char *gid, const char *member, const char **code)
+{
+    return about_member(ctx, gid, member, PUDDLE_GE_VOTE, code);
 }
 
 int puddle_group_send_event(puddle_ctx *ctx, const char *gid, const char *event, size_t len, char id[65], int *sent, const char **code)

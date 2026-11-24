@@ -479,6 +479,11 @@ gets the other's messages in a group, and you can still be in it.
 - [x] **5.6 Tests.** `group_test`, `groupapi_test` (the receiving side and the scoped connections), `groupowner_test` (the owner's routes),
   `group_e2e_test` (three real Puddles over TLS where two are strangers, ending with a friend request over the group connection and leaving),
   `chats_test` and `ui_test` (the window: new group, accept with the address notice, decline, talk, members, rename, leave).
+- [x] **5.7 Taking someone out** (issue #39, after the rest). `member.remove`, from the creator or whoever invited that person, and
+  `member.vote`, from anyone in it: more than half of the members other than the one voted against takes them out. Both are judged against
+  the invitation that brought the person in, so every Puddle ends the same whatever the order; the one taken out is told, marks the group
+  `removed` and is sent nothing more; anyone may invite them back. Routes `groups/{group}/remove` and `/vote`; in the window, Remove or Vote
+  to remove in a member's menu. Tested in `group_test`, `groupapi_test`, `groupowner_test`, `group_e2e_test` (a vote-out and back) and `ui_test`.
 
 Found while doing it, and fixed: a made-up stream id was being sent key pushes (4.6); a join someone could not learn from anyone but its author
 now travels directly (`told`); events about the group go to the invited too, or they cannot tell who else is coming.
@@ -620,7 +625,7 @@ changed in place; routes stay visible; no unsealed fallback).
 
 ## Later, not planned in detail
 
-Removing a member, a display name for the group-only connection, more of Ponds (docs/ponds.md, "Not yet"), encrypting data
+A display name for the group-only connection, more of Ponds (docs/ponds.md, "Not yet"), encrypting data
 at rest. Parked questions are in
 `discuss-later.md`.
 

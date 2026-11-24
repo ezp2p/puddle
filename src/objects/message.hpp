@@ -39,7 +39,7 @@ private:
 
 class Message {
 public:
-    enum class Type { Default, GroupCreate, GroupRename, GroupInvite, GroupJoin, GroupLeave };
+    enum class Type { Default, GroupCreate, GroupRename, GroupInvite, GroupJoin, GroupLeave, GroupRemove, GroupVote };
 
     // `conversation` is the Conversation's id: the other person's for a DM, the group's for a group.
     static std::optional<Message> get(puddle_ctx *ctx, const std::string &conversation, const std::string &id);

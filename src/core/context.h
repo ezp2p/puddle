@@ -59,6 +59,8 @@ typedef struct {
     int (*group_decline)(puddle_ctx *ctx, const char *gid, const char **code);
     int (*group_leave)(puddle_ctx *ctx, const char *gid, const char **code);
     int (*group_rename)(puddle_ctx *ctx, const char *gid, const char *name, const char **code);
+    int (*group_remove)(puddle_ctx *ctx, const char *gid, const char *member, const char **code);
+    int (*group_vote)(puddle_ctx *ctx, const char *gid, const char *member, const char **code);
     int (*group_send_event)(puddle_ctx *ctx, const char *gid, const char *event, size_t len, char id[65], int *sent, const char **code);
     int (*file_fetch)(puddle_ctx *ctx, const char *chat, const char *message, const char *file, const char **code);
     int (*file_request)(puddle_ctx *ctx, const char *chat, const char *message, const char *file, const char **code);

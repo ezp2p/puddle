@@ -123,7 +123,7 @@ Message:
   properties:
     id:           EventId
     conversation: string        # a Conversation id (replaces `chat`)
-    type:         [default, group_create, group_rename, group_invite, group_join, group_leave]
+    type:         [default, group_create, group_rename, group_invite, group_join, group_leave, group_remove, group_vote]
     author:       PartialUser   # replaces `sender`
     ts, body, outgoing, received_at, edited, edited_at, deleted, reply_to, delivery   # as today
     member:       PartialUser   # group_invite: who was invited

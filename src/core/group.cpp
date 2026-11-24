@@ -29,7 +29,7 @@ static int member_str(const char *e, size_t n, const char *key, char *out, size_
 
 const char *puddle_group_my_name(puddle_group_my m)
 {
-    return m == PUDDLE_GROUP_INVITED ? "invited" : m == PUDDLE_GROUP_IN ? "in" : m == PUDDLE_GROUP_LEFT ? "left" : "declined";
+    return m == PUDDLE_GROUP_INVITED ? "invited" : m == PUDDLE_GROUP_IN ? "in" : m == PUDDLE_GROUP_LEFT ? "left" : m == PUDDLE_GROUP_REMOVED ? "removed" : "declined";
 }
 
 const char *puddle_gm_state_name(puddle_gm_state s)
@@ -42,6 +42,87 @@ void puddle_group_free(puddle_group *g)
     free(g->members);
     g->members = NULL;
     g->nmembers = 0;
+    free(g->votes);
+    g->votes = NULL;
+    g->nvotes = 0;
+}
+
+void puddle_group_move(puddle_group *to, puddle_group *from)
+{
+    if (to == from)
+        return;
+    puddle_group_free(to);
+    *to = *from;
+    from->members = NULL;
+    from->nmembers = 0;
+    from->votes = NULL;
+    from->nvotes = 0;
+}
+
+int puddle_group_may_remove(const puddle_group *g, const char *remover, const char *target)
+{
+    const puddle_gmember *r = puddle_group_member(g, remover), *t = puddle_group_member(g, target);
+    if (!r || !t || r->state != PUDDLE_GM_MEMBER || t->state == PUDDLE_GM_LEFT || !strcmp(remover, target))
+        return 0;
+    return !strcmp(remover, g->creator) || !strcmp(remover, t->by);
+}
+
+/* a vote that counts: from someone in, against someone still in or invited, newer than the invitation that brought them */
+static int vote_counts(const puddle_group *g, const puddle_gvote *v)
+{
+    const puddle_gmember *by = puddle_group_member(g, v->by), *t = puddle_group_member(g, v->member);
+    return by && t && by->state == PUDDLE_GM_MEMBER && t->state != PUDDLE_GM_LEFT && strcmp(v->by, v->member) != 0 && v->ts > t->invited;
+}
+
+size_t puddle_group_votes_against(const puddle_group *g, const char *target)
+{
+    size_t n = 0;
+    for (size_t i = 0; i < g->nvotes; i++)
+        n += !strcmp(g->votes[i].member, target) && vote_counts(g, &g->votes[i]);
+    return n;
+}
+
+size_t puddle_group_votes_needed(const puddle_group *g, const char *target)
+{
+    size_t others = 0;
+    for (size_t i = 0; i < g->nmembers; i++)
+        others += g->members[i].state == PUDDLE_GM_MEMBER && strcmp(g->members[i].id, target) != 0;
+    return others / 2 + 1; /* more than half of them */
+}
+
+size_t puddle_group_settle_votes(puddle_group *g)
+{
+    size_t out = 0;
+    for (int again = 1; again;) {
+        again = 0; /* someone taken out changes how many it takes to take out the others, and their own votes stop counting */
+        for (size_t i = 0; i < g->nmembers && !again; i++) {
+            puddle_gmember *t = &g->members[i];
+            if (t->state == PUDDLE_GM_LEFT || puddle_group_votes_against(g, t->id) < puddle_group_votes_needed(g, t->id))
+                continue;
+            int64_t ts = 0; /* taken out when the newest vote that counts was cast, the same on every Puddle that has those votes */
+            for (size_t k = 0; k < g->nvotes; k++)
+                if (!strcmp(g->votes[k].member, t->id) && vote_counts(g, &g->votes[k]) && g->votes[k].ts > ts)
+                    ts = g->votes[k].ts;
+            t->state = PUDDLE_GM_LEFT;
+            t->ts = ts;
+            out++;
+            again = 1;
+        }
+    }
+    size_t keep = 0;
+    for (size_t i = 0; i < g->nvotes; i++)
+        if (vote_counts(g, &g->votes[i]))
+            g->votes[keep++] = g->votes[i];
+    g->nvotes = keep;
+    return out;
+}
+
+int puddle_group_has_voted(const puddle_group *g, const char *voter, const char *target)
+{
+    for (size_t i = 0; i < g->nvotes; i++)
+        if (!strcmp(g->votes[i].by, voter) && !strcmp(g->votes[i].member, target) && vote_counts(g, &g->votes[i]))
+            return 1;
+    return 0;
 }
 
 puddle_gmember *puddle_group_member(const puddle_group *g, const char *id)
@@ -108,7 +189,7 @@ static char *read_record(puddle_groups *s, const char *id, size_t *len)
 
 static char *encode(const puddle_group *g, size_t *out_len)
 {
-    size_t cap = 2048 + g->nmembers * 600 + strlen(g->name) * 6 + strlen(g->create_event) * 6 + strlen(g->join_event) * 6;
+    size_t cap = 2048 + g->nmembers * 600 + g->nvotes * 200 + strlen(g->name) * 6 + strlen(g->create_event) * 6 + strlen(g->join_event) * 6;
     char *buf = (char *)malloc(cap);
     if (!buf)
         return NULL;
@@ -146,9 +227,22 @@ static char *encode(const puddle_group *g, size_t *out_len)
         if (g->members[i].told)
             puddle_jw_flag(&w, "told", 1);
         puddle_jw_num(&w, "ts", g->members[i].ts);
+        puddle_jw_num(&w, "invited", g->members[i].invited);
         puddle_jw_end_object(&w);
     }
     puddle_jw_end_array(&w);
+    if (g->nvotes) {
+        puddle_jw_key(&w, "votes");
+        puddle_jw_array(&w);
+        for (size_t i = 0; i < g->nvotes; i++) {
+            puddle_jw_object(&w);
+            puddle_jw_str(&w, "by", g->votes[i].by);
+            puddle_jw_str(&w, "member", g->votes[i].member);
+            puddle_jw_num(&w, "ts", g->votes[i].ts);
+            puddle_jw_end_object(&w);
+        }
+        puddle_jw_end_array(&w);
+    }
     puddle_jw_end_object(&w);
     size_t n = puddle_jw_finish(&w);
     if (!n) {
@@ -184,6 +278,7 @@ static int decode(const char *json, size_t len, const char *expect_id, puddle_gr
     else if (!strcmp(tmp, "in")) g->my = PUDDLE_GROUP_IN;
     else if (!strcmp(tmp, "left")) g->my = PUDDLE_GROUP_LEFT;
     else if (!strcmp(tmp, "declined")) g->my = PUDDLE_GROUP_DECLINED;
+    else if (!strcmp(tmp, "removed")) g->my = PUDDLE_GROUP_REMOVED;
     else return -1;
     puddle_span jv;
     int jrc = puddle_json_member(json, len, "join", &jv);
@@ -236,8 +331,44 @@ static int decode(const char *json, size_t len, const char *expect_id, puddle_gr
             puddle_group_free(g);
             return -1;
         }
+        puddle_span inv;
+        int irc2 = puddle_json_member(item.p, item.len, "invited", &inv);
+        if (irc2 < 0 || (irc2 == 0 && puddle_json_int64(inv, &m->invited) != 0)) {
+            puddle_group_free(g);
+            return -1;
+        }
+        if (irc2 != 0)
+            m->invited = m->ts; /* a record from before removals: their last change is the best we know */
     }
     if (r < 0) {
+        puddle_group_free(g);
+        return -1;
+    }
+    puddle_span votes;
+    int vrc = puddle_json_member(json, len, "votes", &votes);
+    if (vrc < 0) {
+        puddle_group_free(g);
+        return -1;
+    }
+    cursor = 0;
+    while (vrc == 0 && (r = puddle_json_array_next(votes, &cursor, &item)) == 1) {
+        puddle_gvote v;
+        memset(&v, 0, sizeof v);
+        if (member_str(item.p, item.len, "by", v.by, sizeof v.by) != 0 || !puddle_id_valid(v.by) ||
+            member_str(item.p, item.len, "member", v.member, sizeof v.member) != 0 || !puddle_id_valid(v.member) ||
+            member_int(item.p, item.len, "ts", &v.ts) != 0 || g->nvotes >= PUDDLE_GROUP_MAX_MEMBERS * PUDDLE_GROUP_MAX_MEMBERS) {
+            puddle_group_free(g);
+            return -1;
+        }
+        puddle_gvote *more = (puddle_gvote *)realloc(g->votes, (g->nvotes + 1) * sizeof *more);
+        if (!more) {
+            puddle_group_free(g);
+            return -1;
+        }
+        g->votes = more;
+        g->votes[g->nvotes++] = v;
+    }
+    if (vrc == 0 && r < 0) {
         puddle_group_free(g);
         return -1;
     }

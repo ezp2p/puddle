@@ -1,0 +1,16 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: MemberVote
+description: A vote to take someone out of a group.
+allOf:
+  - $ref: "header.yaml"
+  - type: object
+    required: [type, member]
+    properties:
+      type: { const: "member.vote" }
+      member: { $ref: "../wire/ids.yaml#/$defs/UserId", description: The one voted against; never the sender }
+unevaluatedProperties: false
+x-sent-by: any member
+x-rules:
+  - From a member, against someone else in or invited; one each
+  - Counts while the voter is still in and newer than the invitation that brought `member` in
+  - When the votes that count are more than half of the members other than `member`, they are out, at the newest of those votes
