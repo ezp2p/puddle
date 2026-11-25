@@ -88,7 +88,7 @@ port.
 The core (storage, identity, streams, the HTTPS server) is C++20 on 
 OpenSSL 3, shared by `puddled`, the headless Puddle, and by the desktop app, 
 which is Qt 6 (Quick/QML). Configuration and profiles are YAML, read with 
-libyaml. Calls (docs/calls.md) use libdatachannel for WebRTC; without it 
+libyaml. Calls ([design](https://www.ezp2p.org/wiki/puddle/design/calls/)) use libdatachannel for WebRTC; without it 
 everything else still builds, and the Puddle has no calls. The app plays 
 and records a call's sound with Qt Multimedia and libopus, and cancels echo 
 with webrtc-audio-processing (or speexdsp, where that isn't packaged); 
@@ -103,7 +103,7 @@ its video is H.264 with OpenH264.
 
 Getting started is as simple as downloading the app from [our releases][releases-url] and running it: Windows, macOS
 and Linux (an AppImage), or `puddled` alone for a server. The newest build of `dev`, untested beyond the automated tests,
-is always at [dev-build](https://github.com/ezp2p/puddle/releases/tag/dev-build). See `docs/releases.md`.
+is always at [dev-build](https://github.com/ezp2p/puddle/releases/tag/dev-build). See [Builds and releases](https://www.ezp2p.org/wiki/puddle/releases/).
 
 You can preconfigure with the configuration file.
 
@@ -119,7 +119,7 @@ There are no official installation steps just yet. We just ship compiled
 binaries for you to run.
 
 To run the headless Puddle in Docker, take [compose.yaml](compose.yaml) and [.env.example](.env.example) (as `.env`),
-and see [docs/docker.md](docs/docker.md):
+and see [Docker](https://www.ezp2p.org/wiki/puddle/docker/) on the wiki:
 
 ```sh
 docker compose up -d                      # with PUDDLE_ADVERTISE set in .env
@@ -139,18 +139,8 @@ TBD
 <!-- ROADMAP -->
 ## Roadmap
 
-- [x] Basic direct messages
-- [x] Basic group messages
-- [ ] Configurable profiles
-- [x] Files, photos and videos in chats
-- [ ] Emojis
-- [ ] Voice, video
-- [ ] Improved server-client experience
-- [ ] iPhone and Android apps
-- [ ] Community servers, with voice/video lobbies
-
-See [open issues](https://github.com/ezp2p/puddle/issues)
-for a full list of proposed features (and known issues).
+What is planned, under way and done is on the [ezp2p project board](https://github.com/orgs/ezp2p/projects/1). How
+Puddle is designed is on the [wiki](https://www.ezp2p.org/wiki/puddle/design/), with the [decisions](https://www.ezp2p.org/wiki/decisions/) made along the way.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
