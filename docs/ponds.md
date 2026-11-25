@@ -47,8 +47,8 @@ Each joined Pond has a thread (`federation/ponds.cpp`) that loops:
    each channel it holds nothing of yet.
 2. It holds `GET /pond/v1/events?after=<cursor>` open. The Pond answers the moment anything happens, or empty after
    25 seconds.
-3. It applies the events (messages, channels made, changed and deleted, members joining, leaving or changing their
-   profile, the Pond renamed) and moves the cursor. A new channel's newest messages are fetched next.
+3. It applies the events (messages sent, edited and deleted, channels made, changed and deleted, members joining, leaving or
+   changing their profile, the Pond renamed) and moves the cursor. A new channel's newest messages are fetched next.
 
 If the Pond can't be reached, the status is `unreachable` and the thread backs off from 2 seconds to 60. A `404` that
 is not about a channel means the Pond no longer knows us (we were removed). The status becomes `removed`, following
@@ -136,6 +136,37 @@ the store. When a file arrives the Pond's `version` changes, so the app looks ag
 **Bandwidth.** The owner's limits apply as between Puddles: nothing over `files.max_size` is fetched, and nothing over
 `files.auto_download` without being asked. A busy Pond can still mean many small files a day; this is the cost of
 not waiting on downloads, and why only the kept messages' files are fetched by themselves.
+
+## Editing and deleting
+
+A Pond of protocol 14 (feature `message_edits`; the Pond's design, "Editing and deleting messages") lets a member edit and
+delete their own messages, and whoever may `manage_messages` in a channel (operators and administrators everywhere) delete
+anyone's there. What was edited or deleted is not lost on the Pond: it keeps a **message log**, every text a message had and
+its files, for whoever may `view_message_log`, until someone who may do both erases a deleted message for good.
+
+- **Hearing of it.** `message_edited` carries the message as it reads now, with `edited` (ms): the Puddle puts it in place of
+  what it keeps of that message. `message_deleted` (`{id, channel}`) makes it forget the message; the fetcher then lets go of
+  its files, as for any message no longer kept. An edit or deletion of a message the Puddle doesn't keep changes nothing, and
+  an "edit" that names another author is ignored. The Pond rewrites its earlier events too, so catching up never brings back
+  what was taken back.
+- **Ours.** `POST /api/v1/ponds/{pond}/channels/{channel}/messages/{message}/edit {body?, files?}` (`files`: the ids it keeps;
+  an edit only drops files) and `/delete`, relayed to the Pond. Once the Pond says yes the Puddle keeps the change at once,
+  rather than waiting for the event. A Pond without the feature is `409 no_edits`.
+- **The log.** `GET .../channels/{channel}/log?before=&limit=` (newest first) and `.../messages/{message}/versions` (one
+  message), relayed and cleaned as everything from a Pond is: each message with `deleted` (`{ts, by}`), `versions`
+  (`[{text, ts, until, files}]`), `removed` (the ids of files an edit dropped), and its files written as a message's, with what
+  is here of each. A file of the log is fetched with the message's `/files/{file}/download`: the fetcher, not finding the
+  message kept or in the channel's history, asks the Pond for its versions to learn the size. `.../messages/{message}/purge`
+  erases a deleted one.
+
+In the window (`chat/PondPage.qml`), as in a conversation: hovering a message shows a pencil (ours) and a bin (ours, or anyone's
+for whoever may manage messages there), and its right-click menu Edit and Delete…. Editing is in place: Enter saves, Esc
+cancels, Up in an empty box edits our last message, and each file has a cross to take it off (an edit with no words and no
+files left asks to delete instead). Deleting asks first. An edited message shows "(edited)", with when on hovering. Whoever may
+read the log there has a clock in the channel's header that opens it (`chat/MessageLog.qml`), and Edit history in an edited
+message's menu: each message with who deleted it and when, every earlier text, its files to save, and Erase for good… (asking
+first) for whoever may also manage messages. Roles and a channel's Permissions show the two new permissions where the Pond
+has them.
 
 ## Pictures
 
@@ -284,7 +315,8 @@ stream it already follows.
 
 - `pond.json`: the Pond as it last told us (with its protocol and features), our cursor, its address and certificate.
 - `members.jsonl`: one member per line, with the profile they chose for the Pond.
-- `<channel id>.jsonl`: the newest messages of a channel, at most 200, with what each says of its files.
+- `<channel id>.jsonl`: the newest messages of a channel, at most 200, with what each says of its files, and when it was last
+  edited. A deleted one is taken out.
 - `files.txt`: the files the fetcher holds in the file store for this Pond's messages (see "Files"). The files
   themselves are in `<data_dir>/files/`, with every other file.
 
@@ -303,7 +335,10 @@ Leaving deletes the folder.
 | `GET /api/v1/ponds/{pond}` | The Pond, with `me` and its `members` |
 | `GET /api/v1/ponds/{pond}/channels/{channel}/messages?before=&limit=` | Oldest first, `{items, more}`. From what is kept when it can answer, else from the Pond. |
 | `POST /api/v1/ponds/{pond}/channels/{channel}/messages/send` | `{body, files}`. Each file is sent to the Pond first; the message is sent with a nonce, so a retry never posts twice. |
-| `POST /api/v1/ponds/{pond}/channels/{channel}/messages/{message}/files/{file}/download` | Fetch a file that did not come by itself (`204`) |
+| `POST /api/v1/ponds/{pond}/channels/{channel}/messages/{message}/files/{file}/download` | Fetch a file that did not come by itself, or one the message log shows (`204`) |
+| `POST /api/v1/ponds/{pond}/channels/{channel}/messages/{message}/edit` | `{body?, files?}`: ours; answers the message as it now reads (protocol 14) |
+| `POST /api/v1/ponds/{pond}/channels/{channel}/messages/{message}/delete`, `/purge` | Delete (ours, or with `manage_messages`); erase a deleted one for good |
+| `GET /api/v1/ponds/{pond}/channels/{channel}/log`, `.../messages/{message}/versions` | The message log, `?before=&limit=`; one message's (with `view_message_log`) |
 | `POST /api/v1/ponds/{pond}/profile` | `{profile}`: id or null |
 | `POST /api/v1/ponds/{pond}/leave` | Tells the Pond if it can be reached, and forgets it either way |
 | `POST /api/v1/ponds/{pond}/offer/accept`, `/offer/decline` | Answer the role the Pond offers (`404 no_offer` if none): `{role}` |
@@ -325,7 +360,7 @@ Leaving deletes the folder.
 | `POST /api/v1/ponds/{pond}/admin/invites/{token}/revoke` | It stops working at once |
 
 Errors: `no_pond`, `no_channel` and `no_profile` are `404`. `bad_text` is `400`. `slow_down` is `429`.
-`invite_refused`, `removed`, `muted`, `no_file`, `files_off`, `too_large`, `no_pictures` and `no_role` are `409`. `no_picture` is `404`. The admin routes pass on
+`invite_refused`, `removed`, `muted`, `no_file`, `files_off`, `too_large`, `no_pictures`, `no_role` and `no_edits` are `409`. `no_picture` is `404`. The admin routes pass on
 what the Pond says: `204` when done, `400` with a `message` to show, `404 no_channel` or `unknown_role`, `409 outranked`, `not_yourself` or `channels_changed`. `unreachable`, `not_a_pond`, `certificate_changed`, `not_proven` and `failed` are `502`.
 
 ## Voice channels
@@ -412,7 +447,9 @@ open channel instead of the open chat.
 - Thumbnails, so a channel of large photos does not fetch each whole to show it.
 - Asking again, refusals and the other notes between Puddles (`docs/files.md`) do not apply to a Pond: it serves
   any member.
-- Mentions, replies, edits and reactions.
+- Mentions, replies and reactions.
+- A message deleted while the window shows it from further back than the newest page stays on screen until the channel is
+  opened again (it is gone from what is kept, and from the Pond).
 - In a voice channel: a phone (roadmap 9.3). Push to talk works only while the window is in front. More than 16 cameras and
   screens at once are not all watched.
 - An application waiting is not remembered by the Puddle: the owner joins again (or presses Check again) to see where it

@@ -456,10 +456,88 @@ paths:
       tags: [ponds]
       summary: "Fetch a file a Pond message carries that did not come by itself"
       description: |
-        One over files.auto_download, or in a message older than the newest 200 of its channel. It is fetched from the Pond
+        One over files.auto_download, in a message older than the newest 200 of its channel, or in the message log (a deleted
+        message's, or one an edit dropped: for an owner who may read the log there). It is fetched from the Pond
         soon, and kept for a week past its message. Watch the message's file `state` and `received`. `removed` (409).
       responses:
         "204": { description: It will be fetched }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/ponds/{pond}/channels/{channel}/messages/{message}/edit:
+    parameters:
+      - { $ref: "#/components/parameters/Pond" }
+      - { $ref: "#/components/parameters/Channel" }
+      - { name: message, in: path, required: true, schema: { type: integer, minimum: 1 } }
+    post:
+      tags: [ponds]
+      summary: Edit one of our messages in a Pond (protocol 14; docs/ponds.md, "Editing and deleting")
+      description: |
+        `body` the new words (may be empty while it keeps a file), `files` the ids of the files it keeps (an edit only drops
+        them). Kept here at once, and every other member's Puddle hears of it from the Pond. `no_edits` (409: the Pond is too
+        old); the Pond's `bad_text`, `bad_file` (400), `no_message` (404), `muted` (409) are passed on.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                body: { type: string, maxLength: 4000 }
+                files: { type: array, maxItems: 10, items: { type: string, pattern: "^[0-9a-f]{64}$" } }
+      responses:
+        "200": { description: The message as it now reads, content: { application/json: { schema: { $ref: "objects/pond.yaml#/$defs/Message" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/ponds/{pond}/channels/{channel}/messages/{message}/delete:
+    parameters:
+      - { $ref: "#/components/parameters/Pond" }
+      - { $ref: "#/components/parameters/Channel" }
+      - { name: message, in: path, required: true, schema: { type: integer, minimum: 1 } }
+    post:
+      tags: [ponds]
+      summary: Delete a message in a Pond (protocol 14)
+      description: |
+        Ours, or anyone's where the owner may `manage_messages`. No longer kept here once the Pond has said yes; every other
+        member's Puddle forgets it too. The Pond's `no_permission` (409) and `no_message` (404) are passed on; `no_edits` (409).
+      responses:
+        "204": { description: Deleted }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/ponds/{pond}/channels/{channel}/messages/{message}/purge:
+    parameters:
+      - { $ref: "#/components/parameters/Pond" }
+      - { $ref: "#/components/parameters/Channel" }
+      - { name: message, in: path, required: true, schema: { type: integer, minimum: 1 } }
+    post:
+      tags: [ponds]
+      summary: Erase a deleted message from the Pond for good, with its files (protocol 14; manage_messages and view_message_log)
+      responses:
+        "204": { description: Erased }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/ponds/{pond}/channels/{channel}/messages/{message}/versions:
+    parameters:
+      - { $ref: "#/components/parameters/Pond" }
+      - { $ref: "#/components/parameters/Channel" }
+      - { name: message, in: path, required: true, schema: { type: integer, minimum: 1 } }
+    get:
+      tags: [ponds]
+      summary: One message with every text it had (protocol 14; view_message_log), its files with what is here of each
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "objects/pond.yaml#/$defs/LoggedMessage" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/ponds/{pond}/channels/{channel}/log:
+    parameters: [{ $ref: "#/components/parameters/Pond" }, { $ref: "#/components/parameters/Channel" }]
+    get:
+      tags: [ponds]
+      summary: The channel's message log (protocol 14; view_message_log), newest first
+      description: |
+        Its messages that were edited or deleted, each with every text it had and its files, which can be fetched to save with
+        the message's `/files/{file}/download` like any other.
+      parameters:
+        - { name: before, in: query, schema: { type: integer, minimum: 1 }, description: Only messages with a lower id }
+        - { $ref: "#/components/parameters/Limit" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: object, properties: { items: { type: array, items: { $ref: "objects/pond.yaml#/$defs/LoggedMessage" } } } }
         "404": { $ref: "#/components/responses/NotFound" }
   /api/v1/ponds/{pond}/profile:
     parameters: [{ $ref: "#/components/parameters/Pond" }]

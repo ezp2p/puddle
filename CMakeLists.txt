@@ -344,6 +344,7 @@ if(PUDDLE_BUILD_GUI)
         src/gui/qml/dialogs/ProfileDialog.qml
         src/gui/qml/chat/ChatPage.qml
         src/gui/qml/chat/PondPage.qml
+        src/gui/qml/chat/MessageLog.qml
         src/gui/qml/chat/PageView.qml
         src/gui/qml/chat/MediaTile.qml
         src/gui/qml/components/WrapRadio.qml
@@ -498,7 +499,7 @@ enable_testing()
 # Each layer of src/ includes only the layers it may (tests/layers.cmake).
 add_test(NAME layers COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_CURRENT_SOURCE_DIR}/src -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/layers.cmake)
 
-foreach(t http json seal backup levee store storage files transfers people conversations config yaml profile encoding identity auth reqsig phrase serve router routes link group groupapi groupowner streams ratelimit access owner_streams client outbox inbound open_request flow message messages keysync devices protocol_vectors wireprofile profiles e2e group_e2e call groupcall)
+foreach(t http json seal backup levee store storage files transfers people conversations config yaml profile encoding identity auth reqsig phrase serve router routes link group groupapi groupowner streams ratelimit access owner_streams client outbox inbound open_request flow message messages keysync devices protocol_vectors wireprofile profiles e2e group_e2e call groupcall ponds)
   add_executable(${t}_test tests/${t}_test.c)
   target_link_libraries(${t}_test PRIVATE puddle_service)
   add_test(NAME ${t} COMMAND ${t}_test)

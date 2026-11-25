@@ -118,7 +118,21 @@ $defs:
       author: { $ref: "../wire/ids.yaml#/$defs/UserId" }
       text: { type: string, maxLength: 4000, description: May be empty when there are files }
       ts: { type: integer, description: ms, by the Pond's clock }
+      edited: { type: integer, description: "When it was last edited (ms), as the Pond says (protocol 14); left out when it never was" }
       files:
         type: array
         description: Left out when there are none. Each as a conversation's message has them, with what is here of it.
         items: { $ref: "file.yaml" }
+  LoggedMessage:
+    description: 'A message of a channel''s message log (protocol 14; docs/ponds.md, "Editing and deleting"): edited or deleted'
+    allOf:
+      - { $ref: "#/$defs/Message" }
+      - type: object
+        properties:
+          text: { type: string, description: "What it said last: when it was deleted, for a deleted one" }
+          deleted: { type: object, description: Left out while it is not deleted, properties: { ts: { type: integer }, by: { type: string, description: "A member's id, or pondctl" } } }
+          removed: { type: array, items: { type: string }, description: The ids of its files an edit dropped }
+          versions:
+            type: array
+            description: Every earlier text, oldest first, with when it was written and replaced, and the ids of the files it carried then
+            items: { type: object, properties: { text: { type: string }, ts: { type: integer }, until: { type: integer }, files: { type: array, items: { type: string } } } }

@@ -625,7 +625,7 @@ changed in place; routes stay visible; no unsealed fallback).
 
 ## Later, not planned in detail
 
-A display name for the group-only connection, more of Ponds (docs/ponds.md, "Not yet"), encrypting data
+Removing a member, more of Ponds (docs/ponds.md, "Not yet"), encrypting data
 at rest. Parked questions are in
 `discuss-later.md`.
 
@@ -637,3 +637,4 @@ at rest. Parked questions are in
 | 2 | Showing the phrase | `puddled` prints once on first run (terminal only, else `--init`). The app shows it once, in a small first-run screen. |
 | 3 | TLS trust | Self-generated certificates, accept any, record the fingerprint, announce changes in the signed address record. Replaced by phase 6 (receipts), and that by phase 10: TLS is transport only, and nothing depends on a certificate. |
 | 4 | Retries | Offline: every 5 minutes for a day, then every 30, and at once when they are heard from. Anything else fails once; the reason is kept. |
+| 5 | A name for the group-only connection | **Scoped stream**, the name it already has. No other name (Brook, Rill, Tributary were floated). |
