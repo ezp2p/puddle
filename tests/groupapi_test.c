@@ -930,6 +930,66 @@ int main(void)
         CHECK(!puddle_group_open_with(&ctx, dave.uid));
     }
 
+    /* ---- we are taken out ---- */
+    {
+        char gx[53], ev[800];
+        reply *r;
+        clock_now += 100000;
+        char *pk = package(&alice, &alice, NULL, "Alice again", "abababababababababababababababab", T0 + 95, clock_now, roster(&alice, &me, ""), NULL, gx, sizeof gx);
+        CHECK(post_as(&alice, "/stream/v1/group/invite", pk)->status == 202);
+        free(pk);
+        CHECK(puddle_group_accept(&ctx, gx, &code) == 0 && my_state(gx, PUDDLE_GROUP_IN));
+        /* alice made it and invited us: she may */
+        clock_now += 100;
+        CHECK(puddle_group_remove_build(gx, alice.uid, clock_now, me.uid, ev, sizeof ev) > 0);
+        r = deliver_one(&alice, gx, &alice, ev);
+        CHECK(has_text(r, "\"accepted\":[\"") && my_state(gx, PUDDLE_GROUP_REMOVED) && in_state(gx, me.uid, PUDDLE_GM_LEFT));
+        /* what she writes there now is not for us, and we can no longer write */
+        clock_now += 100;
+        size_t ml = puddle_message_build(gx, alice.uid, clock_now, "still there?", 12, NULL, ev, sizeof ev);
+        CHECK(ml > 0 && has_text(deliver_one(&alice, gx, &alice, ev), "\"reason\":\"not_in_group\""));
+        int sent;
+        ml = puddle_message_build(gx, me.uid, puddle_event_next_ts(clock_now), "hi", 2, NULL, ev, sizeof ev);
+        CHECK(puddle_group_send_event(&ctx, gx, ev, ml, id, &sent, &code) == 409 && puddle_group_vote(&ctx, gx, alice.uid, &code) == 409);
+        /* invited back later, like anyone who left */
+        clock_now += 100;
+        pk = package(&alice, &alice, NULL, "Alice again", "abababababababababababababababab", T0 + 95, clock_now, roster(&alice, &me, ""), NULL, gx, sizeof gx);
+        CHECK(post_as(&alice, "/stream/v1/group/invite", pk)->status == 202 && my_state(gx, PUDDLE_GROUP_INVITED));
+        free(pk);
+        CHECK(puddle_group_decline(&ctx, gx, &code) == 0);
+    }
+    {
+        /* voted out: bob made it, carol is in (bob invited her, and the roster says so), bob invites us */
+        char gv[53], ev[800], extra[400];
+        clock_now += 100000;
+        snprintf(extra, sizeof extra, "{\"id\":\"%s\",\"state\":\"member\",\"ts\":%lld,\"invited\":%lld,\"by\":\"%s\"}", carol.uid, (long long)T0 + 5,
+                 (long long)T0 + 2, bob.uid);
+        char *pk = package(&bob, &bob, NULL, "Bob votes", "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd", T0 + 1, clock_now, roster(&bob, &me, extra), NULL, gv, sizeof gv);
+        CHECK(post_as(&bob, "/stream/v1/group/invite", pk)->status == 202);
+        free(pk);
+        puddle_group g;
+        CHECK(puddle_groups_get(gs, gv, &g) == 0 && !strcmp(puddle_group_member(&g, carol.uid)->by, bob.uid) && puddle_group_member(&g, carol.uid)->invited == T0 + 2 &&
+              puddle_group_member(&g, me.uid)->invited == clock_now);
+        puddle_group_free(&g);
+        {
+            /* an invitation time later than the member's own is nonsense */
+            char bad[400], t4[53];
+            snprintf(bad, sizeof bad, "{\"id\":\"%s\",\"state\":\"member\",\"ts\":%lld,\"invited\":%lld}", carol.uid, (long long)T0 + 5, (long long)T0 + 9);
+            pk = package(&bob, &bob, NULL, "Bad", "efefefefefefefefefefefefefefefef", T0 + 1, clock_now, roster(&bob, &me, bad), NULL, t4, sizeof t4);
+            CHECK(post_as(&bob, "/stream/v1/group/invite", pk)->status == 400);
+            free(pk);
+        }
+        CHECK(puddle_group_accept(&ctx, gv, &code) == 0 && my_state(gv, PUDDLE_GROUP_IN));
+        /* carol cannot remove us (she did not invite us) but she can vote; one of the two others is not enough */
+        clock_now += 100;
+        CHECK(puddle_group_remove_build(gv, carol.uid, clock_now, me.uid, ev, sizeof ev) > 0 && has_text(deliver_one(&carol, gv, &carol, ev), "\"reason\":\"not_allowed\""));
+        CHECK(puddle_group_vote_build(gv, carol.uid, clock_now, me.uid, ev, sizeof ev) > 0 && has_text(deliver_one(&carol, gv, &carol, ev), "\"accepted\":[\""));
+        CHECK(my_state(gv, PUDDLE_GROUP_IN));
+        clock_now += 100;
+        CHECK(puddle_group_vote_build(gv, bob.uid, clock_now, me.uid, ev, sizeof ev) > 0 && has_text(deliver_one(&bob, gv, &bob, ev), "\"accepted\":[\""));
+        CHECK(my_state(gv, PUDDLE_GROUP_REMOVED) && in_state(gv, me.uid, PUDDLE_GM_LEFT));
+    }
+
     nftw(root, rm_cb, 16, FTW_DEPTH | FTW_PHYS);
     return failures ? 1 : 0;
 }

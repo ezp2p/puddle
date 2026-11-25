@@ -74,6 +74,8 @@ const char *typeName(Message::Type t)
     case Message::Type::GroupInvite: return "group_invite";
     case Message::Type::GroupJoin: return "group_join";
     case Message::Type::GroupLeave: return "group_leave";
+    case Message::Type::GroupRemove: return "group_remove";
+    case Message::Type::GroupVote: return "group_vote";
     default: return "default";
     }
 }
@@ -287,6 +289,8 @@ std::optional<Message> Message::fromNotice(const puddle_event &ev, const std::st
     case PUDDLE_GE_INVITE: m.type_ = Type::GroupInvite; m.member_ = g.member; break;
     case PUDDLE_GE_JOIN: m.type_ = Type::GroupJoin; break;
     case PUDDLE_GE_LEAVE: m.type_ = Type::GroupLeave; break;
+    case PUDDLE_GE_REMOVE: m.type_ = Type::GroupRemove; m.member_ = g.member; break;
+    case PUDDLE_GE_VOTE: m.type_ = Type::GroupVote; m.member_ = g.member; break;
     }
     return m;
 }
@@ -401,7 +405,11 @@ void Message::write(puddle_jw *w, puddle_ctx *ctx, PartialUsers &people, const D
     if (it) {
         puddle_jw_key(w, "delivery");
         puddle_jw_object(w);
-        puddle_jw_str(w, "state", it->state == PUDDLE_OB_FAILED ? "failed" : it->attempts ? "retrying" : "queued");
+        /* undelivered: their Levee took it, then gave up before they came back (spec/06); not retried by itself. Once they are
+         * `back`, the owner may resend it or delete it. */
+        puddle_jw_str(w, "state", it->given_up ? "undelivered" : it->state == PUDDLE_OB_FAILED ? "failed" : it->attempts ? "retrying" : "queued");
+        if (it->given_up)
+            puddle_jw_flag(w, "back", it->back_ms != 0);
         if (it->reason[0])
             puddle_jw_str(w, "reason", it->reason);
         if (it->state == PUDDLE_OB_QUEUED && it->attempts)

@@ -875,6 +875,42 @@ int main(int argc, char **argv)
         CHECK(click(find("startConversationButton")));
         CHECK(until([&] { return find("memberList")->property("count").toInt() == 4; }, 5000));      /* Carol is asked: she shows as invited */
 
+        /* taking someone out: we made the group, so each of the others' menus offers Remove (and no vote), and it asks first */
+        {
+            auto memberRow = [&](const QString &name) {
+                QQuickItem *hit = nullptr;
+                walk(find("memberList"), [&](QQuickItem *i) {
+                    if (i->isVisible() && i->property("text").toString() == name && !hit)
+                        hit = i;
+                    return hit != nullptr;
+                });
+                return hit;
+            };
+            QSignalSpy bobOut(&B, &Chats::groupRemoved);
+            CHECK(until([&] { return memberRow("invited") != nullptr; }, 3000));                     /* Carol, asked and not yet in */
+            CHECK(rightClick(memberRow("invited")));
+            CHECK(until([&] { return find("memberRemove") != nullptr; }, 3000));
+            CHECK(find("memberVote") == nullptr);
+            CHECK(click(find("memberRemove")));
+            CHECK(until([&] { return find("confirmOk") != nullptr; }, 3000));
+            CHECK(click(find("confirmOk")));
+            CHECK(until([&] { return find("memberList")->property("count").toInt() == 3; }, 5000));    /* her invitation is taken back */
+            CHECK(until([&] {
+                for (QQuickItem *i : all("groupNotice"))
+                    if (i->property("text").toString().startsWith("You removed "))
+                        return true;
+                return false;
+            }, 5000));
+            /* Bob is told, and his app says so */
+            CHECK(rightClick(memberRow("Bob")));
+            CHECK(until([&] { return find("memberRemove") != nullptr; }, 3000));
+            CHECK(click(find("memberRemove")));
+            CHECK(until([&] { return find("confirmOk") != nullptr; }, 3000));
+            CHECK(click(find("confirmOk")));
+            CHECK(until([&] { return find("memberList")->property("count").toInt() == 2; }, 5000));
+            CHECK(until([&] { B.refresh(); return bobOut.count() == 1 && bobOut.at(0).at(0).toString() == "Weekend away"; }, 10000));
+        }
+
         /* leaving asks first */
         CHECK(clickName("leaveGroupButton"));
         CHECK(until([&] { return find("confirmOk") != nullptr; }, 3000));
@@ -1300,7 +1336,7 @@ int main(int argc, char **argv)
                 win->grabWindow().save(shot + "-pond-edited.png");
             QQuickItem *text = nullptr;
             for (QQuickItem *i : all("pondMessageText"))
-                if (i->property("text").toString() == "the frogs")
+                if (i->property("plain").toString() == "the frogs")
                     text = i;
             CHECK(text && rightClick(text));
             CHECK(until([&] { QQuickItem *d = find("pondMsgDelete"); return d && d->isVisible(); }, 3000));
@@ -1310,6 +1346,71 @@ int main(int argc, char **argv)
             CHECK(until([&] { return row(pm, "text", "the frogs").isEmpty(); }, 10000));
             CHECK(until([&] { return row(bm, "text", "the frogs").isEmpty(); }, 10000)); /* gone for Bob too */
             CHECK(!find("messageLogButton") || !find("messageLogButton")->isVisible()); /* a member reads no log */
+        }
+
+        /* replies, reactions and mentions (protocol 15, docs/ponds.md, "Replies, reactions and mentions"): Bob names us, and the
+         * message is marked; we reply from its menu, and react with an emoji, which Bob's Puddle hears; @ in the box names Bob,
+         * whose Puddle counts it and says so */
+        if (P.canReply()) {
+            auto *pm = static_cast<JsonListModel *>(P.messages()), *bm = static_cast<JsonListModel *>(PB.messages());
+            QSignalSpy bobMentioned(&PB, &Ponds::mentioned);
+            const QString tag = QString::number(QDateTime::currentMSecsSinceEpoch() % 1000000); /* a Pond kept from an earlier run */
+            PB.send("ribbit" + tag + " <@" + P.myId() + ">");
+            CHECK(until([&] { return row(pm, "shown", "ribbit" + tag + " @Ann").value("mentionsMe").toBool(); }, 10000));
+            CHECK(until([&] {
+                for (QQuickItem *i : all("pondMentionMark"))
+                    if (i->isVisible())
+                        return true;
+                return false;
+            }, 3000));
+            const QString ribbit = row(pm, "shown", "ribbit" + tag + " @Ann").value("id").toString();
+            QQuickItem *text = nullptr;
+            for (QQuickItem *i : all("pondMessageText"))
+                if (i->property("plain").toString() == "ribbit" + tag + " @Ann")
+                    text = i;
+            CHECK(text && rightClick(text));
+            CHECK(until([&] { QQuickItem *r = find("pondMsgReply"); return r && r->isVisible(); }, 3000));
+            CHECK(click(find("pondMsgReply")));
+            CHECK(until([&] { QQuickItem *b = find("pondReplyBar"); return b && b->isVisible(); }, 3000));
+            CHECK(clickName("pondComposer"));
+            typeText("hello bob" + tag);
+            key(Qt::Key_Return);
+            CHECK(until([&] { return row(pm, "text", "hello bob" + tag).value("replyTo").toString() == ribbit; }, 10000));
+            CHECK(row(pm, "text", "hello bob" + tag).value("replyName").toString() == "Bob");
+            CHECK(until([&] { return row(bm, "text", "hello bob" + tag).value("replyText").toString() == "ribbit" + tag + " @Ann"; }, 10000));
+            CHECK(!find("pondReplyBar") || !find("pondReplyBar")->isVisible());
+            /* a reaction, from the message's menu and the picker; clicked again, taken back */
+            text = nullptr;
+            for (QQuickItem *i : all("pondMessageText"))
+                if (i->property("plain").toString() == "ribbit" + tag + " @Ann")
+                    text = i;
+            CHECK(text && rightClick(text));
+            CHECK(until([&] { QQuickItem *r = find("pondMsgReact"); return r && r->isVisible(); }, 3000));
+            CHECK(click(find("pondMsgReact")));
+            CHECK(until([&] { QQuickItem *e = find("emojiChoice"); return e && e->isVisible(); }, 3000));
+            CHECK(click(find("emojiChoice")));
+            auto reacted = [&](JsonListModel *m, bool mine) {
+                const QJsonArray r = row(m, "id", ribbit).value("reactions").toArray();
+                return r.size() == 1 && r.at(0).toObject().value("count").toInt() == 1 && r.at(0).toObject().value("mine").toBool() == mine;
+            };
+            CHECK(until([&] { return reacted(pm, true); }, 10000));
+            CHECK(until([&] { return reacted(bm, false); }, 10000)); /* Bob's Puddle heard */
+            settle(300);
+            if (!shot.isEmpty())
+                win->grabWindow().save(shot + "-pond-reply-react.png");
+            CHECK(until([&] { QQuickItem *c = find("pondReaction"); return c && c->isVisible(); }, 3000));
+            CHECK(click(find("pondReaction")));
+            CHECK(until([&] { return row(pm, "id", ribbit).value("reactions").toArray().isEmpty(); }, 10000));
+            /* @ in the box: Bob is offered, Enter takes him, and his Puddle is told */
+            CHECK(clickName("pondComposer"));
+            typeText("hey @Bo");
+            CHECK(until([&] { QQuickItem *m = find("pondMentionChoice"); return m && m->isVisible(); }, 3000));
+            key(Qt::Key_Return);
+            typeText("look" + tag);
+            key(Qt::Key_Return);
+            CHECK(until([&] { return row(bm, "shown", "hey @Bob look" + tag).value("mentionsMe").toBool(); }, 10000));
+            CHECK(row(pm, "shown", "hey @Bob look" + tag).value("text").toString() == "hey <@" + PB.myId() + "> look" + tag);
+            CHECK(until([&] { return bobMentioned.count() == 1 && PB.mentionsTotal() == 1; }, 10000));
         }
 
         /* the owner is made an operator, from pondctl: Server Settings, where the icon is set */
@@ -1324,9 +1425,12 @@ int main(int argc, char **argv)
                 PB.send("bob's secret");
                 CHECK(until([&] { return !row(pm, "text", "bob's secret").isEmpty(); }, 10000));
                 QQuickItem *text = nullptr;
-                for (QQuickItem *i : all("pondMessageText"))
-                    if (i->property("text").toString() == "bob's secret")
-                        text = i;
+                until([&] { /* shown once the list has made room for it */
+                    for (QQuickItem *i : all("pondMessageText"))
+                        if (i->property("plain").toString() == "bob's secret")
+                            text = i;
+                    return text != nullptr;
+                }, 5000);
                 CHECK(text && rightClick(text));
                 CHECK(until([&] { QQuickItem *d = find("pondMsgDelete"); return d && d->isVisible(); }, 3000));
                 CHECK(!find("pondMsgEdit") || !find("pondMsgEdit")->isVisible()); /* his to edit, not ours */

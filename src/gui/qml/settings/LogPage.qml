@@ -560,6 +560,36 @@ Pane {
                             Accessible.name: qsTr("Pond voice straight to the Pond")
                         }
                     }
+                    // what the Levee gave up on before this Puddle came back: from whom and when, never what (it held it sealed)
+                    ColumnLayout {
+                        objectName: "leveeDropped"
+                        visible: page.chats.leveeDropped.length > 0
+                        Layout.fillWidth: true
+                        Layout.topMargin: 4
+                        spacing: 2
+                        Label {
+                            Layout.fillWidth: true
+                            wrapMode: Text.Wrap
+                            color: Theme.warning
+                            text: qsTr("Expired at your Levee before you came back. It can't say what they were; ask them to send them again.")
+                        }
+                        Repeater {
+                            model: page.chats.leveeDropped
+                            Label {
+                                required property var modelData
+                                Layout.fillWidth: true
+                                wrapMode: Text.Wrap
+                                opacity: 0.65
+                                font.pixelSize: 12
+                                text: qsTr("From %1, %2").arg(modelData.name).arg(new Date(modelData.received).toLocaleString(Qt.locale(), Locale.ShortFormat))
+                            }
+                        }
+                        Button {
+                            objectName: "clearLeveeDroppedButton"
+                            text: qsTr("Clear")
+                            onClicked: page.chats.clearLeveeDropped()
+                        }
+                    }
                     Button {
                         objectName: "leaveLeveeButton"
                         visible: page.chats.leveeJoined

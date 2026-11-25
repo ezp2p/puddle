@@ -8,3 +8,7 @@ properties:
   state: { type: string, enum: [invited, member] }
   invited_by: { $ref: "partial_user.yaml", description: Absent for the creator }
   since: { $ref: "../wire/ids.yaml#/$defs/Timestamp", description: The time of the event that put them in this state }
+  can_remove: { type: boolean, description: "The owner may take them out straight away: the owner made the group, or invited them" }
+  votes: { type: integer, minimum: 0, description: The votes to take them out that count now }
+  votes_needed: { type: integer, minimum: 1, description: "How many votes take them out: more than half of the members other than them" }
+  voted: { type: boolean, description: The owner has voted to take them out }

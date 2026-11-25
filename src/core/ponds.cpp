@@ -38,6 +38,11 @@ struct Msg {
     int64_t edited = 0; /* when it was last edited, as the Pond says (protocol 14); 0 never */
     std::string author, text;
     std::string files; /* the cleaned "files" array, or "" for none */
+    /* protocol 15 (the Pond's docs/design.md, "Replies, reactions and mentions"), each cleaned JSON or "" for none: what it
+     * replies to ({id, author, text, files?} or {id, deleted: true}), its reactions ([{emoji, count, members}]), and whom it
+     * mentions ({members?, roles?, everyone?}) */
+    int64_t reply_to = 0;
+    std::string reply, reactions, mentions;
 };
 
 /* What a channel allows and denies one role, or everyone (role 0): permission names (the Pond's docs/design.md, "Permissions") */
@@ -125,6 +130,7 @@ struct Pond {
     bool everyone_said = false;
     int shop_payments = -1;      /* the shop takes payments: 1, 0, -1 it doesn't say (protocol 13) */
     bool shop_test = true;
+    std::map<int64_t, int64_t> mentioned; /* channel: messages that mention us, not yet seen by the owner (protocol 15) */
     int64_t voice_kicks = 0;     /* times a moderator disconnected us from voice, since this Puddle started */
     std::string voice_kicked_by;
 };
@@ -455,6 +461,141 @@ static void clean_files(puddle_span v, std::string &out)
         out.assign(buf, len);
 }
 
+#define QUOTE_MAX 200       /* characters of a reply's quote (the Pond cuts to 200, then "…") */
+#define REACTIONS_MAX 20    /* different emoji on a message */
+#define REACTORS_MAX 1000   /* members kept for one emoji: enough to know whether we are one */
+#define EMOJI_MAX_BYTES 32
+#define MENTIONS_MAX 20
+
+/* `reply`: {id, author, text, files?}, or {id, deleted: true}, cleaned into `out`; m.reply_to its id */
+static void clean_reply(puddle_span v, Msg &m)
+{
+    puddle_span r;
+    int64_t id, files;
+    std::string author, text;
+    if (!member(v, "reply", &r) || !get_int(r, "id", &id) || id < 1)
+        return;
+    puddle_jw w;
+    char buf[QUOTE_MAX * 4 * 6 + 512];
+    puddle_jw_init(&w, buf, sizeof buf);
+    puddle_jw_object(&w);
+    puddle_jw_num(&w, "id", id);
+    if (get_flag(r, "deleted") || !get_text(r, "author", PUDDLE_USER_ID_LEN, 0, author) || !puddle_id_valid(author.c_str()) ||
+        !get_text(r, "text", QUOTE_MAX + 1, 1, text)) {
+        puddle_jw_flag(&w, "deleted", 1);
+    } else {
+        puddle_jw_str(&w, "author", author.c_str());
+        puddle_jw_str(&w, "text", text.c_str());
+        if (get_int(r, "files", &files) && files > 0 && files <= PUDDLE_POND_FILES_MAX)
+            puddle_jw_num(&w, "files", files);
+    }
+    puddle_jw_end_object(&w);
+    size_t n = puddle_jw_finish(&w);
+    if (n) {
+        m.reply.assign(buf, n);
+        m.reply_to = id;
+    }
+}
+
+/* One emoji as a reaction: 1 to 32 bytes of UTF-8 with no ASCII (the Pond's rule) */
+static bool emoji_ok(const std::string &e)
+{
+    if (e.empty() || e.size() > EMOJI_MAX_BYTES)
+        return false;
+    for (unsigned char c : e)
+        if (c < 0x80)
+            return false;
+    return true;
+}
+
+/* `reactions`: [{emoji, count, members}], cleaned into `out` ("" for none) */
+static void clean_reactions(puddle_span v, std::string &out)
+{
+    puddle_span arr, item, ms, one;
+    out.clear();
+    if (!member(v, "reactions", &arr) || !arr.len || *arr.p != '[')
+        return;
+    std::string json = "[";
+    size_t cur = 0, n = 0;
+    std::set<std::string> seen;
+    while (puddle_json_array_next(arr, &cur, &item) == 1 && n < REACTIONS_MAX) {
+        std::string emoji;
+        int64_t count;
+        if (!get_text(item, "emoji", EMOJI_MAX_BYTES, 0, emoji) || !emoji_ok(emoji) || !seen.insert(emoji).second ||
+            !get_int(item, "count", &count) || count < 1)
+            continue;
+        std::string who;
+        size_t mc = 0, k = 0;
+        char id[PUDDLE_USER_ID_LEN + 1];
+        if (member(item, "members", &ms))
+            while (puddle_json_array_next(ms, &mc, &one) == 1 && k < REACTORS_MAX)
+                if (puddle_json_string(one, id, sizeof id) == 0 && puddle_id_valid(id)) {
+                    who += std::string(k++ ? ",\"" : "\"") + id + "\"";
+                }
+        std::string e(emoji.size() * 6 + 8, '\0');
+        puddle_jw ew;
+        puddle_jw_init(&ew, e.data(), e.size());
+        puddle_jw_string(&ew, emoji.c_str());
+        e.resize(puddle_jw_finish(&ew));
+        json += std::string(n++ ? "," : "") + "{\"emoji\":" + e + ",\"count\":" + std::to_string(count) + ",\"members\":[" + who + "]}";
+    }
+    if (n)
+        out = json + "]";
+}
+
+/* `mentions`: {members?, roles?, everyone?}, cleaned into `out` ("" for none) */
+static void clean_mentions(puddle_span v, std::string &out)
+{
+    puddle_span o, arr, one;
+    out.clear();
+    if (!member(v, "mentions", &o) || !o.len || *o.p != '{')
+        return;
+    std::string json;
+    if (member(o, "members", &arr)) {
+        std::string ids;
+        size_t cur = 0, k = 0;
+        char id[PUDDLE_USER_ID_LEN + 1];
+        while (puddle_json_array_next(arr, &cur, &one) == 1 && k < MENTIONS_MAX)
+            if (puddle_json_string(one, id, sizeof id) == 0 && puddle_id_valid(id))
+                ids += std::string(k++ ? ",\"" : "\"") + id + "\"";
+        if (k)
+            json += "\"members\":[" + ids + "]";
+    }
+    std::vector<int64_t> roles;
+    if (get_ids(o, "roles", roles) && !roles.empty()) {
+        std::string ids;
+        for (size_t i = 0; i < roles.size() && i < MENTIONS_MAX; i++)
+            ids += (i ? "," : "") + std::to_string(roles[i]);
+        json += std::string(json.empty() ? "" : ",") + "\"roles\":[" + ids + "]";
+    }
+    if (get_flag(o, "everyone"))
+        json += std::string(json.empty() ? "" : ",") + "\"everyone\":true";
+    if (!json.empty())
+        out = "{" + json + "}";
+}
+
+/* Does a message's `mentions` name `me`, a role in `roles`, or everyone? */
+static bool mentions_me(const std::string &mentions, const std::string &me, const std::vector<int64_t> &roles)
+{
+    if (mentions.empty() || me.empty())
+        return false;
+    puddle_span o = {mentions.data(), mentions.size()}, arr, one;
+    if (get_flag(o, "everyone"))
+        return true;
+    char id[PUDDLE_USER_ID_LEN + 1];
+    size_t cur = 0;
+    if (member(o, "members", &arr))
+        while (puddle_json_array_next(arr, &cur, &one) == 1)
+            if (puddle_json_string(one, id, sizeof id) == 0 && me == id)
+                return true;
+    std::vector<int64_t> named;
+    get_ids(o, "roles", named);
+    for (int64_t r : named)
+        if (std::find(roles.begin(), roles.end(), r) != roles.end())
+            return true;
+    return false;
+}
+
 static bool parse_message(puddle_span v, Msg &m, int64_t *channel)
 {
     std::string author;
@@ -465,6 +606,9 @@ static bool parse_message(puddle_span v, Msg &m, int64_t *channel)
     if (!get_int(v, "edited", &m.edited) || m.edited < 0)
         m.edited = 0;
     clean_files(v, m.files);
+    clean_reply(v, m);
+    clean_reactions(v, m.reactions);
+    clean_mentions(v, m.mentions);
     return true;
 }
 
@@ -724,6 +868,60 @@ static bool replace_message(Channel &c, Msg m)
     return false;
 }
 
+/* Protocol 15: the replies held to message `id` quote it as it reads now (`m`), or (null) say it is gone */
+static bool requote(Channel &c, int64_t id, const Msg *m)
+{
+    bool changed = false;
+    for (auto &held : c.recent) {
+        if (held.reply_to != id)
+            continue;
+        char buf[QUOTE_MAX * 4 * 6 + 512];
+        puddle_jw w;
+        puddle_jw_init(&w, buf, sizeof buf);
+        puddle_jw_object(&w);
+        puddle_jw_num(&w, "id", id);
+        if (!m) {
+            puddle_jw_flag(&w, "deleted", 1);
+        } else {
+            std::string text = m->text;
+            size_t chars = 0, at = 0;
+            for (; at < text.size(); at++)
+                if (((unsigned char)text[at] & 0xC0) != 0x80 && chars++ == QUOTE_MAX)
+                    break;
+            if (at < text.size())
+                text = text.substr(0, at) + "\xE2\x80\xA6";
+            puddle_jw_str(&w, "author", m->author.c_str());
+            puddle_jw_str(&w, "text", text.c_str());
+            size_t files = 0, cur = 0;
+            puddle_span arr = {m->files.data(), m->files.size()}, item;
+            while (!m->files.empty() && puddle_json_array_next(arr, &cur, &item) == 1)
+                files++;
+            if (files)
+                puddle_jw_num(&w, "files", (int64_t)files);
+        }
+        puddle_jw_end_object(&w);
+        size_t n = puddle_jw_finish(&w);
+        if (n && held.reply != std::string(buf, n)) {
+            held.reply.assign(buf, n);
+            changed = true;
+        }
+    }
+    return changed;
+}
+
+/* Protocol 15: a message's reactions as they are now ({id, channel, reactions}), in place of what is held. */
+static bool set_reactions(Channel &c, int64_t id, const std::string &reactions)
+{
+    for (auto &held : c.recent)
+        if (held.id == id) {
+            if (held.reactions == reactions)
+                return false;
+            held.reactions = reactions;
+            return true;
+        }
+    return false;
+}
+
 /* A message deleted (protocol 14): no longer kept. Its files are let go by the fetcher, as for any message no longer kept. */
 static bool drop_message(Channel &c, int64_t id)
 {
@@ -800,6 +998,18 @@ static void write_message(puddle_jw *w, int64_t channel, const Msg &m, const pud
     puddle_jw_num(w, "ts", m.ts);
     if (m.edited > 0)
         puddle_jw_num(w, "edited", m.edited);
+    if (!m.reply.empty()) {
+        puddle_jw_key(w, "reply");
+        puddle_jw_raw(w, m.reply.c_str(), m.reply.size());
+    }
+    if (!m.reactions.empty()) {
+        puddle_jw_key(w, "reactions");
+        puddle_jw_raw(w, m.reactions.c_str(), m.reactions.size());
+    }
+    if (!m.mentions.empty()) {
+        puddle_jw_key(w, "mentions");
+        puddle_jw_raw(w, m.mentions.c_str(), m.mentions.size());
+    }
     if (!m.files.empty()) {
         puddle_jw_key(w, "files");
         if (!files) {
@@ -960,6 +1170,16 @@ static void save_pond(puddle_ponds *p, const Pond &pd)
                 puddle_jw_end_object(w);
             }
         puddle_jw_end_array(w);
+        puddle_jw_key(w, "mentioned"); /* protocol 15: messages mentioning us, not yet seen, by channel */
+        puddle_jw_array(w);
+        for (auto &[cid, n] : pd.mentioned)
+            if (n > 0 && std::any_of(pd.channels.begin(), pd.channels.end(), [&](const Channel &c) { return c.id == cid; })) {
+                puddle_jw_object(w);
+                puddle_jw_num(w, "id", cid);
+                puddle_jw_num(w, "count", n);
+                puddle_jw_end_object(w);
+            }
+        puddle_jw_end_array(w);
         puddle_jw_end_object(w);
     });
     if (!data.empty())
@@ -980,7 +1200,8 @@ static void save_channel(puddle_ponds *p, const Pond &pd, const Channel &c)
 {
     std::string data;
     for (auto &m : c.recent)
-        data += build(m.text.size() * 2 + m.files.size() + 256, [&](puddle_jw *w) { write_message(w, c.id, m); }) + "\n";
+        data += build(m.text.size() * 2 + m.files.size() + m.reply.size() + m.reactions.size() + m.mentions.size() + 256,
+                      [&](puddle_jw *w) { write_message(w, c.id, m); }) + "\n";
     save_file(p, pd.id, std::to_string(c.id) + ".jsonl", data);
 }
 
@@ -1034,6 +1255,14 @@ static void load_one(puddle_ponds *p, const std::string &id)
                 c->filled = true;
                 c->complete = member(item, "complete", &v) && v.len == 4 && !memcmp(v.p, "true", 4);
             }
+        }
+    }
+    if (member(all, "mentioned", &filled)) {
+        size_t cur = 0;
+        while (puddle_json_array_next(filled, &cur, &item) == 1) {
+            int64_t cid, n;
+            if (get_int(item, "id", &cid) && get_int(item, "count", &n) && n > 0 && find_channel(pd, cid))
+                pd.mentioned[cid] = std::min<int64_t>(n, 1000000);
         }
     }
     if (read_file(pond_dir(p, id) + "/members.jsonl", data))
@@ -1317,7 +1546,8 @@ int puddle_ponds_edited(puddle_ponds *p, const char *id, const char *json, size_
     Channel *c = it == p->ponds.end() ? nullptr : find_channel(it->second, ch);
     if (!c)
         return -1;
-    if (replace_message(*c, std::move(m))) {
+    const bool quoted = requote(*c, m.id, &m);
+    if (replace_message(*c, std::move(m)) || quoted) {
         save_channel(p, it->second, *c);
         p->version++;
     }
@@ -1331,8 +1561,42 @@ int puddle_ponds_deleted(puddle_ponds *p, const char *id, int64_t channel, int64
     Channel *c = it == p->ponds.end() ? nullptr : find_channel(it->second, channel);
     if (!c)
         return -1;
-    if (drop_message(*c, message)) {
+    const bool quoted = requote(*c, message, nullptr);
+    if (drop_message(*c, message) || quoted) {
         save_channel(p, it->second, *c);
+        p->version++;
+    }
+    return 0;
+}
+
+int puddle_ponds_reacted(puddle_ponds *p, const char *id, const char *json, size_t len)
+{
+    puddle_span v = {json, len};
+    int64_t mid, ch;
+    std::string now;
+    if (!puddle_json_valid_object(json, len) || !get_int(v, "id", &mid) || !get_int(v, "channel", &ch))
+        return -1;
+    clean_reactions(v, now);
+    std::lock_guard<std::mutex> g(p->mu);
+    auto it = p->ponds.find(id);
+    Channel *c = it == p->ponds.end() ? nullptr : find_channel(it->second, ch);
+    if (!c)
+        return -1;
+    if (set_reactions(*c, mid, now)) {
+        save_channel(p, it->second, *c);
+        p->version++;
+    }
+    return 0;
+}
+
+int puddle_ponds_seen(puddle_ponds *p, const char *id, int64_t channel)
+{
+    std::lock_guard<std::mutex> g(p->mu);
+    auto it = p->ponds.find(id);
+    if (it == p->ponds.end() || !find_channel(it->second, channel))
+        return -1;
+    if (it->second.mentioned.erase(channel)) {
+        save_pond(p, it->second);
         p->version++;
     }
     return 0;
@@ -1367,18 +1631,38 @@ int puddle_ponds_events(puddle_ponds *p, const char *id, const char *json, size_
             Msg m;
             int64_t ch;
             Channel *c = parse_message(data, m, &ch) ? find_channel(pd, ch) : nullptr;
+            /* one that mentions us (protocol 15), from someone else and newer than what is held: counted until the owner sees it */
+            const bool fresh = c && (c->recent.empty() || m.id > c->recent.back().id);
+            if (c && fresh && m.author != pd.me) {
+                auto me = pd.members.find(pd.me);
+                if (mentions_me(m.mentions, pd.me, me != pd.members.end() ? me->second.roles : std::vector<int64_t>())) {
+                    pd.mentioned[c->id]++;
+                    pond_changed = true;
+                }
+            }
             if (c && c->filled && append(*c, std::move(m)))
                 touched.push_back(c->id);
         } else if (kind == "message_edited") { /* the message as it reads now (protocol 14): in place of what is kept of it */
             Msg m;
             int64_t ch;
             Channel *c = parse_message(data, m, &ch) ? find_channel(pd, ch) : nullptr;
+            if (c && requote(*c, m.id, &m)) /* and the replies to it quote it so (protocol 15) */
+                touched.push_back(c->id);
             if (c && replace_message(*c, std::move(m)))
                 touched.push_back(c->id);
         } else if (kind == "message_deleted") { /* {id, channel}: gone, and what is kept of it with it */
             int64_t mid, ch;
             Channel *c = get_int(data, "id", &mid) && get_int(data, "channel", &ch) ? find_channel(pd, ch) : nullptr;
+            if (c && requote(*c, mid, nullptr))
+                touched.push_back(c->id);
             if (c && drop_message(*c, mid))
+                touched.push_back(c->id);
+        } else if (kind == "message_reactions") { /* {id, channel, reactions}: as they are now (protocol 15) */
+            int64_t mid, ch;
+            std::string now;
+            clean_reactions(data, now);
+            Channel *c = get_int(data, "id", &mid) && get_int(data, "channel", &ch) ? find_channel(pd, ch) : nullptr;
+            if (c && set_reactions(*c, mid, now))
                 touched.push_back(c->id);
         } else if (kind == "channel") {
             Channel n;
@@ -1656,6 +1940,8 @@ static void write_summary(puddle_jw *w, const Pond &pd)
         if (!c.overrides.empty()) /* what it allows and denies each role (protocol 13) */
             write_overrides(w, c.overrides);
         puddle_jw_num(w, "last", c.recent.empty() ? 0 : c.recent.back().id);
+        auto men = pd.mentioned.find(c.id);
+        puddle_jw_num(w, "mentions", men == pd.mentioned.end() ? 0 : men->second); /* not yet seen (protocol 15) */
         puddle_jw_str(w, "kind", c.voice ? "voice" : "text");
         if (c.voice) { /* who is in it now */
             puddle_jw_key(w, "voice");

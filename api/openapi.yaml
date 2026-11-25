@@ -242,6 +242,23 @@ paths:
       tags: [conversations]
       summary: Take back one of the owner's own messages (a request to hide, not a guarantee)
       responses: { "200": { $ref: "#/components/responses/Message" } }
+  /api/v1/conversations/{conversation}/messages/{message}/resend:
+    parameters: [{ $ref: "#/components/parameters/Conversation" }, { $ref: "#/components/parameters/Message" }]
+    post:
+      tags: [conversations]
+      summary: "Send an undelivered message again (their Levee gave up on it): the same event, as a new request, to each friend who is back"
+      responses:
+        "200": { $ref: "#/components/responses/Message" }
+        "404": { description: "`nothing_to_resend`: it isn't undelivered" }
+        "409": { description: "`not_back`: they haven't been heard from since; it can go once they are", content: { application/json: { schema: { $ref: "objects/error.yaml" } } } }
+  /api/v1/conversations/{conversation}/messages/{message}/forget:
+    parameters: [{ $ref: "#/components/parameters/Conversation" }, { $ref: "#/components/parameters/Message" }]
+    post:
+      tags: [conversations]
+      summary: "Delete an undelivered message (their Levee gave up on it): in a DM it goes from the owner's chat too; in a group, where others have it, only the mark goes, for each friend who is back"
+      responses:
+        "200": { $ref: "#/components/responses/Message" }
+        "404": { description: "`nothing_to_delete`: it isn't undelivered (in a group: to anyone who is back)" }
   /api/v1/conversations/{conversation}/read:
     parameters: [{ $ref: "#/components/parameters/Conversation" }]
     post: { tags: [conversations], summary: Mark everything read, responses: { "200": { $ref: "#/components/responses/Conversation" } } }
@@ -327,6 +344,28 @@ paths:
       summary: Rename
       requestBody: { content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string, minLength: 1, maxLength: 100 } } } } } }
       responses: { "200": { $ref: "#/components/responses/Group" } }
+  /api/v1/groups/{group}/remove:
+    parameters: [{ $ref: "#/components/parameters/Group" }]
+    post:
+      tags: [groups]
+      summary: Take someone out, or take back their invitation
+      description: |
+        Only if the owner made the group or invited `user` (their `can_remove`); anyone else in it can only vote. Everyone in the group is told,
+        `user` too, and a connection that was only for this group is closed. `400` for the owner themselves (that is leaving), `403
+        not_allowed`, `404 not_a_member` for someone not in it or invited, `409 not_in_group` if the owner is not in it.
+      requestBody: { content: { application/json: { schema: { type: object, required: [user], properties: { user: { $ref: "#/components/schemas/UserId" } } } } } }
+      responses: { "200": { $ref: "#/components/responses/Group" } }
+  /api/v1/groups/{group}/vote:
+    parameters: [{ $ref: "#/components/parameters/Group" }]
+    post:
+      tags: [groups]
+      summary: Vote to take someone out
+      description: |
+        Anyone in the group may, once per person (`409 already_voted`). Once more than half of the members other than `user` have voted
+        (`votes`, `votes_needed`), every Puddle takes them out. Everyone sees the vote, `user` too. `400` for the owner themselves, `404
+        not_a_member`, `409 not_in_group`.
+      requestBody: { content: { application/json: { schema: { type: object, required: [user], properties: { user: { $ref: "#/components/schemas/UserId" } } } } } }
+      responses: { "200": { $ref: "#/components/responses/Group" } }
 
   # ---- identity, profiles, invites, media ----
   /api/v1/ponds:
@@ -400,7 +439,9 @@ paths:
         Pond before the message, a chunk at a time, skipping what the Pond has already (docs/ponds.md, "Files"); the call
         answers once the message is posted. `bad_text`, `bad_file`, `too_many_files` (400); `slow_down` (429); `removed`
         (409: the Pond no longer has us); `no_file` (409: one is not here whole); `files_off` (409: the Pond takes no files);
-        `too_large` (409: one is over the Pond's `files.max_size`); `unreachable` (502).
+        `too_large` (409: one is over the Pond's `files.max_size`); `unreachable` (502). With `reply_to` (protocol 15), a reply:
+        `bad_reply` (400: no such message there), `no_replies` (409: the Pond is too old). Mentions are written in `body` as
+        `<@member id>`, `<@&role id>` and `@everyone` (docs/ponds.md, "Replies, reactions and mentions").
       requestBody:
         content:
           application/json:
@@ -408,6 +449,7 @@ paths:
               type: object
               properties:
                 body: { type: string, minLength: 1, maxLength: 4000, description: Required without files }
+                reply_to: { type: integer, minimum: 1, description: "Protocol 15: the message in this channel it answers" }
                 files:
                   type: array
                   maxItems: 10
@@ -498,6 +540,47 @@ paths:
       summary: One message with every text it had (protocol 14; view_message_log), its files with what is here of each
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "objects/pond.yaml#/$defs/LoggedMessage" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/ponds/{pond}/channels/{channel}/messages/{message}/react:
+    parameters:
+      - { $ref: "#/components/parameters/Pond" }
+      - { $ref: "#/components/parameters/Channel" }
+      - { name: message, in: path, required: true, schema: { type: integer, minimum: 1 } }
+    post:
+      tags: [ponds]
+      summary: React to a message in a Pond with an emoji (protocol 15; docs/ponds.md, "Replies, reactions and mentions")
+      description: |
+        `bad_emoji` (400: not one emoji, by the Pond's rule of 1 to 32 bytes with no ASCII); `no_reactions` (409: the Pond is too
+        old); the Pond's `no_permission`, `too_many_reactions`, `muted` (409), `no_message` (404) and `slow_down` (429) are passed on.
+        Answers the message's reactions as they are now, and keeps them so; every other member's Puddle hears of it.
+      requestBody:
+        content: { application/json: { schema: { type: object, required: [emoji], properties: { emoji: { type: string } } } } }
+      responses:
+        "200":
+          description: "{id, channel, reactions}"
+          content: { application/json: { schema: { type: object, properties: { id: { type: integer }, channel: { type: integer }, reactions: { type: array, items: { type: object } } } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/ponds/{pond}/channels/{channel}/messages/{message}/unreact:
+    parameters:
+      - { $ref: "#/components/parameters/Pond" }
+      - { $ref: "#/components/parameters/Channel" }
+      - { name: message, in: path, required: true, schema: { type: integer, minimum: 1 } }
+    post:
+      tags: [ponds]
+      summary: Take back our reaction (protocol 15)
+      requestBody:
+        content: { application/json: { schema: { type: object, required: [emoji], properties: { emoji: { type: string } } } } }
+      responses:
+        "200": { description: "{id, channel, reactions}, as react answers" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/ponds/{pond}/channels/{channel}/seen:
+    parameters: [{ $ref: "#/components/parameters/Pond" }, { $ref: "#/components/parameters/Channel" }]
+    post:
+      tags: [ponds]
+      summary: The owner has seen the channel (protocol 15)
+      description: Its messages that mention the owner are no longer counted (the channel's `mentions`, in the Pond's summary).
+      responses:
+        "204": { description: Seen }
         "404": { $ref: "#/components/responses/NotFound" }
   /api/v1/ponds/{pond}/channels/{channel}/log:
     parameters: [{ $ref: "#/components/parameters/Pond" }, { $ref: "#/components/parameters/Channel" }]
@@ -1144,8 +1227,13 @@ paths:
     get:
       tags: [levee]
       summary: Whether this Puddle is behind a Levee
-      description: "`{joined}`; when joined also `address` (where others reach it now), `id` (the Levee's), `since`, `attached` (connected to it now), `calls` (it has a relay) and `pond_voice_direct` (the owner's choice, below)."
-      responses: { "200": { description: OK, content: { application/json: { schema: { type: object, required: [joined], properties: { joined: { type: boolean }, address: { type: string }, id: { type: string }, since: { type: integer }, attached: { type: boolean }, calls: { type: boolean }, pond_voice_direct: { type: boolean } } } } } } }
+      description: "`{joined}`; when joined also `address` (where others reach it now), `id` (the Levee's), `since`, `attached` (connected to it now), `calls` (it has a relay) and `pond_voice_direct` (the owner's choice, below). Always `dropped`: what the Levee gave up on before this Puddle came back (docs/levee.md, \"Given up\"), oldest first, until cleared: who it was `from`, its `target`, when it `received` it and when we were told (`noted`). Never what it said: the Levee held it sealed."
+      responses: { "200": { description: OK, content: { application/json: { schema: { type: object, required: [joined, dropped], properties: { joined: { type: boolean }, address: { type: string }, id: { type: string }, since: { type: integer }, attached: { type: boolean }, calls: { type: boolean }, pond_voice_direct: { type: boolean }, dropped: { type: array, items: { type: object, properties: { from: { type: string }, target: { type: string }, received: { type: integer }, noted: { type: integer } } } } } } } } } } }
+  /api/v1/levee/dropped/clear:
+    post:
+      tags: [levee]
+      summary: The owner has seen what the Levee gave up on; `dropped` is emptied
+      responses: { "200": { description: "As GET /api/v1/levee" } }
   /api/v1/levee/join:
     post:
       tags: [levee]

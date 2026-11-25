@@ -8,7 +8,7 @@ required: [id, name, my, creator, members, created_at, updated_at]
 properties:
   id: { $ref: "../wire/ids.yaml#/$defs/ChatId" }
   name: { type: string, maxLength: 100 }
-  my: { type: string, enum: [invited, in, left, declined], description: "`invited`: waiting for the owner's answer" }
+  my: { type: string, enum: [invited, in, left, declined, removed], description: "`invited`: waiting for the owner's answer; `removed`: someone took the owner out, or the others voted them out" }
   creator: { $ref: "partial_user.yaml" }
   invited_by: { $ref: "partial_user.yaml", description: "With `my: invited`" }
   members: { type: array, maxItems: 50, items: { $ref: "member.yaml" }, description: "Everyone in it or invited, the owner included" }
@@ -31,3 +31,5 @@ x-methods:
   decline: POST /api/v1/groups/{group}/decline
   leave: POST /api/v1/groups/{group}/leave
   rename: POST /api/v1/groups/{group}/rename
+  remove: POST /api/v1/groups/{group}/remove
+  vote: POST /api/v1/groups/{group}/vote

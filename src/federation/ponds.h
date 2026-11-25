@@ -25,9 +25,10 @@ int puddle_pond_join(puddle_ctx *ctx, const puddle_link *link, const char *profi
 /* Post `text` to a channel, with `files` (NULL, or the text of a "files" array as the owner's send gives it: files here whole,
  * each sent to the Pond first, docs/ponds.md "Files"). 0, or -1 with `code`: "no_pond", "no_channel", "bad_text", "slow_down",
  * "unreachable", "removed" (the Pond no longer has us), "no_file" (one is not here whole), "files_off" (the Pond takes none),
- * "too_large" (one is over what it takes), "muted" (an operator or administrator muted us), "failed". */
+ * "too_large" (one is over what it takes), "muted" (an operator or administrator muted us), "bad_reply" (`reply_to`, a message
+ * in the channel it answers, is not there: protocol 15; 0 for none), "failed". */
 int puddle_pond_send(puddle_ctx *ctx, const char *pond, int64_t channel, const char *text, const char *files, size_t files_len,
-                     const char **code);
+                     int64_t reply_to, const char **code);
 
 /* Messages older than what is kept, asked of the Pond: its answer (malloc'd, newest first; puddle_ponds_write_page writes it for
  * the owner), kept too if it joins onto what is. 0, or -1 with `code` as for sending. */

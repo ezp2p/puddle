@@ -29,6 +29,14 @@ int puddle_group_leave(puddle_ctx *ctx, const char *gid, const char **code);
 /* Change the group's name (any member may). */
 int puddle_group_rename(puddle_ctx *ctx, const char *gid, const char *name, const char **code);
 
+/* Take `member` out of the group, or take back their invitation. Only the one who made the group and whoever invited `member` may
+ * (403 `not_allowed`); everyone in it is told, `member` too. */
+int puddle_group_remove(puddle_ctx *ctx, const char *gid, const char *member, const char **code);
+
+/* Vote to take `member` out. Anyone in the group may, once (409 `already_voted`); when more than half of the members other than
+ * `member` have, every Puddle that has seen those votes takes them out. Everyone in it is told, `member` too. */
+int puddle_group_vote(puddle_ctx *ctx, const char *gid, const char *member, const char **code);
+
 /* Send an event of ours (a message, an edit, a redaction: already built for this group as the chat) to every member. It is signed,
  * kept in our log, and queued for each member we have an open stream with. `sent` is how many it was queued for; a member we cannot
  * reach right now is not counted, and gets nothing. Returns 0 or a status; 500 `not_queued` means it was kept here but nothing was

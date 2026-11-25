@@ -237,6 +237,25 @@ static void befriend(node *from, node *to)
     CHECK(wait_state(from, to->uid, PUDDLE_STREAM_ACTIVE));
 }
 
+/* wait until `n` holds `who` in the group in the state `want` (and, if `my` >= 0, itself in the group as `my`) */
+typedef struct { node *n; const char *gid, *who; puddle_gm_state want; int my; } member_arg;
+static int member_cond(void *p)
+{
+    member_arg *a = p;
+    puddle_group g;
+    if (puddle_groups_get(puddle_server_groups(a->n->srv), a->gid, &g) != 0)
+        return 0;
+    puddle_gmember *m = puddle_group_member(&g, a->who);
+    int ok = m && m->state == a->want && (a->my < 0 || (int)g.my == a->my);
+    puddle_group_free(&g);
+    return ok;
+}
+static int wait_member(node *n, const char *gid, const char *who, puddle_gm_state want, int my)
+{
+    member_arg a = { n, gid, who, want, my };
+    return wait_for(member_cond, &a);
+}
+
 int main(void)
 {
     signal(SIGPIPE, SIG_IGN);
@@ -352,6 +371,39 @@ int main(void)
     snprintf(body, sizeof body, "%s/rename", gpath);
     CHECK(post(&c, body, "{\"name\":\"The Trio\"}") == 200);
     CHECK(wait_has(&a, "/api/v1/groups", "\"name\":\"The Trio\"") && wait_has(&b, "/api/v1/groups", "\"name\":\"The Trio\""));
+
+    /* ---- carol is voted out: bob did not invite her, so he can only vote; alice's vote makes two of the two others ---- */
+    {
+        char who[120], msgs[200];
+        snprintf(msgs, sizeof msgs, "/api/v1/conversations/%s/messages", gid);                         /* G() writes into url */
+        snprintf(who, sizeof who, "{\"user\":\"%s\"}", c.uid);
+        CHECK(post(&b, G("remove"), who) == 403);
+        CHECK(post(&b, G("vote"), who) == 200 && json_has("\"voted\":true"));
+        CHECK(wait_has(&c, msgs, "\"type\":\"group_vote\""));                                          /* she sees it coming */
+        CHECK(wait_has(&a, gpath, "\"votes\":1"));
+        CHECK(post(&a, G("vote"), who) == 200);
+        /* every Puddle comes to the same list, carol's own too */
+        CHECK(wait_member(&a, gid, c.uid, PUDDLE_GM_LEFT, -1) && wait_member(&b, gid, c.uid, PUDDLE_GM_LEFT, -1) &&
+              wait_member(&c, gid, c.uid, PUDDLE_GM_LEFT, PUDDLE_GROUP_REMOVED));
+        CHECK(get(&c, "/api/v1/groups") == 200 && !json_has(gid));
+        /* and nothing more reaches her: the connection that was only for this group is gone */
+        CHECK(wait_state(&b, c.uid, PUDDLE_STREAM_CLOSED));
+        CHECK(post(&a, cpath, "{\"body\":\"without carol\"}") == 201);
+        CHECK(wait_has(&b, msgs, "without carol"));
+        usleep(700000);
+        CHECK(get(&c, msgs) == 200 && !json_has("without carol"));
+        CHECK(post(&c, cpath, "{\"body\":\"let me in\"}") == 409);
+        /* alice asks her back, like anyone who left; she reaches bob again */
+        CHECK(post(&a, G("invite"), who) == 200);
+        CHECK(wait_has(&c, "/api/v1/groups", "\"my\":\"invited\""));
+        CHECK(post(&c, G("accept"), "{\"profile\":\"main\"}") == 200);
+        CHECK(wait_member(&a, gid, c.uid, PUDDLE_GM_MEMBER, -1) && wait_member(&b, gid, c.uid, PUDDLE_GM_MEMBER, -1));
+        CHECK(wait_state(&c, b.uid, PUDDLE_STREAM_SCOPED) && wait_state(&b, c.uid, PUDDLE_STREAM_SCOPED));
+        CHECK(post(&c, cpath, "{\"body\":\"back again\"}") == 201);
+        CHECK(wait_has(&a, msgs, "back again") && wait_has(&b, msgs, "back again"));
+        CHECK(get(&a, gpath) == 200 && !json_has("\"votes\":1"));                                       /* the old votes were about before */
+        memcpy(url, msgs, sizeof msgs);                                                                  /* what the steps after this use */
+    }
 
     /* ---- bob asks carol to be friends over the group connection: it waits for her, and the group goes on ---- */
     {

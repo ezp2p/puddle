@@ -59,6 +59,8 @@ typedef struct {
     int (*group_decline)(puddle_ctx *ctx, const char *gid, const char **code);
     int (*group_leave)(puddle_ctx *ctx, const char *gid, const char **code);
     int (*group_rename)(puddle_ctx *ctx, const char *gid, const char *name, const char **code);
+    int (*group_remove)(puddle_ctx *ctx, const char *gid, const char *member, const char **code);
+    int (*group_vote)(puddle_ctx *ctx, const char *gid, const char *member, const char **code);
     int (*group_send_event)(puddle_ctx *ctx, const char *gid, const char *event, size_t len, char id[65], int *sent, const char **code);
     int (*file_fetch)(puddle_ctx *ctx, const char *chat, const char *message, const char *file, const char **code);
     int (*file_request)(puddle_ctx *ctx, const char *chat, const char *message, const char *file, const char **code);
@@ -68,7 +70,7 @@ typedef struct {
     int (*pond_join)(puddle_ctx *ctx, const puddle_link *link, const char *profile_id, const char *answers, char out_id[PUDDLE_USER_ID_LEN + 1],
                      const char **code, char **detail);
     int (*pond_send)(puddle_ctx *ctx, const char *pond, int64_t channel, const char *text, const char *files, size_t files_len,
-                     const char **code);
+                     int64_t reply_to, const char **code);
     int (*pond_history)(puddle_ctx *ctx, const char *pond, int64_t channel, int64_t before, int limit, char **page, size_t *len,
                         const char **code);
     int (*pond_leave)(puddle_ctx *ctx, const char *pond, const char **code);

@@ -121,6 +121,18 @@ static int group_profile(const puddle_call *c, puddle_jw *w)
 static int decline(const puddle_call *c, puddle_jw *w) { return answer(c, w, groupOf(c).decline()); }
 static int leave(const puddle_call *c, puddle_jw *w) { return answer(c, w, groupOf(c).leave()); }
 
+static int remove_member(const puddle_call *c, puddle_jw *w)
+{
+    Body b(c);
+    return answer(c, w, groupOf(c).remove(b.id("user")));
+}
+
+static int vote_member(const puddle_call *c, puddle_jw *w)
+{
+    Body b(c);
+    return answer(c, w, groupOf(c).voteOut(b.id("user")));
+}
+
 static int rename_group(const puddle_call *c, puddle_jw *w)
 {
     Body b(c);
@@ -137,5 +149,7 @@ const puddle_route puddle_group_api_routes[] = {
     { "POST", "/api/v1/groups/{group:id}/decline", PUDDLE_AUTH_OWNER, 64,   decline,      NULL },
     { "POST", "/api/v1/groups/{group:id}/leave",   PUDDLE_AUTH_OWNER, 64,   leave,        NULL },
     { "POST", "/api/v1/groups/{group:id}/rename",  PUDDLE_AUTH_OWNER, 2048, rename_group, NULL },
+    { "POST", "/api/v1/groups/{group:id}/remove",  PUDDLE_AUTH_OWNER, 1024, remove_member, NULL },
+    { "POST", "/api/v1/groups/{group:id}/vote",    PUDDLE_AUTH_OWNER, 1024, vote_member,  NULL },
 };
 const size_t puddle_group_api_routes_count = sizeof puddle_group_api_routes / sizeof puddle_group_api_routes[0];

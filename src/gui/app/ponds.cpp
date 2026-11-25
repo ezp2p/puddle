@@ -12,10 +12,11 @@
 Ponds::Ponds(ApiClient *api, QObject *parent)
     : QObject(parent),
       api_(api),
-      list_({ "id", "name", "status", "address", "icon" }),
-      channels_({ "id", "name", "topic", "kind", "voice", "restricted", "roles", "overrides" }),
+      list_({ "id", "name", "status", "address", "icon", "mentions" }),
+      channels_({ "id", "name", "topic", "kind", "voice", "restricted", "roles", "overrides", "mentions" }),
       members_({ "id", "name", "color", "nameColor", "avatar", "isMe", "role", "muted", "mutedUntil", "roles", "group" }),
-      messages_({ "id", "author", "name", "tint", "nameColor", "avatar", "text", "files", "ts", "edited", "mine", "grouped", "dayStart" }),
+      messages_({ "id", "author", "name", "tint", "nameColor", "avatar", "text", "files", "ts", "edited", "mine", "grouped", "dayStart",
+                  "shown", "html", "mentionsMe", "replyTo", "replyName", "replyText", "replyFiles", "replyDeleted", "reactions" }),
       bans_({ "member", "name", "by", "byName", "reason", "ts" }, nullptr, QStringLiteral("member")),
       invites_({ "token", "link", "uses", "maxUses", "expires", "created" }, nullptr, QStringLiteral("token")),
       roles_({ "id", "name", "count", "color", "hoist", "permissions", "editable" }),
@@ -110,7 +111,7 @@ QJsonObject Ponds::channelRow(const QJsonObject &c) const
     return { { "id", QString::number(qint64(c.value("id").toDouble())) }, { "name", c.value("name") }, { "topic", c.value("topic") },
              { "kind", c.value("kind").toString(QStringLiteral("text")) }, { "voice", in },
              { "restricted", c.value("roles").isArray() }, { "roles", idStrings(c.value("roles")) },
-             { "overrides", c.value("overrides").toArray() } };
+             { "overrides", c.value("overrides").toArray() }, { "mentions", c.value("mentions").toInt() } };
 }
 
 void Ponds::refresh()
@@ -140,8 +141,23 @@ void Ponds::refresh()
         version_ = v;
         QList<QJsonObject> rows;
         bool stillThere = false;
+        QHash<QString, int> mentions;
+        int total = 0;
         for (const QJsonValue &p : o.value("items").toArray()) {
             const QJsonObject po = p.toObject();
+            int here = 0;
+            for (const QJsonValue &c : po.value("channels").toArray()) { /* messages mentioning us, not yet seen (protocol 15) */
+                const int n = c.toObject().value("mentions").toInt();
+                const QString cid = QString::number(qint64(c.toObject().value("id").toDouble()));
+                const QString key = po.value("id").toString() + "/" + cid;
+                if (n > 0)
+                    mentions.insert(key, n);
+                here += n;
+                const bool inFront = windowActive_ && po.value("id").toString() == current_ && cid == channel_ && page_.isEmpty();
+                if (mentionsRead_ && n > mentions_.value(key) && !inFront)
+                    emit mentioned(po.value("id").toString(), cid, po.value("name").toString(), c.toObject().value("name").toString());
+            }
+            total += here;
             QHash<QString, QString> names;
             for (const QJsonValue &c : po.value("channels").toArray())
                 names.insert(QString::number(qint64(c.toObject().value("id").toDouble())), c.toObject().value("name").toString());
@@ -160,12 +176,16 @@ void Ponds::refresh()
             voiceIn_.insert(po.value("id").toString(), in);
             pondNames_.insert(po.value("id").toString(), po.value("name").toString());
             rows.append({ { "id", po.value("id") }, { "name", po.value("name") }, { "status", po.value("status") }, { "address", po.value("address") },
-                          { "icon", po.value("icon").toObject().value("hash").toString() } });
+                          { "icon", po.value("icon").toObject().value("hash").toString() }, { "mentions", here } });
             if (po.value("id").toString() == current_)
                 stillThere = true;
         }
+        mentions_ = mentions;
+        mentionsRead_ = true;
+        mentionsTotal_ = total;
         list_.setItems(rows);
         emit listChanged();
+        markSeen();
         updateVoicePeople();
         if (!current_.isEmpty() && !stillThere) { // we left it (here or on another device)
             close();
@@ -209,7 +229,8 @@ void Ponds::refreshPond()
             const double until = mu.isObject() ? mu.toObject().value("until").toDouble(0) : -1;
             const bool muted = mu.isObject() && (until == 0 || until > double(QDateTime::currentMSecsSinceEpoch()));
             people_.insert(mid, { { "name", name }, { "color", color }, { "avatar", avatar }, { "profile", prof }, { "role", mo.value("role").toString(QStringLiteral("member")) },
-                                  { "muted", muted }, { "mutedUntil", muted ? until : -1 }, { "dms", mo.value("dms").toBool(true) } });
+                                  { "muted", muted }, { "mutedUntil", muted ? until : -1 }, { "dms", mo.value("dms").toBool(true) },
+                                  { "roles", idStrings(mo.value("roles")) } });
             members.append({ { "id", mid }, { "name", name }, { "color", color }, { "avatar", avatar }, { "isMe", mid == me_ },
                              { "muted", muted }, { "mutedUntil", muted ? until : -1 }, { "useRoleColor", mo.value("role_color").toBool() },
                              { "role", mo.value("role").toString(QStringLiteral("member")) }, { "roles", idStrings(mo.value("roles")) } });
@@ -391,6 +412,32 @@ void Ponds::rebuildMessages()
         const bool first = prev.isEmpty();
         const bool newDay = first || QDateTime::fromMSecsSinceEpoch(ts).date() != QDateTime::fromMSecsSinceEpoch(qint64(prev.value("ts").toDouble())).date();
         const bool mine = author == me_;
+        /* protocol 15: what it replies to, its reactions, and whether it mentions us (by name, a role we hold, or everyone) */
+        const QJsonObject reply = m.value("reply").toObject();
+        const QString replyAuthor = reply.value("author").toString();
+        QJsonArray reactions;
+        for (const QJsonValue &rv : m.value("reactions").toArray()) {
+            const QJsonObject ro = rv.toObject();
+            QStringList names;
+            bool ours = false;
+            for (const QJsonValue &who : ro.value("members").toArray()) {
+                ours = ours || who.toString() == me_;
+                if (names.size() < 10)
+                    names << (who.toString() == me_ ? tr("You") : nameOf(who.toString()));
+            }
+            const int count = ro.value("count").toInt();
+            if (count > names.size() && names.size() == 10)
+                names << tr("%n more", "", count - 10);
+            reactions.append(QJsonObject{ { "emoji", ro.value("emoji") }, { "count", count }, { "mine", ours }, { "names", names.join(", ") } });
+        }
+        const QJsonObject men = m.value("mentions").toObject();
+        bool mentionsMe = !mine && men.value("everyone").toBool();
+        for (const QJsonValue &v : men.value("members").toArray())
+            mentionsMe = mentionsMe || (!mine && v.toString() == me_);
+        const QJsonArray myRoles = people_.value(me_).value("roles").toArray();
+        for (const QJsonValue &v : men.value("roles").toArray())
+            mentionsMe = mentionsMe || (!mine && myRoles.contains(QString::number(qint64(v.toDouble()))));
+        const QString text = m.value("text").toString();
         QJsonObject r{ { "id", QString::number(qint64(m.value("id").toDouble())) },
                        { "author", author },
                        { "name", !who.value("name").toString().isEmpty() ? who.value("name").toString() : mine ? tr("You") : author.left(8) },
@@ -398,6 +445,15 @@ void Ponds::rebuildMessages()
                        { "nameColor", who.value("nameColor").toString(who.value("color").toString()) },
                        { "avatar", who.value("avatar").toString() },
                        { "text", m.value("text") },
+                       { "shown", render(text, false) },   /* the words, mentions as @names: what is copied */
+                       { "html", render(text, true) },     /* the same, escaped, the mentions marked */
+                       { "mentionsMe", mentionsMe },
+                       { "replyTo", reply.isEmpty() ? QString() : QString::number(qint64(reply.value("id").toDouble())) },
+                       { "replyName", replyAuthor.isEmpty() ? QString() : replyAuthor == me_ ? tr("You") : nameOf(replyAuthor) },
+                       { "replyText", render(reply.value("text").toString(), false) },
+                       { "replyFiles", reply.value("files").toInt() },
+                       { "replyDeleted", reply.value("deleted").toBool() },
+                       { "reactions", reactions },
                        { "files", m.value("files") },
                        { "ts", double(ts) },
                        { "edited", m.value("edited").toDouble(0) },
@@ -1093,6 +1149,7 @@ void Ponds::openChannel(const QString &channelId)
     if (channelId == channel_)
         return;
     channel_ = channelId;
+    QTimer::singleShot(0, this, [this] { markSeen(); });
     if (!current_.isEmpty() && !channelId.isEmpty())
         lastChannel_.insert(current_, channelId);
     loaded_.clear();
@@ -1334,14 +1391,18 @@ void Ponds::setBanner(const QString &hash)
     admin(QStringLiteral("banner"), body, hash.isEmpty() ? tr("Banner removed.") : tr("Banner set."), tr("change the banner"));
 }
 
-void Ponds::send(const QString &text)
+void Ponds::send(const QString &text, const QString &replyTo)
 {
     const QString t = text.trimmed();
     if (t.isEmpty() || current_.isEmpty() || channel_.isEmpty())
         return;
-    api_->post(pathOfChannel() + QStringLiteral("/send"), QJsonObject{ { "body", t } }, [this](int status, const QJsonDocument &json) {
+    QJsonObject body{ { "body", t } };
+    if (!replyTo.isEmpty())
+        body.insert("reply_to", replyTo.toLongLong());
+    api_->post(pathOfChannel() + QStringLiteral("/send"), body, [this](int status, const QJsonDocument &json) {
         if (status != 200) {
-            emit failed(why(status, json, tr("send that")));
+            const QString code = json.object().value("error").toString();
+            emit failed(code == QLatin1String("bad_reply") ? tr("The message you replied to isn't there any more.") : why(status, json, tr("send that")));
             return;
         }
         refreshMessages();
@@ -1689,4 +1750,112 @@ QVariantMap Ponds::inVoice(const QString &memberId) const
             if (v.toObject().value("id").toString() == memberId)
                 return { { "channel", c.value("id").toString() }, { "serverMuted", v.toObject().value("serverMuted").toBool() } };
     return {};
+}
+
+// ---- replies, reactions and mentions (protocol 15; docs/ponds.md, "Replies, reactions and mentions") ----
+
+void Ponds::toggleReaction(const QString &messageId, const QString &emoji)
+{
+    if (current_.isEmpty() || channel_.isEmpty() || messageId.isEmpty() || emoji.isEmpty())
+        return;
+    bool ours = false;
+    for (const QJsonObject &m : loaded_)
+        if (QString::number(qint64(m.value("id").toDouble())) == messageId)
+            for (const QJsonValue &rv : m.value("reactions").toArray())
+                if (rv.toObject().value("emoji").toString() == emoji)
+                    ours = rv.toObject().value("members").toArray().contains(me_);
+    const int gen = generation_;
+    api_->post(pathOfChannel() + QStringLiteral("/%1/%2").arg(messageId, ours ? QStringLiteral("unreact") : QStringLiteral("react")),
+               QJsonObject{ { "emoji", emoji } }, [this, gen, messageId](int status, const QJsonDocument &json) {
+                   if (status != 200) {
+                       const QString code = json.object().value("error").toString();
+                       emit failed(code == QLatin1String("too_many_reactions") ? tr("That message has as many different reactions as it can.")
+                                   : code == QLatin1String("no_permission")   ? tr("You can't react in this channel.")
+                                   : code == QLatin1String("bad_emoji")       ? tr("A reaction is one emoji.")
+                                                                              : why(status, json, tr("react")));
+                       return;
+                   }
+                   if (gen != generation_)
+                       return;
+                   const QJsonArray now = json.object().value("reactions").toArray();
+                   for (QJsonObject &m : loaded_)
+                       if (QString::number(qint64(m.value("id").toDouble())) == messageId) {
+                           if (now.isEmpty())
+                               m.remove("reactions");
+                           else
+                               m.insert("reactions", now);
+                       }
+                   rebuildMessages();
+               });
+}
+
+QVariantList Ponds::mentionables(const QString &prefix, int max) const
+{
+    QVariantList out;
+    const QString p = prefix.toLower();
+    if (canMentionEveryoneHere() && QStringLiteral("everyone").startsWith(p))
+        out << QVariantMap{ { "kind", "everyone" }, { "id", "everyone" }, { "name", "everyone" } };
+    for (const QJsonObject &m : members_.items()) {
+        if (out.size() >= max)
+            break;
+        const QString name = m.value("name").toString();
+        if (m.value("isMe").toBool() || !(name.toLower().startsWith(p) || name.toLower().contains(" " + p)))
+            continue;
+        out << QVariantMap{ { "kind", "member" }, { "id", m.value("id").toString() }, { "name", name },
+                            { "avatar", m.value("avatar").toString() }, { "color", m.value("nameColor").toString() } };
+    }
+    if (canMentionEveryoneHere())
+        for (const QJsonObject &r : roles_.items()) {
+            if (out.size() >= max)
+                break;
+            if (r.value("name").toString().toLower().startsWith(p))
+                out << QVariantMap{ { "kind", "role" }, { "id", r.value("id").toString() }, { "name", r.value("name").toString() },
+                                    { "color", r.value("color").toString() } };
+        }
+    return out;
+}
+
+void Ponds::markSeen()
+{
+    if (!windowActive_ || current_.isEmpty() || channel_.isEmpty() || !page_.isEmpty())
+        return;
+    const QString key = current_ + "/" + channel_;
+    if (mentions_.value(key) <= 0)
+        return;
+    mentions_.remove(key);
+    api_->post(QStringLiteral("/api/v1/ponds/%1/channels/%2/seen").arg(current_, channel_), QJsonObject{}, [this](int, const QJsonDocument &) {
+        refresh();
+    });
+}
+
+QString Ponds::render(const QString &text, bool html) const
+{
+    static const QRegularExpression mention(QStringLiteral("<@(&?)([a-z2-7]{52}|[1-9][0-9]{0,17})>|@everyone\\b"));
+    QString out;
+    qsizetype at = 0;
+    auto plain = [&](const QString &s) { return html ? s.toHtmlEscaped().replace(QLatin1Char('\n'), QStringLiteral("<br>")) : s; };
+    for (auto it = mention.globalMatch(text); it.hasNext();) {
+        const QRegularExpressionMatch m = it.next();
+        QString name;
+        if (m.captured(0) == QLatin1String("@everyone")) {
+            name = QStringLiteral("@everyone");
+        } else if (m.captured(1) == QLatin1String("&")) {
+            if (m.captured(2).size() == 52)
+                continue;
+            for (const QJsonObject &r : roles_.items())
+                if (r.value("id").toString() == m.captured(2))
+                    name = "@" + r.value("name").toString();
+            if (name.isEmpty())
+                name = tr("@a role");
+        } else {
+            if (m.captured(2).size() != 52)
+                continue;
+            name = "@" + (m.captured(2) == me_ ? people_.value(me_).value("name").toString(tr("you")) : nameOf(m.captured(2)));
+        }
+        out += plain(text.mid(at, m.capturedStart() - at));
+        out += html ? QStringLiteral("<span style=\"color:#5865f2;font-weight:600\">%1</span>").arg(name.toHtmlEscaped()) : name;
+        at = m.capturedEnd();
+    }
+    out += plain(text.mid(at));
+    return out;
 }

@@ -62,7 +62,7 @@ int puddle_group_name_ok(const char *name)
 static size_t build(puddle_ge_type type, const char *chat, const char *sender, int64_t ts, const char *name, const char *nonce, const char *member,
                     char *out, size_t cap)
 {
-    static const char *const names[] = { "chat.create", "chat.rename", "member.invite", "member.join", "member.leave" };
+    static const char *const names[] = { "chat.create", "chat.rename", "member.invite", "member.join", "member.leave", "member.remove", "member.vote" };
     puddle_jw w;
     puddle_jw_init(&w, out, cap);
     puddle_jw_object(&w);
@@ -75,7 +75,7 @@ static size_t build(puddle_ge_type type, const char *chat, const char *sender, i
         puddle_jw_str(&w, "nonce", nonce);
     } else if (type == PUDDLE_GE_RENAME) {
         puddle_jw_str(&w, "body", name);
-    } else if (type == PUDDLE_GE_INVITE) {
+    } else if (type == PUDDLE_GE_INVITE || type == PUDDLE_GE_REMOVE || type == PUDDLE_GE_VOTE) {
         puddle_jw_str(&w, "member", member);
     }
     puddle_jw_end_object(&w);
@@ -118,6 +118,23 @@ size_t puddle_group_leave_build(const char *chat, const char *sender, int64_t ts
     return build(PUDDLE_GE_LEAVE, chat, sender, ts, NULL, NULL, NULL, out, cap);
 }
 
+static size_t about_member(puddle_ge_type type, const char *chat, const char *sender, int64_t ts, const char *member, char *out, size_t cap)
+{
+    if (!puddle_id_valid(chat) || !puddle_id_valid(sender) || !puddle_id_valid(member) || !strcmp(sender, member))
+        return 0;
+    return build(type, chat, sender, ts, NULL, NULL, member, out, cap);
+}
+
+size_t puddle_group_remove_build(const char *chat, const char *sender, int64_t ts, const char *member, char *out, size_t cap)
+{
+    return about_member(PUDDLE_GE_REMOVE, chat, sender, ts, member, out, cap);
+}
+
+size_t puddle_group_vote_build(const char *chat, const char *sender, int64_t ts, const char *member, char *out, size_t cap)
+{
+    return about_member(PUDDLE_GE_VOTE, chat, sender, ts, member, out, cap);
+}
+
 static int member_str(const char *e, size_t n, const char *key, char *out, size_t cap)
 {
     puddle_span v;
@@ -143,6 +160,8 @@ int puddle_group_event_parse(const char *event, size_t len, puddle_gevent *g, co
     else if (!strcmp(type, "member.invite")) g->type = PUDDLE_GE_INVITE;
     else if (!strcmp(type, "member.join")) g->type = PUDDLE_GE_JOIN;
     else if (!strcmp(type, "member.leave")) g->type = PUDDLE_GE_LEAVE;
+    else if (!strcmp(type, "member.remove")) g->type = PUDDLE_GE_REMOVE;
+    else if (!strcmp(type, "member.vote")) g->type = PUDDLE_GE_VOTE;
     else {
         *why = "unsupported_type";
         return -1;
@@ -183,6 +202,8 @@ int puddle_group_event_parse(const char *event, size_t len, puddle_gevent *g, co
             return -1;
         break;
     case PUDDLE_GE_INVITE:
+    case PUDDLE_GE_REMOVE:
+    case PUDDLE_GE_VOTE:
         if (has_body || has_name || has_nonce || !has_member || member_str(event, len, "member", g->member, sizeof g->member) != 0 ||
             !puddle_id_valid(g->member) || !strcmp(g->member, g->sender))
             return -1;
@@ -212,7 +233,7 @@ int puddle_group_init_created(puddle_group *g, const puddle_gevent *create, int6
     if (!m)
         return -1;
     m->state = PUDDLE_GM_MEMBER;
-    m->ts = create->ts;
+    m->ts = m->invited = create->ts;
     return 0;
 }
 
@@ -221,7 +242,17 @@ static size_t live_count(const puddle_group *g)
     return puddle_group_count(g, PUDDLE_GM_MEMBER) + puddle_group_count(g, PUDDLE_GM_INVITED);
 }
 
+static int apply_one(puddle_group *g, const puddle_gevent *e, const char **why);
+
 int puddle_group_apply(puddle_group *g, const puddle_gevent *e, const char **why)
+{
+    int rc = apply_one(g, e, why);
+    if (rc == 0)
+        puddle_group_settle_votes(g); /* any change can decide a vote: a new one, or someone leaving so fewer are needed */
+    return rc;
+}
+
+static int apply_one(puddle_group *g, const puddle_gevent *e, const char **why)
 {
     *why = NULL;
     puddle_gmember *sender = puddle_group_member(g, e->sender);
@@ -259,7 +290,7 @@ int puddle_group_apply(puddle_group *g, const puddle_gevent *e, const char **why
         }
         m->state = PUDDLE_GM_INVITED;
         snprintf(m->by, sizeof m->by, "%s", e->sender);
-        m->ts = e->ts;
+        m->ts = m->invited = e->ts;
         return 0;
     }
     case PUDDLE_GE_JOIN:
@@ -288,6 +319,54 @@ int puddle_group_apply(puddle_group *g, const puddle_gevent *e, const char **why
         sender->state = PUDDLE_GM_LEFT;
         sender->ts = e->ts;
         return 0;
+    case PUDDLE_GE_REMOVE:
+    case PUDDLE_GE_VOTE: {
+        if (!sender || sender->state != PUDDLE_GM_MEMBER) {
+            *why = "not_a_member";
+            return -1;
+        }
+        puddle_gmember *m = puddle_group_member(g, e->member);
+        if (!m) {
+            *why = "not_a_member";
+            return -1;
+        }
+        if (m->state == PUDDLE_GM_LEFT || e->ts <= m->invited)
+            return 1; /* out already, or about an earlier time in the group: they have been invited back since */
+        if (e->type == PUDDLE_GE_REMOVE) {
+            /* whether the remover may is judged on the group as it is now, before `m` is taken out: who invited them is the one
+             * who brought them in last */
+            if (!puddle_group_may_remove(g, e->sender, e->member)) {
+                *why = "not_allowed";
+                return -1;
+            }
+            m->state = PUDDLE_GM_LEFT;
+            m->ts = e->ts; /* when they were taken out, not their own later news: a later invitation may bring them back */
+            return 0;
+        }
+        for (size_t i = 0; i < g->nvotes; i++)
+            if (!strcmp(g->votes[i].by, e->sender) && !strcmp(g->votes[i].member, e->member)) {
+                if (g->votes[i].ts > m->invited)
+                    return 1; /* one vote each */
+                g->votes[i].ts = e->ts;
+                return 0;
+            }
+        if (g->nvotes >= PUDDLE_GROUP_MAX_MEMBERS * PUDDLE_GROUP_MAX_MEMBERS) {
+            *why = "group_full";
+            return -1;
+        }
+        puddle_gvote *more = (puddle_gvote *)realloc(g->votes, (g->nvotes + 1) * sizeof *more);
+        if (!more) {
+            *why = "bad_event";
+            return -1;
+        }
+        g->votes = more;
+        puddle_gvote *v = &g->votes[g->nvotes++];
+        memset(v, 0, sizeof *v);
+        snprintf(v->by, sizeof v->by, "%s", e->sender);
+        snprintf(v->member, sizeof v->member, "%s", e->member);
+        v->ts = e->ts;
+        return 0;
+    }
     }
     *why = "bad_event";
     return -1;

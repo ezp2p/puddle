@@ -133,7 +133,7 @@ static const char *pond_error(const puddle_net_reply *r, const char *fallback)
 {
     static const char *const KNOWN[] = {"no_channel", "bad_text", "slow_down", "bad_query", "files_off", "too_large", "no_file", "no_chunk",
                                          "no_session", "full", "bad_sdp", "muted", "no_member", "not_accepted", "dms_off", "away",
-                                         "not_asked", "bad_part", "too_many_new"};
+                                         "not_asked", "bad_part", "too_many_new", "bad_reply"};
     puddle_span v;
     char e[32];
     if (r->body && puddle_json_member(r->body, r->body_len, "error", &v) == 0 && puddle_json_string(v, e, sizeof e) == 0)
@@ -1024,7 +1024,7 @@ static bool upload_file(puddle_ctx *ctx, const char *pond, const puddle_file_ref
 }
 
 int puddle_pond_send(puddle_ctx *ctx, const char *pond, int64_t channel, const char *text, const char *files, size_t files_len,
-                     const char **code)
+                     int64_t reply_to, const char **code)
 {
     if (!ctx->ponds || !puddle_ponds_has_channel(ctx->ponds, pond, channel)) {
         *code = ctx->ponds && puddle_ponds_conn(ctx->ponds, pond, NULL) == 0 ? "no_channel" : "no_pond";
@@ -1052,6 +1052,8 @@ int puddle_pond_send(puddle_ctx *ctx, const char *pond, int64_t channel, const c
     puddle_jw_object(&w);
     puddle_jw_str(&w, "text", text);
     puddle_jw_str(&w, "nonce", nonce);
+    if (reply_to > 0) /* protocol 15: the message it answers */
+        puddle_jw_num(&w, "reply_to", reply_to);
     if (nrefs) {
         puddle_jw_key(&w, "files");
         puddle_file_refs_write(&w, refs, nrefs);

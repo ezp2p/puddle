@@ -1,6 +1,7 @@
 #include "core/outbox.h"
 
 #include "base/encoding.h"
+#include "base/hash.h"
 #include "core/phrase.h"
 #include "tlsserver.h"
 #include "federation/sender.h"
@@ -170,6 +171,96 @@ static int get_item(puddle_outbox *ob, size_t index, puddle_ob_item *out)
     if (ok) { *out = l[index]; out->body = strdup(l[index].body); }
     puddle_outbox_list_free(l, n);
     return ok;
+}
+
+/* ---- a peer's Levee (spec/06): a sender that answers as their Levee would, with a custody receipt ---- */
+
+static const unsigned char kLeveeSeed[32] = { 9, 8, 7, 6, 5, 4, 3, 2, 1, 9, 8, 7, 6, 5, 4, 3, 2, 1, 9, 8, 7, 6, 5, 4, 3, 2, 1, 9, 8, 7, 6, 5 };
+static char levee_id[PP_ID_LEN + 1];
+static unsigned char levee_pub[32];
+static int custody_sent;
+
+static void custody_send(const puddle_outbox_hooks *h, const puddle_ob_item *it, puddle_net_reply *r)
+{
+    (void)h;
+    memset(r, 0, sizeof *r);
+    r->result = PUDDLE_NET_OK;
+    r->status = 202;
+    r->checked = 1;
+    r->proof = PUDDLE_RECEIPT_OK;
+    r->custody = 1;
+    snprintf(r->custody_levee, sizeof r->custody_levee, "%s", levee_id);
+    memcpy(r->custody_key, levee_pub, 32);
+    snprintf(r->custody_nonce, sizeof r->custody_nonce, "AAECAwQFBgcICQoLDA0O%02dw==", custody_sent++);
+    puddle_sha256_hex(it->body, it->body_len, r->custody_hash);
+}
+
+static int resend_unless_message(const puddle_ob_item *it, void *u)
+{
+    (void)u;
+    return strcmp(it->kind, "events") != 0;
+}
+
+/* the notice's item, as their Levee signs it */
+static int undelivered(puddle_outbox *ob, const char *for_id, const char *nonce, const char *body, const unsigned char *seed, char kind[32])
+{
+    pp_signer s;
+    pp_signer_from_seed(&s, levee_id, seed);
+    char h[65], sig[100];
+    puddle_sha256_hex(body, strlen(body), h);
+    if (pp_undelivered_sign(&s, for_id, nonce, h, sig, sizeof sig) != 0)
+        return -1;
+    uint64_t seq = 0;
+    return puddle_outbox_undelivered(ob, for_id, levee_id, nonce, h, sig, resend_unless_message, NULL, kind, &seq);
+}
+
+static void test_given_up(const char *data, const char *peer)
+{
+    pp_ed25519_public(kLeveeSeed, levee_pub);
+    pp_key_id_b32(PP_LABEL_LEVEE, levee_pub, levee_id);
+    puddle_outbox_hooks h = { .send = custody_send, .identity = me, .now_ms = now_cb };
+    char err[300], kind[32];
+    puddle_outbox *ob = puddle_outbox_open(data, &h, err, sizeof err);
+    CHECK(ob != NULL);
+    if (!ob)
+        return;
+    const char *msg = "{\"chat\":\"c\",\"events\":[{\"id\":\"m1\"}]}", *addr = "{\"address\":1}";
+    CHECK(puddle_outbox_enqueue(ob, peer, "events", "/stream/v1/events", msg, strlen(msg), err, sizeof err) == 0);
+    CHECK(puddle_outbox_enqueue(ob, peer, "address", "/stream/v1/address", addr, strlen(addr), err, sizeof err) == 0);
+    puddle_outbox_poll(ob);
+    CHECK(count(ob, PUDDLE_OB_QUEUED) == 0 && count(ob, PUDDLE_OB_FAILED) == 0); /* taken by their Levee: delivered */
+    unsigned char k[32];
+    CHECK(puddle_outbox_custody_levee(ob, levee_id, k) == 1 && memcmp(k, levee_pub, 32) == 0);
+    CHECK(puddle_outbox_custody_levee(ob, peer, k) == 0);
+    puddle_outbox_close(ob); /* what their Levee holds is remembered across a restart */
+    ob = puddle_outbox_open(data, &h, err, sizeof err);
+    CHECK(ob != NULL && puddle_outbox_custody_levee(ob, levee_id, k) == 1);
+
+    /* a notice: only for exactly what that Levee took, signed by it */
+    unsigned char other_seed[32];
+    memcpy(other_seed, kLeveeSeed, 32);
+    other_seed[0] ^= 1;
+    CHECK(undelivered(ob, peer, "AAECAwQFBgcICQoLDA0O00w==", msg, other_seed, kind) == 0);      /* another key */
+    CHECK(undelivered(ob, peer, "AAECAwQFBgcICQoLDA0O00w==", "{\"other\":1}", kLeveeSeed, kind) == 0); /* another body */
+    CHECK(undelivered(ob, peer, "AAECAwQFBgcICQoLDA0O09w==", msg, kLeveeSeed, kind) == 0);    /* nothing we sent */
+    CHECK(undelivered(ob, peer, "AAECAwQFBgcICQoLDA0O00w==", msg, kLeveeSeed, kind) == 1 && !strcmp(kind, "events"));
+    CHECK(undelivered(ob, peer, "AAECAwQFBgcICQoLDA0O00w==", msg, kLeveeSeed, kind) == 0);    /* once */
+    CHECK(undelivered(ob, peer, "AAECAwQFBgcICQoLDA0O01w==", addr, kLeveeSeed, kind) == 1 && !strcmp(kind, "address"));
+    puddle_ob_item it;
+    CHECK(find_kind(ob, "events", &it) && it.state == PUDDLE_OB_FAILED && it.given_up == PUDDLE_OB_GIVEN_UP && !it.back_ms && it.reason[0]);
+    puddle_outbox_poll(ob);
+    CHECK(custody_sent == 2); /* not tried again by itself */
+    /* they are back: the address record goes again by itself; the message waits for the owner */
+    puddle_outbox_peer_back(ob, peer);
+    CHECK(find_kind(ob, "address", &it) && it.state == PUDDLE_OB_QUEUED && !it.given_up);
+    CHECK(find_kind(ob, "events", &it) && it.state == PUDDLE_OB_FAILED && it.given_up == PUDDLE_OB_GIVEN_UP && it.back_ms);
+    puddle_outbox_close(ob); /* kept so */
+    ob = puddle_outbox_open(data, &h, err, sizeof err);
+    CHECK(ob && find_kind(ob, "events", &it) && it.given_up == PUDDLE_OB_GIVEN_UP && it.back_ms);
+    CHECK(puddle_outbox_requeue(ob, it.seq) == 0); /* resend: the same event, a new request */
+    puddle_outbox_poll(ob);
+    CHECK(custody_sent == 4 && count(ob, PUDDLE_OB_QUEUED) == 0 && count(ob, PUDDLE_OB_FAILED) == 0);
+    puddle_outbox_close(ob);
 }
 
 int main(void)
@@ -861,6 +952,13 @@ int main(void)
         for (int i = 0; i < 100 && ndone == 0; i++) usleep(50000);
         CHECK(ndone == 1 && done_log[0].outcome == PUDDLE_OB_DELIVERED);
         puddle_outbox_close(ob);                                                                   /* stops and joins the worker */
+    }
+
+    /* ---- their Levee gave up (spec/06, "When the Levee gives up") ---- */
+    {
+        char data2[760];
+        snprintf(data2, sizeof data2, "%s/given-up", root);
+        test_given_up(data2, A);
     }
 
     ts_stop(&srv);

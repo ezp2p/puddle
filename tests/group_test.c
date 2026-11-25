@@ -64,6 +64,22 @@ static int apply_text(puddle_group *g, const char *ev, const char **why)
     return puddle_group_apply(g, &e, why);
 }
 
+#define OUT "gaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+/* make_group, and D invited by B at +300 and in at +400: four members, D brought in by someone who did not make the group */
+static void make_four(puddle_group *g, char gid[PUDDLE_USER_ID_LEN + 1])
+{
+    char ev[2000];
+    const char *why;
+    make_group(g);
+    CHECK(puddle_group_chat_id(A, T0, NONCE, gid) == 0);
+    CHECK(puddle_group_invite_build(gid, B, T0 + 300, D, ev, sizeof ev) > 0 && apply_text(g, ev, &why) == 0);
+    CHECK(puddle_group_join_build(gid, D, T0 + 400, ev, sizeof ev) > 0 && apply_text(g, ev, &why) == 0);
+    CHECK(puddle_group_count(g, PUDDLE_GM_MEMBER) == 4);
+}
+
+static puddle_gm_state state_of(const puddle_group *g, const char *id) { return puddle_group_member(g, id)->state; }
+
 int main(void)
 {
     const char *base = getenv("TMPDIR");
@@ -188,6 +204,132 @@ int main(void)
         /* a create is never folded in */
         CHECK(puddle_group_create_build(A, T0, NONCE, "Friends", chat, ev, sizeof ev) > 0 && apply_text(&grp, ev, &why) == -1);
     }
+    /* ---- taking someone out ---- */
+    {
+        char gid[53];
+        puddle_group t;
+        make_four(&t, gid);
+        /* the events: about someone else, never oneself */
+        CHECK(puddle_group_remove_build(gid, B, T0 + 1000, D, ev, sizeof ev) > 0 && parse(ev, &g, &why) == 0 && g.type == PUDDLE_GE_REMOVE && !strcmp(g.member, D));
+        CHECK(puddle_group_vote_build(gid, C, T0 + 1000, D, ev, sizeof ev) > 0 && parse(ev, &g, &why) == 0 && g.type == PUDDLE_GE_VOTE && !strcmp(g.member, D));
+        CHECK(puddle_group_remove_build(gid, B, T0, B, ev, sizeof ev) == 0 && puddle_group_vote_build(gid, B, T0, B, ev, sizeof ev) == 0);
+        CHECK(puddle_group_remove_build(gid, B, T0, "nope", ev, sizeof ev) == 0);
+        CHECK(parse("{\"type\":\"member.remove\",\"chat\":\"" A "\",\"sender\":\"" B "\",\"ts\":1760000000000}", &g, &why) == -1);           /* whom? */
+        CHECK(parse("{\"type\":\"member.vote\",\"chat\":\"" A "\",\"sender\":\"" B "\",\"ts\":1760000000000,\"member\":\"" B "\"}", &g, &why) == -1);
+        CHECK(parse("{\"type\":\"member.remove\",\"chat\":\"" A "\",\"sender\":\"" B "\",\"ts\":1760000000000,\"member\":\"" C "\",\"body\":\"x\"}", &g, &why) == -1);
+
+        /* who may: the one who made it, and whoever invited them; nobody else, and no stranger */
+        CHECK(puddle_group_may_remove(&t, A, D) && puddle_group_may_remove(&t, B, D) && !puddle_group_may_remove(&t, C, D) && !puddle_group_may_remove(&t, D, D));
+        CHECK(puddle_group_may_remove(&t, A, B) && !puddle_group_may_remove(&t, B, C) && !puddle_group_may_remove(&t, B, A) && !puddle_group_may_remove(&t, OUT, D));
+        CHECK(puddle_group_remove_build(gid, C, T0 + 1000, D, ev, sizeof ev) > 0 && apply_text(&t, ev, &why) == -1 && !strcmp(why, "not_allowed"));
+        CHECK(puddle_group_remove_build(gid, OUT, T0 + 1000, D, ev, sizeof ev) > 0 && apply_text(&t, ev, &why) == -1 && !strcmp(why, "not_a_member"));
+        CHECK(puddle_group_remove_build(gid, B, T0 + 1000, OUT, ev, sizeof ev) > 0 && apply_text(&t, ev, &why) == -1 && !strcmp(why, "not_a_member")); /* nobody we know */
+        CHECK(puddle_group_remove_build(gid, B, T0 + 1000, A, ev, sizeof ev) > 0 && apply_text(&t, ev, &why) == -1 && !strcmp(why, "not_allowed"));  /* nobody invited the creator */
+        CHECK(state_of(&t, D) == PUDDLE_GM_MEMBER);
+        /* D's inviter takes D out */
+        CHECK(puddle_group_remove_build(gid, B, T0 + 1000, D, ev, sizeof ev) > 0 && apply_text(&t, ev, &why) == 0 && state_of(&t, D) == PUDDLE_GM_LEFT &&
+              puddle_group_member(&t, D)->ts == T0 + 1000);
+        CHECK(puddle_group_remove_build(gid, A, T0 + 1001, D, ev, sizeof ev) > 0 && apply_text(&t, ev, &why) == 1);                                    /* out already */
+        CHECK(puddle_group_rename_build(gid, D, T0 + 1002, "Mine", ev, sizeof ev) > 0 && apply_text(&t, ev, &why) == -1 && !strcmp(why, "not_a_member"));
+        CHECK(puddle_group_leave_build(gid, D, T0 + 1003, ev, sizeof ev) > 0 && apply_text(&t, ev, &why) == 1);
+        /* anyone can invite them back, like a leaver: C now, and a removal older than that invitation is about the time before */
+        CHECK(puddle_group_invite_build(gid, C, T0 + 1100, D, ev, sizeof ev) > 0 && apply_text(&t, ev, &why) == 0 && state_of(&t, D) == PUDDLE_GM_INVITED &&
+              !strcmp(puddle_group_member(&t, D)->by, C) && puddle_group_member(&t, D)->invited == T0 + 1100);
+        CHECK(puddle_group_remove_build(gid, A, T0 + 1050, D, ev, sizeof ev) > 0 && apply_text(&t, ev, &why) == 1 && state_of(&t, D) == PUDDLE_GM_INVITED);
+        CHECK(!puddle_group_may_remove(&t, B, D) && puddle_group_may_remove(&t, C, D));                                                                 /* the new inviter now */
+        /* taking back an invitation */
+        CHECK(puddle_group_remove_build(gid, C, T0 + 1200, D, ev, sizeof ev) > 0 && apply_text(&t, ev, &why) == 0 && state_of(&t, D) == PUDDLE_GM_LEFT);
+        CHECK(puddle_group_join_build(gid, D, T0 + 1300, ev, sizeof ev) > 0 && apply_text(&t, ev, &why) == -1 && !strcmp(why, "not_invited"));
+        puddle_group_free(&t);
+    }
+    {
+        /* a removal and the join it crossed, in either order, end the same: out, at the removal's time */
+        char gid[53], inv[600], join[600], rem[600];
+        puddle_group x, y;
+        make_group(&x);
+        make_group(&y);
+        CHECK(puddle_group_chat_id(A, T0, NONCE, gid) == 0);
+        CHECK(puddle_group_invite_build(gid, B, T0 + 300, D, inv, sizeof inv) > 0 && apply_text(&x, inv, &why) == 0 && apply_text(&y, inv, &why) == 0);
+        CHECK(puddle_group_join_build(gid, D, T0 + 500, join, sizeof join) > 0 && puddle_group_remove_build(gid, A, T0 + 400, D, rem, sizeof rem) > 0);
+        CHECK(apply_text(&x, join, &why) == 0 && apply_text(&x, rem, &why) == 0);
+        CHECK(apply_text(&y, rem, &why) == 0 && apply_text(&y, join, &why) == -1);
+        CHECK(state_of(&x, D) == PUDDLE_GM_LEFT && state_of(&y, D) == PUDDLE_GM_LEFT && puddle_group_member(&x, D)->ts == puddle_group_member(&y, D)->ts);
+        puddle_group_free(&x);
+        puddle_group_free(&y);
+    }
+    {
+        /* a vote: more than half of the members other than the one voted against */
+        char gid[53];
+        puddle_group t;
+        make_four(&t, gid);
+        CHECK(puddle_group_votes_needed(&t, D) == 2 && puddle_group_votes_against(&t, D) == 0);  /* A, B, C: two of three */
+        CHECK(puddle_group_vote_build(gid, C, T0 + 1000, D, ev, sizeof ev) > 0 && apply_text(&t, ev, &why) == 0 && state_of(&t, D) == PUDDLE_GM_MEMBER);
+        CHECK(puddle_group_votes_against(&t, D) == 1 && puddle_group_has_voted(&t, C, D) && !puddle_group_has_voted(&t, B, D));
+        CHECK(puddle_group_vote_build(gid, C, T0 + 1001, D, ev, sizeof ev) > 0 && apply_text(&t, ev, &why) == 1 && puddle_group_votes_against(&t, D) == 1); /* one each */
+        CHECK(puddle_group_vote_build(gid, OUT, T0 + 1002, D, ev, sizeof ev) > 0 && apply_text(&t, ev, &why) == -1 && !strcmp(why, "not_a_member"));
+        CHECK(puddle_group_vote_build(gid, C, T0 + 5, B, ev, sizeof ev) > 0 && apply_text(&t, ev, &why) == 1);            /* older than B's invitation (+10) */
+        CHECK(puddle_group_vote_build(gid, C, T0 + 350, B, ev, sizeof ev) > 0 && apply_text(&t, ev, &why) == 0 && puddle_group_votes_against(&t, B) == 1);
+        CHECK(puddle_group_vote_build(gid, A, T0 + 1500, D, ev, sizeof ev) > 0 && apply_text(&t, ev, &why) == 0 && state_of(&t, D) == PUDDLE_GM_LEFT &&
+              puddle_group_member(&t, D)->ts == T0 + 1500);                                                                    /* out, when the deciding vote was cast */
+        CHECK(puddle_group_votes_against(&t, D) == 0);
+        for (size_t i = 0; i < t.nvotes; i++)
+            CHECK(strcmp(t.votes[i].member, D) != 0);                                                                          /* forgotten */
+        /* a voter who leaves takes their vote with them */
+        CHECK(puddle_group_leave_build(gid, C, T0 + 1600, ev, sizeof ev) > 0 && apply_text(&t, ev, &why) == 0 && puddle_group_votes_against(&t, B) == 0 && t.nvotes == 0);
+        /* back in later: the old votes are about the time before */
+        CHECK(puddle_group_invite_build(gid, A, T0 + 1700, D, ev, sizeof ev) > 0 && apply_text(&t, ev, &why) == 0);
+        CHECK(puddle_group_vote_build(gid, B, T0 + 1650, D, ev, sizeof ev) > 0 && apply_text(&t, ev, &why) == 1 && puddle_group_votes_against(&t, D) == 0);
+        puddle_group_free(&t);
+    }
+    {
+        /* someone leaving can decide a vote: fewer are needed */
+        char gid[53];
+        puddle_group t;
+        make_four(&t, gid);
+        CHECK(puddle_group_vote_build(gid, C, T0 + 1000, A, ev, sizeof ev) > 0 && apply_text(&t, ev, &why) == 0 && state_of(&t, A) == PUDDLE_GM_MEMBER); /* the creator too */
+        CHECK(puddle_group_leave_build(gid, B, T0 + 1100, ev, sizeof ev) > 0 && apply_text(&t, ev, &why) == 0 && state_of(&t, A) == PUDDLE_GM_MEMBER);  /* C, D: still two */
+        CHECK(puddle_group_leave_build(gid, D, T0 + 1200, ev, sizeof ev) > 0 && apply_text(&t, ev, &why) == 0 && state_of(&t, A) == PUDDLE_GM_LEFT &&
+              puddle_group_member(&t, A)->ts == T0 + 1000);
+        CHECK(puddle_group_count(&t, PUDDLE_GM_MEMBER) == 1);
+        puddle_group_free(&t);
+    }
+    {
+        /* the same votes in another order: the same outcome, at the same time */
+        char gid[53], v1[600], v2[600], v3[600];
+        puddle_group x, y;
+        make_four(&x, gid);
+        make_four(&y, gid);
+        CHECK(puddle_group_vote_build(gid, A, T0 + 1000, D, v1, sizeof v1) > 0 && puddle_group_vote_build(gid, B, T0 + 2000, D, v2, sizeof v2) > 0 &&
+              puddle_group_vote_build(gid, C, T0 + 1500, D, v3, sizeof v3) > 0);
+        CHECK(apply_text(&x, v1, &why) == 0 && apply_text(&x, v2, &why) == 0 && apply_text(&x, v3, &why) == 1);
+        CHECK(apply_text(&y, v2, &why) == 0 && apply_text(&y, v1, &why) == 0 && apply_text(&y, v3, &why) == 1);
+        CHECK(state_of(&x, D) == PUDDLE_GM_LEFT && state_of(&y, D) == PUDDLE_GM_LEFT && puddle_group_member(&x, D)->ts == puddle_group_member(&y, D)->ts);
+        puddle_group_free(&x);
+        puddle_group_free(&y);
+    }
+    {
+        /* votes, invitation times and being taken out are kept */
+        char gid[53], data[700];
+        puddle_group t, got;
+        make_four(&t, gid);
+        CHECK(puddle_group_vote_build(gid, C, T0 + 1000, D, ev, sizeof ev) > 0 && apply_text(&t, ev, &why) == 0);
+        t.my = PUDDLE_GROUP_REMOVED;
+        snprintf(data, sizeof data, "%s/votes", root);
+        puddle_groups *gs = puddle_groups_open(data, err, sizeof err);
+        CHECK(gs && puddle_groups_put(gs, &t, err, sizeof err) == 0);
+        CHECK(puddle_groups_get(gs, gid, &got) == 0 && got.my == PUDDLE_GROUP_REMOVED && got.nvotes == 1 && !strcmp(got.votes[0].by, C) &&
+              !strcmp(got.votes[0].member, D) && got.votes[0].ts == T0 + 1000 && puddle_group_member(&got, D)->invited == T0 + 300 &&
+              puddle_group_member(&got, A)->invited == T0 && puddle_group_votes_against(&got, D) == 1);
+        CHECK(!strcmp(puddle_group_my_name(got.my), "removed"));
+        /* handing a group over leaves the old one empty */
+        puddle_group moved = { 0 };
+        puddle_group_move(&moved, &got);
+        CHECK(moved.nvotes == 1 && moved.nmembers == 4 && got.votes == NULL && got.members == NULL && got.nvotes == 0);
+        puddle_group_free(&moved);
+        puddle_groups_close(gs);
+        puddle_group_free(&t);
+    }
+
     /* full */
     {
         puddle_group big;

@@ -148,13 +148,24 @@ static int group_invite_post(const puddle_call *c, puddle_jw *w)
         memset(m, 0, sizeof *m);
         snprintf(m->id, sizeof m->id, "%s", id);
         m->state = !strcmp(st, "member") ? PUDDLE_GM_MEMBER : PUDDLE_GM_INVITED;
-        m->ts = ts;
+        m->ts = m->invited = ts;
         snprintf(m->address, sizeof m->address, "%s", addr);
+        /* who invited them and when, so a removal by their inviter is judged here as everywhere else (the inviter's word, like the rest) */
+        puddle_span byv, invv;
+        int byrc = puddle_json_member(item.p, item.len, "by", &byv), invrc = puddle_json_member(item.p, item.len, "invited", &invv);
+        int64_t invited_ts = 0;
+        if (byrc < 0 || invrc < 0 || (byrc == 0 && (puddle_json_string(byv, m->by, sizeof m->by) != 0 || !puddle_id_valid(m->by))) ||
+            (invrc == 0 && (puddle_json_int64(invv, &invited_ts) != 0 || invited_ts < 0 || invited_ts > ts))) {
+            puddle_group_free(g);
+            return puddle_fail(w, 400, "bad_request");
+        }
+        if (invrc == 0)
+            m->invited = invited_ts;
         if (!strcmp(id, c->sender))
             have_sender = m->state == PUDDLE_GM_MEMBER;
         if (!strcmp(id, me)) {
             have_me = m->state == PUDDLE_GM_INVITED;
-            m->ts = iev.ts; /* our answer has to be newer than this invitation */
+            m->ts = m->invited = iev.ts; /* our answer has to be newer than this invitation */
             snprintf(m->by, sizeof m->by, "%s", c->sender);
         }
         if (!strcmp(id, cev.sender))
@@ -235,6 +246,8 @@ typedef struct {
     puddle_gevent ev;
     const char *why;
     int applied;
+    const char *me;
+    int removed; /* the event took us out */
 } applying;
 
 static int apply_fn(void *user, puddle_group *g, int exists)
@@ -249,6 +262,11 @@ static int apply_fn(void *user, puddle_group *g, int exists)
         return 3;
     if (a->applied > 0)
         return 1; /* nothing changed: nothing to store */
+    const puddle_gmember *mine = puddle_group_member(g, a->me);
+    if (mine && mine->state == PUDDLE_GM_LEFT) { /* taken out by someone allowed to, or voted out */
+        g->my = PUDDLE_GROUP_REMOVED;
+        a->removed = 1;
+    }
     g->updated_ms = a->ev.ts;
     return 0;
 }
@@ -259,7 +277,7 @@ static const char *group_commit(void *user, const char *text, size_t tl, const c
     puddle_gevent ge;
     const char *why;
     if (puddle_group_event_parse(text, tl, &ge, &why) == 0) {
-        applying a = { .ev = ge };
+        applying a = { .ev = ge, .why = NULL, .applied = 0, .me = p->me, .removed = 0 };
         char err[300];
         int ur = puddle_groups_update(p->ctx->groups, p->chat, apply_fn, &a, err, sizeof err);
         if (ur == 3)
@@ -269,7 +287,10 @@ static const char *group_commit(void *user, const char *text, size_t tl, const c
         const char *stored = puddle_store_delivered(p->ctx, p->chat, p->sender, text, tl, sigtext, id_out, dup);
         if (!stored && ur == 0) {
             puddle_log(PUDDLE_LOG_DEBUG, "group %.12s…: %s from %.12s…", p->chat, ge.type == PUDDLE_GE_JOIN ? "a join" : ge.type == PUDDLE_GE_LEAVE ? "a leave" :
-                       ge.type == PUDDLE_GE_INVITE ? "an invitation" : "a new name", p->sender);
+                       ge.type == PUDDLE_GE_INVITE ? "an invitation" : ge.type == PUDDLE_GE_REMOVE ? "a removal" : ge.type == PUDDLE_GE_VOTE ? "a vote" :
+                       "a new name", p->sender);
+            if (a.removed)
+                puddle_log(PUDDLE_LOG_INFO, "taken out of group %.12s…", p->chat);
             puddle_group_reconcile(p->ctx);
             char place[PUDDLE_PLACE_MAX];
             if (ge.type == PUDDLE_GE_JOIN && puddle_place_group(p->chat, place) == 0) /* someone new there: who we are in it */

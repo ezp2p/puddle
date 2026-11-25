@@ -25,7 +25,8 @@ class Chats : public QObject {
     Q_PROPERTY(QObject *blocked READ blocked CONSTANT)              // people we blocked: user, name, avatar, created_at
     Q_PROPERTY(QObject *dmBlocks READ dmBlocks CONSTANT)            // people whose direct messages through Ponds we drop: user, name, avatar, created_at
     Q_PROPERTY(QObject *groupInvites READ groupInvites CONSTANT)    // invitations to groups waiting for an answer
-    Q_PROPERTY(QObject *members READ members CONSTANT)              // the open group's members: id, name, avatar, color, state, isMe, friend
+    Q_PROPERTY(QObject *members READ members CONSTANT)              // the open group's members: id, name, avatar, color, state, isMe, friend,
+                                                                    // canRemove, votes, votesNeeded, voted
     Q_PROPERTY(bool currentIsGroup READ currentIsGroup NOTIFY currentChanged)
     Q_PROPERTY(bool currentIsPondDm READ currentIsPondDm NOTIFY currentChanged)  // with a member of a Pond, through it (docs/pond-dms.md)
     // the open conversation through a Pond: pond, pondName, member, closed ("left", "not_accepted", "dms_off" or ""), offer (their
@@ -59,6 +60,8 @@ class Chats : public QObject {
     Q_PROPERTY(QString leveeError READ leveeError NOTIFY leveeChanged)
     Q_PROPERTY(bool leveeCalls READ leveeCalls NOTIFY leveeChanged)                     // it has a relay for calls
     Q_PROPERTY(bool leveePondVoiceDirect READ leveePondVoiceDirect NOTIFY leveeChanged) // Pond voice skips the relay (the owner's choice)
+    // what the Levee gave up on before this Puddle came back (docs/levee.md, "Given up"): [{from, name, received}], oldest first
+    Q_PROPERTY(QVariantList leveeDropped READ leveeDropped NOTIFY leveeChanged)
     Q_PROPERTY(qint64 pairingExpires READ pairingExpires NOTIFY pairingChanged)  // UTC ms
     Q_PROPERTY(QString problem READ problem NOTIFY connectedChanged)             // a phone: why the Puddle's answers are not believed, "" if they are
     Q_PROPERTY(QObject *ponds READ ponds CONSTANT)                  // the Ponds we are in, and the one that is open (ponds.h)
@@ -111,6 +114,7 @@ public:
     QString leveeError() const { return leveeError_; }
     bool leveeCalls() const { return levee_.value("calls").toBool(); }
     bool leveePondVoiceDirect() const { return levee_.value("pond_voice_direct").toBool(); }
+    QVariantList leveeDropped() const;
     qint64 pairingExpires() const { return pairingExpires_; }
 
     // A phone: talk to its Puddle as the paired device whose key this is (docs/identity.md, "Devices").
@@ -127,6 +131,7 @@ public:
     Q_INVOKABLE void joinLevee(const QString &link);
     Q_INVOKABLE void leaveLevee();
     Q_INVOKABLE void setLeveePondVoiceDirect(bool direct);
+    Q_INVOKABLE void clearLeveeDropped(); // the owner has seen what the Levee gave up on
     QString myAvatar() const { return myAvatar_; }
     QString current() const { return current_; }
     int friendCount() const { return friends_; }
@@ -180,6 +185,9 @@ public:
     void sendFilesWith(const QString &path, const QVariantList &files, const QVariantMap &extra, const QVariantList &keep);
     Q_INVOKABLE void edit(const QString &messageId, const QString &text);
     Q_INVOKABLE void remove(const QString &messageId);
+    // A message their Levee gave up on (docs/levee.md, "Given up"): send it again, or delete it (in a group, only the mark)
+    Q_INVOKABLE void resend(const QString &messageId);
+    Q_INVOKABLE void forget(const QString &messageId);
 
     // groups
     // Friends to pick from, for the "+" dialog. With no text, the most recent ones; with text, those with it in their name, the ones whose name
@@ -203,6 +211,10 @@ public:
     Q_INVOKABLE void leaveGroup(const QString &groupId);     // any group we are in (from a menu on its row)
     Q_INVOKABLE void renameGroup(const QString &name);       // the open one
     Q_INVOKABLE void renameGroup(const QString &groupId, const QString &name);
+    // Take someone out of the open group: straight away if we made it or invited them (their row's canRemove), else a vote
+    // (votes, votesNeeded, voted) that takes them out once more than half of the others have voted.
+    Q_INVOKABLE void removeFromGroup(const QString &userId);
+    Q_INVOKABLE void voteToRemove(const QString &userId);
 
     Q_INVOKABLE void accept(const QString &userId, const QString &profile = QString());
     Q_INVOKABLE void decline(const QString &userId);
@@ -278,6 +290,7 @@ signals:
     void pondDmOpened(const QString &conversationId);
     void blockedChanged();
     void groupLeft();
+    void groupRemoved(const QString &name); // someone else took us out of a group, or the others voted us out
     void avatarReady(const QString &hash);
     void cardLoaded(const QString &userId, const QVariantMap &card);
     void uploadProgress(const QString &key, double fraction);
@@ -329,6 +342,7 @@ private:
     QString leveeError_;
     QHash<QString, QJsonObject> groups_;   // the groups we are in or invited to, by id
     QSet<QString> invitedTo_;
+    QSet<QString> leaving_; // groups we asked to leave: their going from the list is not news
     QString currentKind_ = QStringLiteral("dm"), self_;
     QSet<QString> dmBlocked_;              // whose direct messages through Ponds are dropped
     QHash<QString, QJsonObject> pondDms_; // conversations through a Pond, by id, as the Puddle said them
