@@ -4,11 +4,12 @@ name: docker
 # then joined under one name (docs/docker.md):
 #   a pull request      both built, nothing published
 #   a push to dev       "dev" and "dev-<commit>": the newest build of dev, replaced by the next push
+#   a push to dev-pools "dev-pools" and "dev-pools-<commit>": the same for the Pools branch
 #   a tag like 0.2.0    "0.2.0" and "0.2"; and "latest" unless it is a prerelease (a tag with a "-", such as 0.2.0-rc.1)
 
 on:
   push:
-    branches: [dev]
+    branches: [dev, dev-pools]
     tags: ['[0-9]*.[0-9]*.[0-9]*']
   pull_request:
   workflow_dispatch:
@@ -104,6 +105,8 @@ jobs:
             type=raw,value=latest,enable=${{ github.ref_type == 'tag' && !contains(github.ref_name, '-') }}
             type=raw,value=dev,enable=${{ github.ref == 'refs/heads/dev' }}
             type=sha,prefix=dev-,format=short,enable=${{ github.ref == 'refs/heads/dev' }}
+            type=raw,value=dev-pools,enable=${{ github.ref == 'refs/heads/dev-pools' }}
+            type=sha,prefix=dev-pools-,format=short,enable=${{ github.ref == 'refs/heads/dev-pools' }}
           labels: |
             org.opencontainers.image.title=puddled
             org.opencontainers.image.description=Puddle, headless: self-hosted chat on your own computer

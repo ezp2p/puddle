@@ -9,12 +9,17 @@ itself yet: a newer build is downloaded again by hand.
 |-----------------------------------|--------------------------------------------------------------------------------------|
 | a pull request                    | nothing: built and tested only (the downloads are kept on the run for a few days)     |
 | a push to `dev` (a PR merged)      | the **dev build**: the `dev-build` prerelease, replaced with this commit's downloads |
+| a push to `dev-pools`              | the **Pools dev build**: the `dev-pools-build` prerelease, the same for the Pools branch |
 | a tag like `0.3.0`                | the release `0.3.0` (a tag with a `-`, such as `0.3.0-rc.1`, is a prerelease)         |
 | a push to `main`                  | nothing: built and tested only                                                       |
 
 The dev build is always at the same link, `https://github.com/ezp2p/puddle/releases/tag/dev-build`, which is the one to
 give friends trying the newest. Its title and file names carry the commit (`Puddle-dev-51950ed-windows-x64.zip`). Its tag
 is `dev-build`, not `dev`, so it never shares a name with the branch.
+
+Pools are built on a branch of their own, `dev-pools` (see "Branches" in `CLAUDE.md`), with a dev build of their own at
+`https://github.com/ezp2p/puddle/releases/tag/dev-pools-build` (`Puddle-dev-pools-<commit>-…`), so trying Pools never
+changes what the dev build is. When Pools are done, `dev-pools` is merged into `dev` and the branch and its build go.
 
 Releases are tagged by hand (`git tag 0.3.0 && git push origin 0.3.0`), from whichever commit is to be released.
 
@@ -28,7 +33,7 @@ Releases are tagged by hand (`git tag 0.3.0 && git push origin 0.3.0`), from whi
 | `puddled-<v>-linux-amd64.tar.gz`, `arm64` | the Puddle without a window, for a server: OpenSSL built in, a systemd `--user` unit     |
 | `SHA256SUMS`                             | the checksums of all of the above                                                     |
 
-The container image of `puddled` (amd64 and arm64) is published by `docker.yml`: `:dev` on a push to `dev`, the version
+The container image of `puddled` (amd64 and arm64) is published by `docker.yml`: `:dev` on a push to `dev`, `:dev-pools` on a push to `dev-pools`, the version
 and `:latest` on a release tag (`docs/docker.md`).
 
 How each is made:
