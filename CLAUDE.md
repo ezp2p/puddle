@@ -17,10 +17,10 @@ Use these terms the way the owner does, in code, docs and conversation.
 - **Pond**: a Discord-style community server (channels, many members). Runs as its own daemon on
   a different code base (`../pond`, MariaDB); it is not a Puddle. A Puddle joins one with a `pond://` invite and follows it
   (`docs/ponds.md`); the app talks only to its own Puddle. Text channels, with files, so far.
-- **Levee**: a relay a Puddle can sit behind (`docs/levee.md`, a design draft). It runs on a server with a public
+- **Levee**: a relay a Puddle can sit behind (`ezp2p/levee`; the Puddle's side is the wiki's `puddle/design/levee`). It runs on a server with a public
   address; the Puddle connects out to it, needs no open ports, and sends and receives everything through it. It holds
   what arrives while the Puddle is offline, and decrypts and signs nothing. Not a normal user service: a headless daemon
-  with no GUI, for someone reasonably competent to run. Not built yet.
+  with no GUI, for someone reasonably competent to run. Built (Levee 1).
 - **Stream**: a connection between two Puddles. (Older docs call this federation or
   server-to-server traffic.)
 - **Scoped stream**: a stream that is only for groups, between two members who are not friends (`docs/groups.md`). It carries
@@ -28,7 +28,7 @@ Use these terms the way the owner does, in code, docs and conversation.
 
 Puddles talk privately to one another (a peer-to-peer chat client); Ponds are public gathering places. In the window, the rail of servers is for Ponds.
 
-When `api/*.yaml` or `docs/*.md` use these words, they mean the above. If a term is ambiguous
+When `api/*.yaml` or the wiki use these words, they mean the above. If a term is ambiguous
 or looks like it conflicts with this list, ask rather than guess.
 
 ## Conventions
@@ -50,20 +50,27 @@ or looks like it conflicts with this list, ask rather than guess.
   profiles), `storage/` (chat logs, media), `wire/` (shapes both APIs send), `events/` (signed events), `objects/` (User,
   Stream, Conversation, Message, Group), `http/` (TLS, server, router, client), `api/` (owner routes),
   `federation/` (stream routes), `service/` (the assembled Puddle, and `puddled`'s `main`). The plan for
-  finishing the layering is at the end of `docs/cpp-port.md`
+  finishing the layering is at the end of the wiki's `puddle/design/cpp-port`
 - `src/service/`: `puddled`, the headless Puddle
 - `src/gui/`: `Puddle`, the desktop app (Qt Quick): `app/` is the C++ behind the window, `qml/` the screens by topic, `qml/theme/Theme.qml` every colour and size; see `src/gui/README.md`
 - `api/openapi.yaml`: API for phone clients and the desktop app. `api/federation.yaml`: streams.
-- `docs/storage.md`, `docs/identity.md`, `docs/profiles.md`, `docs/streams.md`, `docs/calls.md`: design drafts the code follows
-- `docs/backup.md`: backups (`src/core/backup.*`), recovering, and moving a Puddle to a server
-- `docs/ponds.md`: being a member of Ponds (joining, following one's events, what is kept, the owner routes)
-- `docs/pond-dms.md`: direct messages between members of a Pond, the Puddle's side (the letter is the protocol's part 10; the Pond's side is its `docs/dms.md`)
-- `docs/levee.md`: the design draft for Levee (not built; open questions at its end)
-- `docs/roadmap.md`: the step-by-step plan for keys and streams; work through it in order, one step at a time
-- `docs/discuss-later.md`: open questions parked on purpose; don't raise them unprompted
-- `docs/hardening.md`: what junk and floods cost a Puddle (and a Pond), and the gaps still open
-- `docs/protocol.md`: which parts of the Puddle Protocol (`ezp2p/protocol`, the submodule `third_party/protocol`) Puddle implements. The protocol is what Pond, Levee and phone clients rely on: change the wire there first, then here
+- **Design docs, decisions and plans are not in this repository.** They live on the website wiki
+  (https://www.ezp2p.org/wiki/), whose source is `ezp2p/website` under `src/wiki/` (a checkout beside this one is
+  `../website/src/wiki/`):
+  - `puddle/design/`: the design the code follows: `identity`, `streams`, `storage`, `profiles`, `objects`, `groups`,
+    `files`, `calls`, `ponds`, `pond-dms`, `levee`, `hardening`, `backup`, `theming`, `protocol`, `cpp-port`, and
+    `history` (the old roadmap, phase by phase). `puddle/releases.md` and `puddle/docker.md` sit beside installation.
+  - `decisions/`: every question raised and the direction taken. Add to it when something is decided.
+  - `protocol/`: the Puddle Protocol's parts (the code and vectors stay in `ezp2p/protocol`, the submodule
+    `third_party/protocol`). The protocol is what Pond, Levee and phone clients rely on: change the wire there first,
+    then here.
+  - A comment or spec that names `docs/<name>.md` means the wiki page `puddle/design/<name>` (`roadmap.md` is
+    `history`, `discuss-later.md` is `decisions/open-questions`), or Pond's design for `design.md`, `dms.md` and `voice.md`.
+  - A change to Puddle that changes its design updates the matching wiki page in a website pull request alongside.
+- **Work still to do** is an issue on the project board (https://github.com/orgs/ezp2p/projects/1). Open questions
+  are issues labelled `needs decision`; don't decide them alone. A feature that also needs Pond or protocol work gets
+  its parent issue where the behaviour lives, with this repository's part as a sub-issue.
 - Build and test: `scripts/build.sh` (after `git submodule update --init`)
 - `third_party/protocol`: the protocol repository as a submodule; its `lib/` is libpuddle-proto (ids, chains, signatures, receipts, sealing), which `base/encoding.h`, `base/hash.h`, `base/seal.h` and `http/reqsig.h` put Puddle's names on
-- `.github/workflows/build.yml`: every platform built and tested; a push to `dev` replaces the `dev-build` prerelease, a tag makes a release; `scripts/package-*.sh` package them. See `docs/releases.md`
-- `Dockerfile`, `dist/docker-entrypoint.sh`: the `puddled` image, published to ghcr by `.github/workflows/docker.yml` (`:dev` on a push to dev, the version on a release tag); see `docs/docker.md`. `compose.yaml` (with `.env.example`) is the quick start for running one; `compose.test.yaml` is two Puddles for testing only
+- `.github/workflows/build.yml`: every platform built and tested; a push to `dev` replaces the `dev-build` prerelease, a tag makes a release; `scripts/package-*.sh` package them. See the wiki's `puddle/releases`
+- `Dockerfile`, `dist/docker-entrypoint.sh`: the `puddled` image, published to ghcr by `.github/workflows/docker.yml` (`:dev` on a push to dev, the version on a release tag); see the wiki's `puddle/docker`. `compose.yaml` (with `.env.example`) is the quick start for running one; `compose.test.yaml` is two Puddles for testing only
