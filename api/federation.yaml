@@ -29,10 +29,11 @@ info:
     - **Events are sent as strings.** An event's id is the SHA-256 of its exact bytes, so `event` is the
       raw JSON text as a string, never re-serialized. See docs/storage.md.
     - Groups: a group's id is made from its creator, a time and a nonce, and written into its first event, `chat.create`. Messages,
-      edits and redactions are the direct-message events with the group's id as the `chat`. Five more events change the group
-      (`chat.create`, `chat.rename`, `member.invite`, `member.join`, `member.leave`), delivered through `/stream/v1/events` like any
-      other; each Puddle applies the same rules to them, so the same events give the same members (docs/groups.md). Nobody can
-      remove another member.
+      edits and redactions are the direct-message events with the group's id as the `chat`. Seven more events change the group
+      (`chat.create`, `chat.rename`, `member.invite`, `member.join`, `member.leave`, `member.remove`, `member.vote`), delivered through
+      `/stream/v1/events` like any other; each Puddle applies the same rules to them, so the same events give the same members
+      (docs/groups.md). `member.remove` (with `member`) is the creator's, or the one who invited `member`; `member.vote` (with `member`) is
+      any member's, and more than half of the members other than `member` voting takes them out. A refused one is `not_allowed`.
     - There is deliberately no endpoint for blocks. A blocked sender is answered exactly like an
       ordinary pending request, and never told.
     - Group-only connections (a "scoped stream", state `scoped`) use `/stream/v1/access` with `scope` set, and are answered by an
@@ -826,6 +827,8 @@ components:
               id: { $ref: "#/components/schemas/UserId" }
               state: { type: string, enum: [invited, member] }
               ts: { type: integer, format: int64, description: The time of the event that put them in this state }
+              invited: { type: integer, format: int64, description: "The time of the invitation that brought them in (the creator: of the create); not after `ts`" }
+              by: { $ref: "#/components/schemas/UserId", description: Who invited them; absent for the creator }
               address: { type: string }
 
     Error:

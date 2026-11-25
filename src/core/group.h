@@ -30,6 +30,7 @@ typedef struct {
     puddle_gm_state state;
     char by[PUDDLE_USER_ID_LEN + 1]; /* who invited them; "" for the creator */
     int64_t ts;                      /* of the event that put them in this state */
+    int64_t invited;                 /* of the invitation that brought them in (the creator: of the create); a removal or a vote has to be newer */
     char address[PUDDLE_ADDR_MAX];   /* where the one who invited us said to reach them, "" if not told; only kept to connect once */
     int told;                        /* we have sent them our own member.join (they cannot learn it from anyone else) */
 } puddle_gmember;
@@ -39,8 +40,17 @@ typedef enum {
     PUDDLE_GROUP_INVITED,  /* someone invited us; the owner has not answered */
     PUDDLE_GROUP_IN,       /* we are a member */
     PUDDLE_GROUP_LEFT,     /* we left */
-    PUDDLE_GROUP_DECLINED  /* we said no to the invitation */
+    PUDDLE_GROUP_DECLINED, /* we said no to the invitation */
+    PUDDLE_GROUP_REMOVED   /* someone took us out (or took back our invitation), or the others voted us out */
 } puddle_group_my;
+
+/* A member's vote to take someone out (member.vote). It counts while both are still in and it is newer than the invitation
+ * that brought the one voted against in. */
+typedef struct {
+    char by[PUDDLE_USER_ID_LEN + 1];
+    char member[PUDDLE_USER_ID_LEN + 1];
+    int64_t ts;
+} puddle_gvote;
 
 typedef struct {
     char id[PUDDLE_USER_ID_LEN + 1];
@@ -56,6 +66,8 @@ typedef struct {
     char join_sig[180];
     puddle_gmember *members;                 /* everyone we know of, us included */
     size_t nmembers;
+    puddle_gvote *votes;                     /* the votes that still count */
+    size_t nvotes;
 } puddle_group;
 
 const char *puddle_group_my_name(puddle_group_my m);
@@ -65,6 +77,19 @@ void puddle_group_free(puddle_group *g);
 puddle_gmember *puddle_group_member(const puddle_group *g, const char *id); /* NULL if not listed */
 puddle_gmember *puddle_group_add_member(puddle_group *g, const char *id); /* a blank member at the end; NULL if out of memory */
 size_t puddle_group_count(const puddle_group *g, puddle_gm_state state);
+/* Hand `from`'s members and votes to `to` (whatever `to` held is freed); `from` is left empty. */
+void puddle_group_move(puddle_group *to, puddle_group *from);
+
+/* Who may take `target` out of the group straight away: the one who made it, and whoever invited `target`. Anyone else in it
+ * can only vote. 1 or 0. */
+int puddle_group_may_remove(const puddle_group *g, const char *remover, const char *target);
+/* The votes against `target` that count now, and how many it takes: more than half of the members other than `target`. */
+size_t puddle_group_votes_against(const puddle_group *g, const char *target);
+size_t puddle_group_votes_needed(const puddle_group *g, const char *target);
+/* Has `voter` a vote against `target` that counts? */
+int puddle_group_has_voted(const puddle_group *g, const char *voter, const char *target);
+/* Take out everyone the votes against have reached, and forget the votes that no longer count. Returns how many were taken out. */
+size_t puddle_group_settle_votes(puddle_group *g);
 
 /* ---- the store ---- */
 

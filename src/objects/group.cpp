@@ -23,20 +23,16 @@ void check(int status, const char *const &code)
 
 } // namespace
 
-Group::Group(Group &&other) noexcept : ctx_(other.ctx_), g_(other.g_)
+Group::Group(Group &&other) noexcept : ctx_(other.ctx_), g_{}
 {
-    other.g_.members = nullptr;
-    other.g_.nmembers = 0;
+    puddle_group_move(&g_, &other.g_);
 }
 
 Group &Group::operator=(Group &&other) noexcept
 {
     if (this != &other) {
-        puddle_group_free(&g_);
         ctx_ = other.ctx_;
-        g_ = other.g_;
-        other.g_.members = nullptr;
-        other.g_.nmembers = 0;
+        puddle_group_move(&g_, &other.g_);
     }
     return *this;
 }
@@ -65,9 +61,9 @@ std::vector<Group> Group::all(puddle_ctx *ctx)
         throw Error::internal();
     for (size_t i = 0; i < n; i++)
         if (list[i].my == PUDDLE_GROUP_IN || list[i].my == PUDDLE_GROUP_INVITED) {
-            out.push_back(Group(ctx, list[i]));
-            list[i].members = nullptr; // now the Group's
-            list[i].nmembers = 0;
+            puddle_group mine{};
+            puddle_group_move(&mine, &list[i]); // now the Group's
+            out.push_back(Group(ctx, mine));
         }
     puddle_group_list_free(list, n);
     std::sort(out.begin(), out.end(), [](const Group &a, const Group &b) {
@@ -125,6 +121,20 @@ Group Group::leave()
     return reload();
 }
 
+Group Group::remove(const std::string &userId)
+{
+    const char *code = nullptr;
+    check(ctx_->courier->group_remove(ctx_, g_.id, userId.c_str(), &code), code);
+    return reload();
+}
+
+Group Group::voteOut(const std::string &userId)
+{
+    const char *code = nullptr;
+    check(ctx_->courier->group_vote(ctx_, g_.id, userId.c_str(), &code), code);
+    return reload();
+}
+
 Group Group::rename(const std::string &name)
 {
     const char *code = nullptr;
@@ -173,6 +183,9 @@ void Group::write(puddle_jw *w, PartialUsers &people) const
         puddle_jw_key(w, "invited_by");
         people.write(w, g_.invited_by);
     }
+    char me[PUDDLE_USER_ID_LEN + 1];
+    puddle_identity_id(ctx_->identity, me);
+    const bool in = g_.my == PUDDLE_GROUP_IN;
     puddle_jw_key(w, "members");
     puddle_jw_array(w);
     for (size_t i = 0; i < g_.nmembers; i++) {
@@ -188,6 +201,11 @@ void Group::write(puddle_jw *w, PartialUsers &people) const
             people.write(w, m.by);
         }
         puddle_jw_num(w, "since", m.ts);
+        /* taking them out: straight away (the one who made the group, or who invited them), or by a vote of the others */
+        puddle_jw_flag(w, "can_remove", in && puddle_group_may_remove(&g_, me, m.id));
+        puddle_jw_num(w, "votes", (int64_t)puddle_group_votes_against(&g_, m.id));
+        puddle_jw_num(w, "votes_needed", (int64_t)puddle_group_votes_needed(&g_, m.id));
+        puddle_jw_flag(w, "voted", puddle_group_has_voted(&g_, me, m.id));
         puddle_jw_end_object(w);
     }
     puddle_jw_end_array(w);

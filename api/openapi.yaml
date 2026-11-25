@@ -344,6 +344,28 @@ paths:
       summary: Rename
       requestBody: { content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string, minLength: 1, maxLength: 100 } } } } } }
       responses: { "200": { $ref: "#/components/responses/Group" } }
+  /api/v1/groups/{group}/remove:
+    parameters: [{ $ref: "#/components/parameters/Group" }]
+    post:
+      tags: [groups]
+      summary: Take someone out, or take back their invitation
+      description: |
+        Only if the owner made the group or invited `user` (their `can_remove`); anyone else in it can only vote. Everyone in the group is told,
+        `user` too, and a connection that was only for this group is closed. `400` for the owner themselves (that is leaving), `403
+        not_allowed`, `404 not_a_member` for someone not in it or invited, `409 not_in_group` if the owner is not in it.
+      requestBody: { content: { application/json: { schema: { type: object, required: [user], properties: { user: { $ref: "#/components/schemas/UserId" } } } } } }
+      responses: { "200": { $ref: "#/components/responses/Group" } }
+  /api/v1/groups/{group}/vote:
+    parameters: [{ $ref: "#/components/parameters/Group" }]
+    post:
+      tags: [groups]
+      summary: Vote to take someone out
+      description: |
+        Anyone in the group may, once per person (`409 already_voted`). Once more than half of the members other than `user` have voted
+        (`votes`, `votes_needed`), every Puddle takes them out. Everyone sees the vote, `user` too. `400` for the owner themselves, `404
+        not_a_member`, `409 not_in_group`.
+      requestBody: { content: { application/json: { schema: { type: object, required: [user], properties: { user: { $ref: "#/components/schemas/UserId" } } } } } }
+      responses: { "200": { $ref: "#/components/responses/Group" } }
 
   # ---- identity, profiles, invites, media ----
   /api/v1/ponds:

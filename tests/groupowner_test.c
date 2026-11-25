@@ -355,6 +355,56 @@ int main(void)
     r = own("GET", "/api/v1/conversations", NULL);
     CHECK(has_text(r, "\"name\":\"Quiet\"") && count_in(body_of(r), "\"kind\":\"group\"") == 2);
 
+    /* ---- taking someone out ---- */
+    {
+        /* bob's invitation, which we sent: we made the group, so we may take it back; everyone hears, bob too */
+        int to_alice = queued(alice.uid, "events"), to_bob = queued(bob.uid, "events");
+        snprintf(body, sizeof body, "{\"user\":\"%s\"}", bob.uid);
+        CHECK(call_m("POST", G("remove"), body, NULL, 0)->status == 404);                                     /* only the owner */
+        r = own("POST", G("remove"), body);
+        CHECK(r->status == 200 && in_state(gid, bob.uid, PUDDLE_GM_LEFT) && !has_text(r, bob.uid));
+        CHECK(queued(alice.uid, "events") == to_alice + 1 && queued(bob.uid, "events") == to_bob + 1);
+        CHECK(own("POST", G("remove"), body)->status == 404);                                                 /* out already */
+        snprintf(body, sizeof body, "{\"user\":\"%s\"}", me.uid);
+        CHECK(own("POST", G("remove"), body)->status == 400 && own("POST", G("vote"), body)->status == 400); /* that is leaving */
+        CHECK(own("POST", G("remove"), "{\"user\":\"y\"}")->status == 400 && own("POST", G("remove"), "{}")->status == 400);
+        r = own("GET", C("messages"), NULL);
+        CHECK(has_text(r, "\"type\":\"group_remove\"") && has_text(r, "\"member\":{\"id\":\""));
+
+        /* alice brings dave in (they share a group-only connection with us) */
+        char ev[300];
+        clock_now += 1000;
+        CHECK(puddle_group_invite_build(gid, alice.uid, clock_now, dave.uid, ev, sizeof ev) > 0 && has_text(deliver_one(&alice, gid, &alice, ev), "\"accepted\":[\""));
+        clock_now += 1000;
+        CHECK(puddle_group_join_build(gid, dave.uid, clock_now, ev, sizeof ev) > 0 && has_text(deliver_one(&dave, gid, &dave, ev), "\"accepted\":[\""));
+        CHECK(in_state(gid, dave.uid, PUDDLE_GM_MEMBER));
+        /* dave cannot take alice out (he did not invite her, and did not make the group): refused when it arrives */
+        clock_now += 1000;
+        CHECK(puddle_group_remove_build(gid, dave.uid, clock_now, alice.uid, ev, sizeof ev) > 0 && has_text(deliver_one(&dave, gid, &dave, ev), "\"reason\":\"not_allowed\""));
+        CHECK(in_state(gid, alice.uid, PUDDLE_GM_MEMBER));
+        /* but he can vote: with alice and us besides him, two of the others take him out; first us */
+        r = own("GET", gpath, NULL);
+        CHECK(has_text(r, "\"can_remove\":true") && has_text(r, "\"votes_needed\":2") && has_text(r, "\"voted\":false"));
+        snprintf(body, sizeof body, "{\"user\":\"%s\"}", alice.uid);
+        r = own("POST", G("vote"), body);                                                                     /* against alice, whom we may also remove */
+        CHECK(r->status == 200 && has_text(r, "\"votes\":1") && has_text(r, "\"voted\":true") && in_state(gid, alice.uid, PUDDLE_GM_MEMBER));
+        CHECK(own("POST", G("vote"), body)->status == 409);                                                   /* one each */
+        r = own("GET", C("messages"), NULL);
+        CHECK(has_text(r, "\"type\":\"group_vote\""));
+        /* dave's vote decides it: more than half of the two others */
+        clock_now += 1000;
+        CHECK(puddle_group_vote_build(gid, dave.uid, clock_now, alice.uid, ev, sizeof ev) > 0 && has_text(deliver_one(&dave, gid, &dave, ev), "\"accepted\":[\""));
+        CHECK(in_state(gid, alice.uid, PUDDLE_GM_LEFT));
+        /* and alice's word no longer counts there */
+        clock_now += 1000;
+        CHECK(puddle_group_rename_build(gid, alice.uid, clock_now, "Hers", ev, sizeof ev) > 0 && has_text(deliver_one(&alice, gid, &alice, ev), "\"reason\":\"not_a_member\""));
+        /* anyone may invite her back: we do, as her friend */
+        r = own("POST", G("invite"), body);
+        CHECK(r->status == 200 && in_state(gid, alice.uid, PUDDLE_GM_INVITED));
+        r = own("GET", gpath, NULL);
+        CHECK(has_text(r, "\"votes\":0") && !has_text(r, "\"votes\":1"));                               /* the old votes were about before */
+    }
+
     /* ---- leave ---- */
     r = own("POST", G("leave"), NULL);
     CHECK(r->status == 200 && has_text(r, "\"my\":\"left\"") && own("POST", G("leave"), NULL)->status == 409);

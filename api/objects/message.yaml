@@ -11,7 +11,7 @@ properties:
   conversation: { type: string, description: "The Conversation's id: the other person's UserId for a DM, the ChatId for a group" }
   type:
     type: string
-    enum: [default, group_create, group_rename, group_invite, group_join, group_leave]
+    enum: [default, group_create, group_rename, group_invite, group_join, group_leave, group_remove, group_vote]
     description: "`default` is something someone wrote; the others are what happened to a group"
   author: { $ref: "partial_user.yaml" }
   ts: { $ref: "../wire/ids.yaml#/$defs/Timestamp", description: "The author's clock" }

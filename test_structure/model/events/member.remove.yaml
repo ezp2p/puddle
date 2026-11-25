@@ -1,0 +1,16 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: MemberRemove
+description: Takes someone out of a group, or takes back their invitation.
+allOf:
+  - $ref: "header.yaml"
+  - type: object
+    required: [type, member]
+    properties:
+      type: { const: "member.remove" }
+      member: { $ref: "../wire/ids.yaml#/$defs/UserId", description: The one taken out; never the sender }
+unevaluatedProperties: false
+x-sent-by: the creator, or whoever invited `member`
+x-rules:
+  - From a member who made the group, or whose invitation brought `member` in last; anyone else is refused (`not_allowed`)
+  - Older than that invitation: stale, ignored (they have been invited back since)
+  - Takes effect at its own time, so a later invitation can bring them back
