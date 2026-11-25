@@ -244,6 +244,27 @@ void Chats::refreshLevee()
     });
 }
 
+QVariantList Chats::leveeDropped() const
+{
+    QVariantList out;
+    for (const QJsonValue &v : levee_.value("dropped").toArray()) {
+        const QJsonObject d = v.toObject();
+        const QString from = d.value("from").toString();
+        out.append(QVariantMap{ { "from", from }, { "name", nameOf(from) }, { "received", d.value("received").toDouble() } });
+    }
+    return out;
+}
+
+void Chats::clearLeveeDropped()
+{
+    api_.post(QStringLiteral("/api/v1/levee/dropped/clear"), QJsonObject{}, [this](int status, const QJsonDocument &doc) {
+        if (status == 200 && doc.isObject()) {
+            levee_ = doc.object();
+            emit leveeChanged();
+        }
+    });
+}
+
 void Chats::joinLevee(const QString &link)
 {
     if (leveeBusy_)
@@ -1058,6 +1079,7 @@ void Chats::renderMessages()
             m.insert("deliveryState", d.value("state"));
             m.insert("deliveryReason", d.value("reason"));
             m.insert("deliveryNext", d.value("next_at"));
+            m.insert("deliveryBack", d.value("back"));
         }
         const QJsonValue author = m.value("author");
         m.insert("senderName", mine ? selfName(author) : !nameIn(author).isEmpty() ? nameIn(author) : nameOf(sender));
@@ -1431,6 +1453,16 @@ void Chats::edit(const QString &messageId, const QString &text)
 void Chats::remove(const QString &messageId)
 {
     post(path("conversations", current_, QStringLiteral("messages/%1/delete").arg(messageId)), QJsonObject{}, tr("The message could not be deleted."));
+}
+
+void Chats::resend(const QString &messageId)
+{
+    post(path("conversations", current_, QStringLiteral("messages/%1/resend").arg(messageId)), QJsonObject{}, tr("The message could not be sent again."));
+}
+
+void Chats::forget(const QString &messageId)
+{
+    post(path("conversations", current_, QStringLiteral("messages/%1/forget").arg(messageId)), QJsonObject{}, tr("The message could not be deleted."));
 }
 
 // who they will see us as, if the owner chose: nothing goes without that choice

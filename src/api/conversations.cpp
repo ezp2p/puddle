@@ -5,6 +5,8 @@
 #include "objects/conversation.hpp"
 #include "objects/user.hpp"
 
+#include "core/outbox.h"
+
 #include <cstring>
 
 using namespace puddle;
@@ -134,6 +136,70 @@ static int delete_message(const puddle_call *c, puddle_jw *w)
     return 200;
 }
 
+/* What a Levee gave up on (spec/06, "When the Levee gives up"; docs/levee.md, "Given up"): the given-up deliveries of the
+ * message in this conversation, for each friend: `back` only those whose friend has been heard from since. */
+static std::vector<uint64_t> givenUp(const puddle_call *c, const Conversation &conv, bool back)
+{
+    std::vector<uint64_t> out;
+    if (!c->ctx->outbox)
+        return out;
+    puddle_ob_item *items;
+    size_t n;
+    if (puddle_outbox_list(c->ctx->outbox, &items, &n) != 0)
+        throw Error::internal();
+    std::string needle = std::string("\"id\":\"") + puddle_param(c, "message") + "\"";
+    bool dm = conv.kind() == Conversation::Kind::Dm;
+    for (size_t i = 0; i < n; i++) {
+        const puddle_ob_item &it = items[i];
+        if (it.given_up != PUDDLE_OB_GIVEN_UP || strcmp(it.kind, "events") != 0 || !it.body || !strstr(it.body, needle.c_str()) ||
+            (dm && conv.id() != it.peer) || (!dm && !strstr(it.body, conv.id().c_str())) || (back && !it.back_ms))
+            continue;
+        out.push_back(it.seq);
+    }
+    puddle_outbox_list_free(items, n);
+    return out;
+}
+
+static void writeMessage(const puddle_call *c, const Conversation &conv, const Message &m, puddle_jw *w)
+{
+    PartialUsers people(c->ctx);
+    Deliveries d(c->ctx, conv.kind() == Conversation::Kind::Group ? std::string() : conv.id());
+    m.write(w, c->ctx, people, &d);
+}
+
+/* Resend: the same event, as a new request, to each friend who is back */
+static int resend_message(const puddle_call *c, puddle_jw *w)
+{
+    Conversation conv = conversationOf(c);
+    Message m = messageOf(c);
+    std::vector<uint64_t> all = givenUp(c, conv, false), ready = givenUp(c, conv, true);
+    if (all.empty())
+        throw Error::notFound("nothing_to_resend");
+    if (ready.empty())
+        throw Error(409, "not_back", "they haven't been heard from since; it can go again once they are");
+    for (uint64_t seq : ready)
+        puddle_outbox_requeue(c->ctx->outbox, seq);
+    writeMessage(c, conv, m, w);
+    return 200;
+}
+
+/* Delete it: in a DM gone from the owner's chat too; in a group, where others have it, only the mark for those friends goes */
+static int forget_message(const puddle_call *c, puddle_jw *w)
+{
+    Conversation conv = conversationOf(c);
+    Message m = messageOf(c);
+    bool dm = conv.kind() == Conversation::Kind::Dm;
+    std::vector<uint64_t> seqs = givenUp(c, conv, !dm);
+    if (seqs.empty())
+        throw Error::notFound("nothing_to_delete");
+    for (uint64_t seq : seqs)
+        puddle_outbox_dismiss(c->ctx->outbox, seq);
+    if (dm)
+        m = m.remove(c->ctx);
+    writeMessage(c, conv, m, w);
+    return 200;
+}
+
 /* Through a Pond: offer to be friends (docs/pond-dms.md, "Becoming friends"). */
 static int befriend(const puddle_call *c, puddle_jw *w)
 {
@@ -165,6 +231,8 @@ const puddle_route puddle_conversation_routes[] = {
     { "POST", "/api/v1/conversations/{conversation:id}/messages/send",   PUDDLE_AUTH_OWNER, 65536, send_message,      NULL },
     { "POST", "/api/v1/conversations/{conversation:id}/messages/{message:event}/edit", PUDDLE_AUTH_OWNER, 8192, edit_message, NULL },
     { "POST", "/api/v1/conversations/{conversation:id}/messages/{message:event}/delete", PUDDLE_AUTH_OWNER, 64, delete_message, NULL },
+    { "POST", "/api/v1/conversations/{conversation:id}/messages/{message:event}/resend", PUDDLE_AUTH_OWNER, 64, resend_message, NULL },
+    { "POST", "/api/v1/conversations/{conversation:id}/messages/{message:event}/forget", PUDDLE_AUTH_OWNER, 64, forget_message, NULL },
     { "POST", "/api/v1/conversations/{conversation:id}/read",            PUDDLE_AUTH_OWNER, 64,   mark_read,          NULL },
     { "POST", "/api/v1/conversations/{conversation:id}/retry",           PUDDLE_AUTH_OWNER, 64,   retry,              NULL },
     { "POST", "/api/v1/conversations/{conversation:id}/befriend",        PUDDLE_AUTH_OWNER, 64,   befriend,           NULL },

@@ -21,7 +21,7 @@ Puddle is the **reference implementation**: the protocol's test vectors were mad
 | 05 receipts from Ponds | built: checked for a Pond with `receipts`, whose certificate is then never pinned | `src/federation/ponds.cpp`, `docs/ponds.md` "Proving who answers" |
 | 05 pictures in Ponds | built: our profile's pictures sent to a Pond with `pictures`, its icon and members' pictures fetched from it | `src/federation/ponds.cpp`, `docs/ponds.md` "Pictures" |
 | 08 calls | built: one to one, Puddle to Puddle (roadmap 8.1) | `src/federation/calls.cpp`, `docs/calls.md` |
-| 06 Levee | built: joining, the inbox, everything out through it, custody receipts, files left there, calls through its relay | `src/service/levee.cpp`, `src/core/levee.cpp`, `docs/levee.md` |
+| 06 Levee | built: joining, the inbox, everything out through it, custody receipts and what happens when the Levee gives up (`undelivered`, `dropped`), files left there, calls through its relay | `src/service/levee.cpp`, `src/core/levee.cpp`, `docs/levee.md` |
 
 ## What Puddle has to do next for the protocol
 

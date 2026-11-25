@@ -60,7 +60,16 @@ typedef struct {
     puddle_ob_state state;
     int status;                /* the last HTTP status seen, 0 if none */
     char reason[200];          /* why it is waiting or failed, in words */
+    /* Their Levee took it (a custody receipt), then gave up on it before they came back (spec/06, "When the Levee gives up"):
+     * failed, and not retried by itself. PUDDLE_OB_GIVEN_UP: the owner's to resend or delete (a message);
+     * PUDDLE_OB_GIVEN_UP_RESEND: sent again by itself once they are back (anything else). 0 for neither. */
+    int given_up;
+    int64_t back_ms;           /* given up, and they have been heard from since: when. 0 = not yet */
 } puddle_ob_item;
+
+#define PUDDLE_OB_GIVEN_UP 1
+#define PUDDLE_OB_GIVEN_UP_RESEND 2
+#define PUDDLE_OB_CUSTODY_KEEP_MS (60LL * 24 * 3600 * 1000) /* a custody receipt is remembered this long: past any Levee's spool */
 
 typedef enum {
     PUDDLE_OB_DELIVERED,  /* a 2xx came back (in their name, if we hold their key) */
@@ -133,8 +142,11 @@ int puddle_outbox_retry_now(puddle_outbox *ob, const char *peer);
  * reach us but not be reached (behind NAT) isn't dialled on every request it sends. Returns how many were woken. */
 #define PUDDLE_OUTBOX_HEARD_GAP_MS 30000
 int puddle_outbox_heard_from(puddle_outbox *ob, const char *peer);
+/* As heard_from, for what their Levee gave up on alone: they are back (a request from them, or an answer of their own). */
+void puddle_outbox_peer_back(puddle_outbox *ob, const char *peer);
 
-/* Give an item that failed another go: it is queued again, to be tried now, as if new. 0, or 1 if there is no such failed item. */
+/* Give an item that failed another go: it is queued again, to be tried now, as if new (signed again: a new request). 0, or 1
+ * if there is no such failed item. */
 int puddle_outbox_requeue(puddle_outbox *ob, uint64_t seq);
 
 /* Everything in the outbox, oldest first (a copy: free with puddle_outbox_list_free). */
@@ -143,6 +155,22 @@ void puddle_outbox_list_free(puddle_ob_item *items, size_t count);
 
 /* Remove an item that failed, once the owner has seen it. 0, 1 no such item, -1. */
 int puddle_outbox_dismiss(puddle_outbox *ob, uint64_t seq);
+
+/* ---- a Levee that gave up (spec/06, "When the Levee gives up") ----
+ *
+ * What a peer's Levee took for them (a custody receipt) is remembered: which Levee, the request's nonce and body hash, and the
+ * item itself. A notice from that Levee, signed for the nonce and hash, puts the item back, failed and given up. */
+
+/* The key of the Levee `levee_id` that has given us custody receipts: 1 and `key`, or 0. */
+int puddle_outbox_custody_levee(puddle_outbox *ob, const char *levee_id, unsigned char key[32]);
+
+/* One item of a notice from the Levee `levee_id` that it gave up on our request `nonce` to `for_id`, whose body hashed to
+ * `sha256` (hex), signed `sig` (base64). Checked against the custody receipt we hold for that nonce: 1 if it checked and the
+ * item is back (failed, given up; `kind` and `seq` filled), 0 if we hold no such receipt or it doesn't check. `resend`
+ * decides, from the item, whether it goes again by itself once they are back (1) or is the owner's to decide (0). */
+int puddle_outbox_undelivered(puddle_outbox *ob, const char *for_id, const char *levee_id, const char *nonce, const char *sha256,
+                              const char *sig, int (*resend)(const puddle_ob_item *item, void *user), void *user, char kind[32],
+                              uint64_t *seq);
 
 /* How long to wait before trying an offline peer again, given when it was first found offline. */
 int64_t puddle_outbox_retry_delay_ms(int64_t first_offline_ms, int64_t now_ms);

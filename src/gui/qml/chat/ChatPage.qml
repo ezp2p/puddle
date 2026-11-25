@@ -526,13 +526,29 @@ Pane {
                                     font.pixelSize: 11
                                     // a reason on a message still waiting means something answered that wasn't them (docs/streams.md)
                                     readonly property bool troubled: msg.model.deliveryState === "retrying" && !!msg.model.deliveryReason
-                                    color: msg.model.deliveryState === "failed" ? Theme.danger : troubled ? Theme.warning : palette.text
-                                    opacity: msg.model.deliveryState === "failed" || troubled ? 1 : 0.6
+                                    readonly property bool lost: msg.model.deliveryState === "undelivered"
+                                    color: msg.model.deliveryState === "failed" || lost ? Theme.danger : troubled ? Theme.warning : palette.text
+                                    opacity: msg.model.deliveryState === "failed" || lost || troubled ? 1 : 0.6
                                     text: page.waitingOnGroup(msg.model) ? qsTr("Waiting for group members to come online. It will be delivered when they do.")
                                           : msg.model.deliveryState === "queued" ? qsTr("Sending…")
                                           : msg.model.deliveryState === "retrying" ? qsTr("Not delivered to %1 yet: %2. Trying again at %3.").arg(page.chats.currentName).arg(msg.model.deliveryReason || qsTr("they can't be reached right now")).arg(page.clock(new Date(msg.model.deliveryNext)))
                                           : msg.model.deliveryState === "failed" ? qsTr("Not delivered: %1").arg(msg.model.deliveryReason || qsTr("unknown reason"))
+                                          // their Levee kept it for them, then gave up before they came back (docs/levee.md, "Given up")
+                                          : lost && msg.model.deliveryBack ? qsTr("Not delivered: it expired at their Levee before they came back. Send it again, or delete it?")
+                                          : lost ? qsTr("Not delivered: it expired at their Levee before they came back. You can send it again once they are back.")
                                           : ""
+                                }
+                                Button {
+                                    objectName: "resendButton"
+                                    visible: msg.model.deliveryState === "undelivered" && msg.model.deliveryBack === true
+                                    text: qsTr("Resend")
+                                    onClicked: page.chats.resend(msg.model.id)
+                                }
+                                Button {
+                                    objectName: "forgetButton"
+                                    visible: msg.model.deliveryState === "undelivered" && (msg.model.deliveryBack === true || !page.chats.currentIsGroup)
+                                    text: qsTr("Delete")
+                                    onClicked: page.chats.forget(msg.model.id)
                                 }
                                 Button {
                                     objectName: "retryButton"

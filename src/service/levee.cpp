@@ -187,7 +187,7 @@ std::string peers_json(puddle_ctx *ctx)
             if (!sl[i].chain || sl[i].provisional || sl[i].state == PUDDLE_STREAM_CLOSED ||
                 puddle_streams_is_blocked((puddle_streams *)ctx->streams, sl[i].id))
                 continue;
-            size_t cap = sl[i].chain_len * 2 + 200;
+            size_t cap = sl[i].chain_len * 2 + 200 + PUDDLE_STREAM_MAX_ADDRS * (PUDDLE_ADDR_MAX + 8) + 300;
             std::string one(cap, '\0');
             puddle_jw w;
             puddle_jw_init(&w, one.data(), one.size());
@@ -195,6 +195,23 @@ std::string peers_json(puddle_ctx *ctx)
             puddle_jw_str(&w, "id", sl[i].id);
             puddle_jw_key(&w, "chain");
             puddle_jw_string_n(&w, sl[i].chain, sl[i].chain_len);
+            /* where they are and which Levee answers for them, from their newest address record: so our Levee can tell them
+             * it gave up on something of theirs, and take such a notice from their Levee (spec/06, "When the Levee gives up") */
+            puddle_jw_key(&w, "addresses");
+            puddle_jw_array(&w);
+            for (int a = 0; a < sl[i].naddr; a++)
+                puddle_jw_string(&w, sl[i].addresses[a]);
+            puddle_jw_end_array(&w);
+            unsigned char lk[32];
+            if (sl[i].levee_id[0] && strlen(sl[i].levee_key) == 64 && puddle_hex_decode(sl[i].levee_key, lk, 32) == 0) {
+                char k64[64];
+                puddle_base64_encode(lk, 32, k64, sizeof k64);
+                puddle_jw_key(&w, "levee");
+                puddle_jw_object(&w);
+                puddle_jw_str(&w, "id", sl[i].levee_id);
+                puddle_jw_str(&w, "key", k64);
+                puddle_jw_end_object(&w);
+            }
             puddle_jw_end_object(&w);
             size_t n = puddle_jw_finish(&w);
             if (!n)
@@ -296,6 +313,17 @@ void handle_item(Worker *w, const puddle_levee_state &lv, const char *j, size_t 
         std::string file = json_str(hv.p, hv.len, "file"), by = json_str(hv.p, hv.len, "by");
         puddle_log(PUDDLE_LOG_DEBUG, "levee: %.12s… has fetched a file we left there", by.c_str());
         puddle_file_note_delivered(w->ctx, file.c_str(), by.c_str()); /* as if from us: asking again needs the owner's yes */
+        return;
+    }
+    if (puddle_json_member(j, n, "dropped", &hv) == 0) { /* our Levee gave up on it before we came back: tell the owner */
+        std::string from = json_str(hv.p, hv.len, "from"), target = json_str(hv.p, hv.len, "target");
+        int64_t at = 0;
+        if (puddle_json_member(hv.p, hv.len, "received", &v) == 0)
+            puddle_json_int64(v, &at);
+        if (puddle_id_valid(from.c_str())) {
+            puddle_log(PUDDLE_LOG_INFO, "levee: something %.12s… sent while we were away expired there before we came back", from.c_str());
+            puddle_levee_note_dropped(w->ctx->config->data_dir, from.c_str(), target.c_str(), at, puddle_ctx_now_ms(w->ctx));
+        }
         return;
     }
     bool live = puddle_json_member(j, n, "live", &v) == 0 && v.len == 4 && !memcmp(v.p, "true", 4);

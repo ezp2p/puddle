@@ -36,12 +36,15 @@ properties:
     properties:
       state:
         type: string
-        enum: [queued, retrying, failed]
-        description: "`queued` not tried yet, `retrying` not delivered yet, tried again at next_at (with a `reason` when something answered that could not prove it is them: docs/streams.md, \"Proving who answers\"), `failed` refused in their name or given up (retry asks again)"
+        enum: [queued, retrying, failed, undelivered]
+        description: "`queued` not tried yet, `retrying` not delivered yet, tried again at next_at (with a `reason` when something answered that could not prove it is them: docs/streams.md, \"Proving who answers\"), `failed` refused in their name or given up (retry asks again), `undelivered` their Levee took it, then gave up before they came back (docs/levee.md, \"Given up\"): not tried again by itself, nor by retry; once `back`, it may be resent or deleted"
       reason: { type: string }
       next_at: { $ref: "../wire/ids.yaml#/$defs/Timestamp", description: "With retrying" }
       attempts: { type: integer, minimum: 0 }
+      back: { type: boolean, description: "With undelivered (in a group, the worst member's): they have been heard from since, so resend may send it" }
 x-methods:
   edit: POST /api/v1/conversations/{conversation}/messages/{message}/edit
+  resend: POST /api/v1/conversations/{conversation}/messages/{message}/resend
+  forget: POST /api/v1/conversations/{conversation}/messages/{message}/forget
   remove: POST /api/v1/conversations/{conversation}/messages/{message}/delete
   reply: POST /api/v1/conversations/{conversation}/messages/send (with reply_to)

@@ -3,12 +3,15 @@
  *   GET  /api/v1/levee        whether we are behind one, where, and whether we are attached now
  *   POST /api/v1/levee/join   {link}: join the Levee a levee:// link names; our address becomes its
  *   POST /api/v1/levee/leave  leave it; our address is our own again (or none)
- *   POST /api/v1/levee/settings  {pond_voice_direct}: Pond voice straight to the Pond, not through the relay */
+ *   POST /api/v1/levee/settings  {pond_voice_direct}: Pond voice straight to the Pond, not through the relay
+ *   POST /api/v1/levee/dropped/clear  the owner has seen what the Levee gave up on */
 
 #include "api/api.h"
 
 #include "base/json.h"
 #include "core/levee.h"
+
+#include <stdlib.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -27,6 +30,21 @@ static int levee_get(const puddle_call *c, puddle_jw *w)
         puddle_jw_flag(w, "calls", lv.turn_port != 0);
         puddle_jw_flag(w, "pond_voice_direct", lv.pond_voice_direct);
     }
+    /* what the Levee gave up on before we came back: from whom, and when it reached it (it never held the content in the clear) */
+    puddle_levee_dropped *dl = (puddle_levee_dropped *)calloc(PUDDLE_LEVEE_DROPPED_MAX, sizeof *dl);
+    size_t dn = dl ? puddle_levee_dropped_list(c->ctx->config->data_dir, dl, PUDDLE_LEVEE_DROPPED_MAX) : 0;
+    puddle_jw_key(w, "dropped");
+    puddle_jw_array(w);
+    for (size_t i = 0; i < dn && w->len + 400 < w->cap; i++) {
+        puddle_jw_object(w);
+        puddle_jw_str(w, "from", dl[i].from);
+        puddle_jw_str(w, "target", dl[i].target);
+        puddle_jw_num(w, "received", dl[i].received);
+        puddle_jw_num(w, "noted", dl[i].noted);
+        puddle_jw_end_object(w);
+    }
+    puddle_jw_end_array(w);
+    free(dl);
     puddle_jw_end_object(w);
     return 200;
 }
@@ -74,10 +92,18 @@ static int levee_settings(const puddle_call *c, puddle_jw *w)
     return levee_get(c, w);
 }
 
+static int levee_dropped_clear(const puddle_call *c, puddle_jw *w)
+{
+    if (puddle_levee_dropped_clear(c->ctx->config->data_dir) != 0)
+        return puddle_fail(w, 500, "internal");
+    return levee_get(c, w);
+}
+
 const puddle_route puddle_levee_routes[] = {
     { "GET",  "/api/v1/levee",       PUDDLE_AUTH_OWNER, 0,    levee_get,   NULL },
     { "POST", "/api/v1/levee/join",  PUDDLE_AUTH_OWNER, 2048, levee_join,  NULL },
     { "POST", "/api/v1/levee/leave", PUDDLE_AUTH_OWNER, 64,   levee_leave, NULL },
     { "POST", "/api/v1/levee/settings", PUDDLE_AUTH_OWNER, 256, levee_settings, NULL },
+    { "POST", "/api/v1/levee/dropped/clear", PUDDLE_AUTH_OWNER, 64, levee_dropped_clear, NULL },
 };
 const size_t puddle_levee_routes_count = sizeof puddle_levee_routes / sizeof puddle_levee_routes[0];

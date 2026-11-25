@@ -375,6 +375,10 @@ void puddle_net_request(const puddle_address *addr, const char *method, const ch
             if (cc == PP_RECEIPT_OK) {
                 out->proof = PUDDLE_RECEIPT_OK;
                 out->custody = 1;
+                snprintf(out->custody_levee, sizeof out->custody_levee, "%s", o.peer_levee_id);
+                memcpy(out->custody_key, o.peer_levee_key, 32);
+                snprintf(out->custody_nonce, sizeof out->custody_nonce, "%s", mine.nonce);
+                memcpy(out->custody_hash, bh, sizeof out->custody_hash);
             } else {
                 puddle_log(PUDDLE_LOG_WARN, "a custody receipt from %s didn't check out (%d), so it isn't the Levee %.12s… names", addr->address, (int)cc,
                            peer_id);
