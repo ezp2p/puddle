@@ -17,6 +17,13 @@ Built 2026-11-21. Decided with the owner:
 | Calls | Through a TURN relay on the Levee, in the first build. Its UDP ports are published directly, beside the proxy. |
 | Pond voice | Through the relay too, by default, so Ponds don't learn the Puddle's address; the owner may send it straight to the Pond instead (shorter, but the Pond sees the address). |
 | Storage | Plain files in the Levee's data folder; no database. |
+| Certificate pinning | Gone with sealing (protocol part 09): who answers rests on signatures and sealing, and the Levee's TLS is transport only. *(2026-11-25)* |
+| How long it holds things | Until the Puddle comes back, which gets everything pending, up to the operator's limits (1 GiB, 30 days). What it gives up on, it tells both ends: see "Given up" below. *(2026-11-25)* |
+| Several Levees | No. A Puddle has one Levee and a Levee one Puddle; a spare isn't worth the complexity. *(2026-11-25)* |
+| Direct and Levee together | Always the Levee: friends dial only the newest address record, which names the Levee alone. *(2026-11-25)* |
+
+These answer the seven open questions of the first draft (mailbox or tunnel, pinning, strangers, who runs it, how long,
+several Levees, direct and Levee together); protocol part 06, "Settled with the owner", maps each to its section.
 
 ## In the app
 
@@ -60,6 +67,25 @@ forgets it. Only the owner changes it: the worker's saves keep it as it is.
 Leaving: the Levee forgets the Puddle and everything it kept for it, and friends are told the Puddle's own address again
 (or none, if it has no `advertise` and listens everywhere).
 
+## Given up
+
+*Decided 2026-11-25; not built yet.* A Levee keeps what waits for its Puddle for 30 days (the operator's
+`spool.keep_days`), and forgets it all when the Puddle leaves. A request it gives up on had already been receipted to
+its sender as delivered, so it says so (protocol part 06, "When the Levee gives up"):
+
+- **The sender's Puddle** gets `POST /stream/v1/undelivered`, signed by the Levee that gave the custody receipt. Each
+  message named turns from "waiting at their Levee" to **not delivered**, and the outbox does not retry it. Once the
+  friend is seen again (any request from them, an answer from their Puddle itself, or a new address record), the chat
+  offers, on each such message, **Resend** (the same event in a new request) or **Delete** (gone from the sender's own
+  chat; in a group, where others have it, it only clears the mark for that friend). So failed messages don't linger.
+  Address records, profiles and the like are not shown: they are sent again as they stand then, as on
+  `puddle_sync_resume`.
+- **The receiving Puddle** gets one `dropped` item per request on `inbox` when it attaches, and tells its owner that
+  something from that friend expired before they came back. It can't say what: the Levee held only sealed bytes.
+
+For this, `peers` carries each friend's addresses and Levee (from their newest address record), so a Levee can reach a
+sender, and take a notice from a friend's Levee.
+
 ## Tests
 
 The Levee repository's `tests/e2e_test.cpp` runs a real `puddled` behind a real `leveed` and befriends another: joining,
@@ -69,7 +95,6 @@ file fetched from the Levee while its sender is off, and leaving. Puddle's `ui_t
 ## Not yet
 
 - **Holding what goes out** for a friend who is away and has no Levee: the Puddle's outbox keeps trying, which needs it on.
-- **Several Levees**, or a Levee and a direct address at once.
 - **Voice over HTTPS** for networks that block UDP.
 - **Phones through the Levee** work like friends (their requests are signed and sealed to the Puddle), but a phone's own
   calls leg still offers its host candidates.
