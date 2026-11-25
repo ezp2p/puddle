@@ -54,7 +54,7 @@ listener (`address: "::"` listens on all IPv4 and IPv6 interfaces; put IPv6 addr
 to the address friends should use if it isn't the one you listen on; it is the address you give to friends.
 
 Your profiles (display name, picture, blurb, colors, ...) are one file each in the `profiles` folder beside it,
-`~/.config/puddle/profiles/<id>.yaml`. See [docs/profiles.md](docs/profiles.md).
+`~/.config/puddle/profiles/<id>.yaml`. See [Profiles](https://www.ezp2p.org/wiki/puddle/design/profiles/).
 Your identity is made from a **recovery phrase**: eight groups of four characters, such as
 `7QK4-M2XB-9TDW-HC5R-ZP3E-A8VN-4YJF-X2K7`. It is shown once, when the identity is made, and is not stored
 anywhere. **Write it down** (on paper, or in a password manager): it is the only way back to your
