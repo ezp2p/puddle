@@ -55,6 +55,20 @@ int puddle_levee_set_pond_voice_direct(const char *data_dir, int direct);
 /* The current state: 1 and filled while joined, else 0. */
 int puddle_levee_current(puddle_levee_state *out);
 
+/* What our Levee gave up on before we came back (spec/06, "When the Levee gives up"): a request from `from` to `target`,
+ * which reached it at `received`. Kept in state/levee-dropped.json (the newest 200) until the owner clears them. 0 or -1. */
+#define PUDDLE_LEVEE_DROPPED_MAX 200
+typedef struct {
+    char from[53];
+    char target[160];
+    int64_t received;
+    int64_t noted;
+} puddle_levee_dropped;
+int puddle_levee_note_dropped(const char *data_dir, const char *from, const char *target, int64_t received, int64_t now_ms);
+/* Up to `max` of them, oldest first: how many. */
+size_t puddle_levee_dropped_list(const char *data_dir, puddle_levee_dropped *out, size_t max);
+int puddle_levee_dropped_clear(const char *data_dir);
+
 /* A test seam: when set, this Puddle never routes through a Levee even while joined (in-process tests with several Puddles
  * that share these globals). Off by default. */
 void puddle_levee_set_local_only(int on);

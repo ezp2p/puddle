@@ -218,6 +218,36 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/NoStream" }
 
+  /stream/v1/undelivered:
+    post:
+      tags: [delivery]
+      operationId: undelivered
+      summary: A Levee gave up on requests of ours it took for its Puddle (protocol spec/06, "When the Levee gives up")
+      description: |
+        From the Levee of a Puddle we sent to, not from a Puddle: signed by the Levee under its own id (a Levee whose custody
+        receipts we hold) and sealed to us. `items`: `{nonce, sha256, received, sig}`, each `sig` the Levee's over
+        `puddle-undelivered-v1`, `for`, its id, the nonce and the body hash. An item counts only if we hold that Levee's custody
+        receipt for exactly that request; then it is not delivered after all, and not retried by itself (a message is the
+        owner's to resend or delete; anything else goes again once they are back). The rest are ignored. Always `204`, with no
+        receipt.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [for, levee, items]
+              properties:
+                for: { type: string, description: "The Puddle the requests were for" }
+                levee: { type: string, description: "The Levee's id, the signer's" }
+                items:
+                  type: array
+                  items:
+                    type: object
+                    properties: { nonce: { type: string }, sha256: { type: string }, received: { type: integer }, sig: { type: string } }
+      responses:
+        "204": { description: Taken }
+
   /stream/v1/events:
     post:
       tags: [delivery]

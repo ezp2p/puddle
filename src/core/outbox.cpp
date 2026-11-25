@@ -5,6 +5,8 @@
 #include "storage/storage.h"
 #include "base/json.h"
 #include "base/log.h"
+#include "base/encoding.h"
+#include "base/hash.h"
 
 #include <errno.h>
 #include <chrono>
@@ -48,6 +50,14 @@ struct puddle_outbox {
     std::thread thread;
     int running, stop;
     std::map<std::string, int64_t> heard; /* when each peer last woke its waiting items (puddle_outbox_heard_from) */
+    /* what a peer's Levee took for them, by custody_key(peer, nonce): kept until it gives up or PUDDLE_OB_CUSTODY_KEEP_MS */
+    struct Custody {
+        puddle_ob_item item; /* as it was sent (owns its body) */
+        std::string levee, nonce, hash;
+        unsigned char levee_key[32];
+        int64_t at;
+    };
+    std::map<std::string, Custody> custody;
 };
 
 typedef struct {
@@ -115,6 +125,10 @@ static int save_item(const puddle_outbox *ob, const puddle_ob_item *it)
     puddle_jw_str(&w, "state", STATE[it->state]);
     puddle_jw_num(&w, "status", it->status);
     puddle_jw_str(&w, "reason", it->reason);
+    if (it->given_up)
+        puddle_jw_num(&w, "given_up", it->given_up);
+    if (it->back_ms)
+        puddle_jw_num(&w, "back", it->back_ms);
     puddle_jw_end_object(&w);
     size_t n = puddle_jw_finish(&w);
     int rc = -1;
@@ -190,6 +204,10 @@ static int read_item(const char *text, size_t n, puddle_ob_item *it)
         it->max_reply = (size_t)i;
     if (puddle_json_member(text, n, "reason", &v) != 0 || puddle_json_string(v, it->reason, sizeof it->reason) != 0)
         goto out;
+    if (puddle_json_member(text, n, "given_up", &v) == 0 && puddle_json_int64(v, &i) == 0 && (i == PUDDLE_OB_GIVEN_UP || i == PUDDLE_OB_GIVEN_UP_RESEND))
+        it->given_up = (int)i;
+    if (puddle_json_member(text, n, "back", &v) == 0 && puddle_json_int64(v, &i) == 0 && i > 0)
+        it->back_ms = i;
     if (puddle_json_member(text, n, "state", &v) != 0 || puddle_json_string(v, tmp, sizeof tmp) != 0)
         goto out;
     for (state = 0; state < 2 && strcmp(tmp, STATE[state]) != 0; state++)
@@ -254,6 +272,147 @@ static int load_item(void *user, const char *key, const char *text, size_t len)
     return 0;
 }
 
+/* ---- custody receipts (spec/06): what a peer's Levee took for them ---- */
+
+#define CUSTODY "outbox_custody"
+
+static std::string custody_key(const char *peer, const char *nonce)
+{
+    std::string t = std::string(peer) + "\n" + nonce;
+    char h[65];
+    puddle_sha256_hex(t.data(), t.size(), h);
+    return std::string(h, 40);
+}
+
+static int save_custody(const puddle_outbox *ob, const std::string &key, const puddle_outbox::Custody &c)
+{
+    size_t cap = c.item.body_len * 6 + 2048;
+    std::string buf(cap, '\0');
+    char k64[64];
+    puddle_base64_encode(c.levee_key, 32, k64, sizeof k64);
+    puddle_jw w;
+    puddle_jw_init(&w, buf.data(), cap);
+    puddle_jw_object(&w);
+    puddle_jw_num(&w, "v", RECORD_VERSION);
+    puddle_jw_str(&w, "peer", c.item.peer);
+    puddle_jw_str(&w, "kind", c.item.kind);
+    puddle_jw_str(&w, "method", c.item.method);
+    puddle_jw_str(&w, "path", c.item.path);
+    puddle_jw_key(&w, "body");
+    puddle_jw_string_n(&w, c.item.body, c.item.body_len);
+    puddle_jw_num(&w, "created", c.item.created_ms);
+    puddle_jw_str(&w, "levee", c.levee.c_str());
+    puddle_jw_str(&w, "levee_key", k64);
+    puddle_jw_str(&w, "nonce", c.nonce.c_str());
+    puddle_jw_str(&w, "sha256", c.hash.c_str());
+    puddle_jw_num(&w, "at", c.at);
+    puddle_jw_end_object(&w);
+    size_t n = puddle_jw_finish(&w);
+    return n ? puddle_record_put(ob->storage, CUSTODY, key.c_str(), buf.data(), n) : -1;
+}
+
+static int load_custody(void *user, const char *key, const char *text, size_t n)
+{
+    puddle_outbox *ob = (puddle_outbox *)user;
+    puddle_span v;
+    puddle_outbox::Custody c;
+    memset(&c.item, 0, sizeof c.item);
+    char tmp[200];
+    int64_t i = 0;
+    auto str = [&](const char *k, char *dst, size_t cap) {
+        return puddle_json_member(text, n, k, &v) == 0 && puddle_json_string(v, dst, cap) == 0;
+    };
+    if (!puddle_json_valid_object(text, n) || !str("peer", c.item.peer, sizeof c.item.peer) || !puddle_id_valid(c.item.peer) ||
+        !str("kind", c.item.kind, sizeof c.item.kind) || !str("method", c.item.method, sizeof c.item.method) ||
+        !str("path", c.item.path, sizeof c.item.path) || strncmp(c.item.path, "/stream/v1/", 11) != 0)
+        return 0;
+    if (!str("levee", tmp, sizeof tmp))
+        return 0;
+    c.levee = tmp;
+    if (!str("nonce", tmp, sizeof tmp))
+        return 0;
+    c.nonce = tmp;
+    if (!str("sha256", tmp, sizeof tmp))
+        return 0;
+    c.hash = tmp;
+    size_t kl = 0;
+    if (!str("levee_key", tmp, sizeof tmp) || puddle_base64_decode(tmp, c.levee_key, sizeof c.levee_key, &kl) != 0 || kl != 32)
+        return 0;
+    if (puddle_json_member(text, n, "at", &v) != 0 || puddle_json_int64(v, &c.at) != 0)
+        return 0;
+    if (puddle_json_member(text, n, "created", &v) == 0 && puddle_json_int64(v, &i) == 0)
+        c.item.created_ms = i;
+    if (puddle_json_member(text, n, "body", &v) != 0 || v.len < 2 || v.p[0] != '"')
+        return 0;
+    c.item.body = (char *)malloc(v.len + 1);
+    if (!c.item.body || puddle_json_string(v, c.item.body, v.len + 1) != 0) {
+        item_free(&c.item);
+        return 0;
+    }
+    c.item.body_len = strlen(c.item.body);
+    ob->custody[key] = c;
+    return 0;
+}
+
+/* Remember what their Levee took. Caller holds the lock. */
+static void remember_custody(puddle_outbox *ob, const puddle_ob_item *it, const puddle_net_reply *r, int64_t now)
+{
+    for (auto c = ob->custody.begin(); c != ob->custody.end();) { /* past any Levee's keeping: forgotten */
+        if (now - c->second.at > PUDDLE_OB_CUSTODY_KEEP_MS) {
+            puddle_record_remove(ob->storage, CUSTODY, c->first.c_str());
+            item_free(&c->second.item);
+            c = ob->custody.erase(c);
+        } else {
+            ++c;
+        }
+    }
+    if (ob->custody.size() >= 10000)
+        return;
+    puddle_outbox::Custody c;
+    if (item_copy(&c.item, it) != 0)
+        return;
+    c.levee = r->custody_levee;
+    c.nonce = r->custody_nonce;
+    c.hash = r->custody_hash;
+    memcpy(c.levee_key, r->custody_key, 32);
+    c.at = now;
+    std::string key = custody_key(it->peer, r->custody_nonce);
+    if (save_custody(ob, key, c) != 0) {
+        item_free(&c.item);
+        return;
+    }
+    auto old = ob->custody.find(key);
+    if (old != ob->custody.end())
+        item_free(&old->second.item);
+    ob->custody[key] = c;
+}
+
+/* They are back (heard from, or an answer of their own): what their Levee gave up on may go again. Caller holds the lock. */
+static void mark_back(puddle_outbox *ob, const char *peer, int64_t now)
+{
+    int woke = 0;
+    for (size_t i = 0; i < ob->n; i++) {
+        puddle_ob_item *o = &ob->items[i];
+        if (!o->given_up || o->back_ms || strcmp(o->peer, peer) != 0)
+            continue;
+        o->back_ms = now;
+        if (o->given_up == PUDDLE_OB_GIVEN_UP_RESEND) { /* not a message: sent again as it is, as a new request */
+            o->given_up = 0;
+            o->back_ms = 0;
+            o->state = PUDDLE_OB_QUEUED;
+            o->attempts = 0;
+            o->status = 0;
+            o->reason[0] = '\0';
+            o->next_ms = now;
+            o->first_offline_ms = 0;
+            woke = 1;
+        }
+        save_item(ob, o);
+    }
+    if (woke)
+        ob->wake.notify_all();
+}
+
 puddle_outbox *puddle_outbox_open(const char *data_dir, const puddle_outbox_hooks *hooks, char *err, size_t errlen)
 {
     puddle_storage *st = puddle_storage_open_files(data_dir, err, errlen);
@@ -284,6 +443,7 @@ puddle_outbox *puddle_outbox_open_with(puddle_storage *st, const puddle_outbox_h
         return NULL;
     }
     qsort(ob->items, ob->n, sizeof *ob->items, cmp_seq);
+    puddle_record_each(st, CUSTODY, load_custody, ob);
     return ob;
 }
 
@@ -305,6 +465,8 @@ void puddle_outbox_close(puddle_outbox *ob)
     for (size_t i = 0; i < ob->n; i++)
         item_free(&ob->items[i]);
     free(ob->items);
+    for (auto &[k, c] : ob->custody)
+        item_free(&c.item);
     puddle_storage_close(ob->owned);
     delete ob;
 }
@@ -540,12 +702,16 @@ static void deliver_peer(puddle_outbox *ob, const char *peer)
                 }
             } else if (outcome == PUDDLE_OB_DELIVERED) {
                 remove_seq(ob, it.seq);
+                if (reply.custody)
+                    remember_custody(ob, &it, &reply, now);
             } else {
                 live->state = PUDDLE_OB_FAILED;
                 snprintf(live->reason, sizeof live->reason, "%s", reason);
                 save_item(ob, live);
                 prune_failed(ob);
             }
+            if (reached && reply.checked && reply.proof == PUDDLE_RECEIPT_OK && !reply.custody)
+                mark_back(ob, it.peer, now); /* an answer of their own: they are back */
             if (reached) { /* they answered, so whatever was counting their absence starts over */
                 for (size_t i = 0; i < ob->n; i++) {
                     puddle_ob_item *o = &ob->items[i];
@@ -750,6 +916,7 @@ int puddle_outbox_heard_from(puddle_outbox *ob, const char *peer)
     int n = 0;
     int64_t now = now_of(ob);
     std::lock_guard<std::mutex> g(ob->mu);
+    mark_back(ob, peer, now);
     auto h = ob->heard.find(peer);
     if (h != ob->heard.end() && now - h->second < PUDDLE_OUTBOX_HEARD_GAP_MS)
         return 0;
@@ -772,6 +939,63 @@ int puddle_outbox_heard_from(puddle_outbox *ob, const char *peer)
     return n;
 }
 
+void puddle_outbox_peer_back(puddle_outbox *ob, const char *peer)
+{
+    std::lock_guard<std::mutex> g(ob->mu);
+    mark_back(ob, peer, now_of(ob));
+}
+
+int puddle_outbox_custody_levee(puddle_outbox *ob, const char *levee_id, unsigned char key[32])
+{
+    std::lock_guard<std::mutex> g(ob->mu);
+    for (auto &[k, c] : ob->custody)
+        if (c.levee == levee_id) {
+            memcpy(key, c.levee_key, 32);
+            return 1;
+        }
+    return 0;
+}
+
+int puddle_outbox_undelivered(puddle_outbox *ob, const char *for_id, const char *levee_id, const char *nonce, const char *sha256,
+                              const char *sig, int (*resend)(const puddle_ob_item *item, void *user), void *user, char kind[32],
+                              uint64_t *seq)
+{
+    if (!puddle_id_valid(for_id) || !nonce || !sha256 || !sig || strlen(nonce) > 60)
+        return 0;
+    std::lock_guard<std::mutex> g(ob->mu);
+    std::string key = custody_key(for_id, nonce);
+    auto c = ob->custody.find(key);
+    /* only a Levee that took it can give it back, for exactly what it took */
+    if (c == ob->custody.end() || c->second.levee != levee_id || c->second.nonce != nonce || c->second.hash != sha256 ||
+        pp_undelivered_verify(sig, for_id, levee_id, c->second.levee_key, nonce, sha256) != PP_RECEIPT_OK)
+        return 0;
+    puddle_ob_item it = c->second.item; /* takes its body */
+    ob->custody.erase(c);
+    puddle_record_remove(ob->storage, CUSTODY, key.c_str());
+    int64_t now = now_of(ob);
+    it.seq = ob->next_seq;
+    it.state = PUDDLE_OB_FAILED;
+    it.attempts = 0;
+    it.status = 0;
+    it.next_ms = now;
+    it.first_offline_ms = 0;
+    it.back_ms = 0;
+    snprintf(it.reason, sizeof it.reason, "not delivered: their Levee gave up on it before they came back");
+    it.given_up = resend && resend(&it, user) ? PUDDLE_OB_GIVEN_UP_RESEND : PUDDLE_OB_GIVEN_UP;
+    if (save_item(ob, &it) != 0 || push(ob, &it) != 0) {
+        remove_file(ob, it.seq);
+        item_free(&it);
+        return 0;
+    }
+    ob->next_seq++;
+    if (kind)
+        snprintf(kind, 32, "%s", it.kind);
+    if (seq)
+        *seq = it.seq;
+    prune_failed(ob);
+    return 1;
+}
+
 int puddle_outbox_requeue(puddle_outbox *ob, uint64_t seq)
 {
     int rc = 1;
@@ -780,6 +1004,8 @@ int puddle_outbox_requeue(puddle_outbox *ob, uint64_t seq)
     puddle_ob_item *it = find_seq(ob, seq);
     if (it && it->state == PUDDLE_OB_FAILED) {
         it->state = PUDDLE_OB_QUEUED;
+        it->given_up = 0;
+        it->back_ms = 0;
         it->attempts = 0;
         it->status = 0;
         it->reason[0] = '\0';

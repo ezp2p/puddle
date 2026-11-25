@@ -242,6 +242,23 @@ paths:
       tags: [conversations]
       summary: Take back one of the owner's own messages (a request to hide, not a guarantee)
       responses: { "200": { $ref: "#/components/responses/Message" } }
+  /api/v1/conversations/{conversation}/messages/{message}/resend:
+    parameters: [{ $ref: "#/components/parameters/Conversation" }, { $ref: "#/components/parameters/Message" }]
+    post:
+      tags: [conversations]
+      summary: "Send an undelivered message again (their Levee gave up on it): the same event, as a new request, to each friend who is back"
+      responses:
+        "200": { $ref: "#/components/responses/Message" }
+        "404": { description: "`nothing_to_resend`: it isn't undelivered" }
+        "409": { description: "`not_back`: they haven't been heard from since; it can go once they are", content: { application/json: { schema: { $ref: "objects/error.yaml" } } } }
+  /api/v1/conversations/{conversation}/messages/{message}/forget:
+    parameters: [{ $ref: "#/components/parameters/Conversation" }, { $ref: "#/components/parameters/Message" }]
+    post:
+      tags: [conversations]
+      summary: "Delete an undelivered message (their Levee gave up on it): in a DM it goes from the owner's chat too; in a group, where others have it, only the mark goes, for each friend who is back"
+      responses:
+        "200": { $ref: "#/components/responses/Message" }
+        "404": { description: "`nothing_to_delete`: it isn't undelivered (in a group: to anyone who is back)" }
   /api/v1/conversations/{conversation}/read:
     parameters: [{ $ref: "#/components/parameters/Conversation" }]
     post: { tags: [conversations], summary: Mark everything read, responses: { "200": { $ref: "#/components/responses/Conversation" } } }
@@ -1144,8 +1161,13 @@ paths:
     get:
       tags: [levee]
       summary: Whether this Puddle is behind a Levee
-      description: "`{joined}`; when joined also `address` (where others reach it now), `id` (the Levee's), `since`, `attached` (connected to it now), `calls` (it has a relay) and `pond_voice_direct` (the owner's choice, below)."
-      responses: { "200": { description: OK, content: { application/json: { schema: { type: object, required: [joined], properties: { joined: { type: boolean }, address: { type: string }, id: { type: string }, since: { type: integer }, attached: { type: boolean }, calls: { type: boolean }, pond_voice_direct: { type: boolean } } } } } } }
+      description: "`{joined}`; when joined also `address` (where others reach it now), `id` (the Levee's), `since`, `attached` (connected to it now), `calls` (it has a relay) and `pond_voice_direct` (the owner's choice, below). Always `dropped`: what the Levee gave up on before this Puddle came back (docs/levee.md, \"Given up\"), oldest first, until cleared: who it was `from`, its `target`, when it `received` it and when we were told (`noted`). Never what it said: the Levee held it sealed."
+      responses: { "200": { description: OK, content: { application/json: { schema: { type: object, required: [joined, dropped], properties: { joined: { type: boolean }, address: { type: string }, id: { type: string }, since: { type: integer }, attached: { type: boolean }, calls: { type: boolean }, pond_voice_direct: { type: boolean }, dropped: { type: array, items: { type: object, properties: { from: { type: string }, target: { type: string }, received: { type: integer }, noted: { type: integer } } } } } } } } } } }
+  /api/v1/levee/dropped/clear:
+    post:
+      tags: [levee]
+      summary: The owner has seen what the Levee gave up on; `dropped` is emptied
+      responses: { "200": { description: "As GET /api/v1/levee" } }
   /api/v1/levee/join:
     post:
       tags: [levee]

@@ -190,3 +190,113 @@ void puddle_levee_set_local_only(int on)
     std::lock_guard<std::mutex> g(g_mu);
     g_local_only = on;
 }
+
+/* ---- what our Levee gave up on ---- */
+
+static std::mutex g_dropped_mu;
+
+static void dropped_path(const char *data_dir, char *dir, size_t dcap, char *file, size_t fcap)
+{
+    snprintf(dir, dcap, "%s/state", data_dir);
+    snprintf(file, fcap, "%s/state/levee-dropped.json", data_dir);
+}
+
+static size_t dropped_read(const char *file, puddle_levee_dropped *out, size_t max)
+{
+    FILE *f = fopen(file, "rb");
+    if (!f)
+        return 0;
+    size_t cap = 64 * 1024, n = 0;
+    char *text = (char *)malloc(cap);
+    if (text)
+        n = fread(text, 1, cap - 1, f);
+    fclose(f);
+    if (!text)
+        return 0;
+    text[n] = '\0';
+    size_t got = 0, cur = 0;
+    puddle_span items, it, v;
+    if (puddle_json_valid_object(text, n) && puddle_json_member(text, n, "dropped", &items) == 0)
+        while (got < max && puddle_json_array_next(items, &cur, &it) == 1) {
+            puddle_levee_dropped d;
+            memset(&d, 0, sizeof d);
+            if (puddle_json_member(it.p, it.len, "from", &v) != 0 || puddle_json_string(v, d.from, sizeof d.from) != 0)
+                continue;
+            if (puddle_json_member(it.p, it.len, "target", &v) == 0)
+                puddle_json_string(v, d.target, sizeof d.target);
+            if (puddle_json_member(it.p, it.len, "received", &v) == 0)
+                puddle_json_int64(v, &d.received);
+            if (puddle_json_member(it.p, it.len, "noted", &v) == 0)
+                puddle_json_int64(v, &d.noted);
+            out[got++] = d;
+        }
+    free(text);
+    return got;
+}
+
+static int dropped_write(const char *dir, const char *file, const puddle_levee_dropped *l, size_t n)
+{
+    if (n == 0)
+        return puddle_remove_file(file);
+    size_t cap = n * 400 + 64;
+    char *buf = (char *)malloc(cap);
+    if (!buf)
+        return -1;
+    puddle_jw w;
+    puddle_jw_init(&w, buf, cap);
+    puddle_jw_object(&w);
+    puddle_jw_key(&w, "dropped");
+    puddle_jw_array(&w);
+    for (size_t i = 0; i < n; i++) {
+        puddle_jw_object(&w);
+        puddle_jw_str(&w, "from", l[i].from);
+        puddle_jw_str(&w, "target", l[i].target);
+        puddle_jw_num(&w, "received", l[i].received);
+        puddle_jw_num(&w, "noted", l[i].noted);
+        puddle_jw_end_object(&w);
+    }
+    puddle_jw_end_array(&w);
+    puddle_jw_end_object(&w);
+    size_t len = puddle_jw_finish(&w);
+    int rc = len ? puddle_write_file_atomic(dir, file, buf, len) : -1;
+    free(buf);
+    return rc;
+}
+
+int puddle_levee_note_dropped(const char *data_dir, const char *from, const char *target, int64_t received, int64_t now_ms)
+{
+    char dir[1100], file[1200];
+    dropped_path(data_dir, dir, sizeof dir, file, sizeof file);
+    std::lock_guard<std::mutex> g(g_dropped_mu);
+    puddle_levee_dropped *l = (puddle_levee_dropped *)calloc(PUDDLE_LEVEE_DROPPED_MAX + 1, sizeof *l);
+    if (!l)
+        return -1;
+    size_t n = dropped_read(file, l, PUDDLE_LEVEE_DROPPED_MAX);
+    if (n == PUDDLE_LEVEE_DROPPED_MAX) { /* the oldest goes */
+        memmove(l, l + 1, (n - 1) * sizeof *l);
+        n--;
+    }
+    snprintf(l[n].from, sizeof l[n].from, "%s", from);
+    snprintf(l[n].target, sizeof l[n].target, "%s", target);
+    l[n].received = received;
+    l[n].noted = now_ms;
+    int rc = dropped_write(dir, file, l, n + 1);
+    free(l);
+    return rc;
+}
+
+size_t puddle_levee_dropped_list(const char *data_dir, puddle_levee_dropped *out, size_t max)
+{
+    char dir[1100], file[1200];
+    dropped_path(data_dir, dir, sizeof dir, file, sizeof file);
+    std::lock_guard<std::mutex> g(g_dropped_mu);
+    return dropped_read(file, out, max);
+}
+
+int puddle_levee_dropped_clear(const char *data_dir)
+{
+    char dir[1100], file[1200];
+    dropped_path(data_dir, dir, sizeof dir, file, sizeof file);
+    std::lock_guard<std::mutex> g(g_dropped_mu);
+    return puddle_remove_file(file);
+}

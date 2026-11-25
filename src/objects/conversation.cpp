@@ -391,7 +391,7 @@ Conversation Conversation::retry()
     int did = 0;
     for (const std::string &peer : peers) {
         for (size_t i = 0; i < n; i++)
-            if (peer == items[i].peer && !strcmp(items[i].kind, "events") && items[i].body &&
+            if (peer == items[i].peer && !strcmp(items[i].kind, "events") && items[i].body && !items[i].given_up && /* the owner's, one by one */
                 (kind_ == Kind::Dm || strstr(items[i].body, chat_.c_str())) && puddle_outbox_requeue(ctx_->outbox, items[i].seq) == 0)
                 did++;
         did += puddle_outbox_retry_now(ctx_->outbox, peer.c_str());

@@ -6,6 +6,8 @@
 #include "base/log.h"
 #include "federation/profiles_api.h"
 #include "core/people.h"
+#include "core/outbox.h"
+#include "events/message.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -208,9 +210,84 @@ static int close_post(const puddle_call *c, puddle_jw *w)
     return puddle_fail(w, 500, "internal");
 }
 
+/* ---- a Levee gave up on something of ours (spec/06, "When the Levee gives up") ---- */
+
+/* signed by a Levee, under its own id: one whose custody receipts we hold */
+static int undelivered_chain_key(puddle_ctx *ctx, const unsigned char *body, size_t len, const char *sender_id, const char *kid,
+                                 unsigned char sign_pub[32])
+{
+    (void)body;
+    (void)len;
+    char want[65];
+    if (!ctx->outbox || !kid || !puddle_id_valid(sender_id) || !puddle_outbox_custody_levee(ctx->outbox, sender_id, sign_pub))
+        return 0;
+    pp_key_id(sign_pub, want);
+    return strcmp(want, kid) == 0;
+}
+
+/* a message of the owner's is theirs to resend or delete; anything else (an edit, a group's news, an address record) goes again
+ * by itself once they are back */
+static int resend_by_itself(const puddle_ob_item *it, void *user)
+{
+    (void)user;
+    if (strcmp(it->kind, "events") != 0 || !it->body)
+        return 1;
+    puddle_span evs, one, v;
+    size_t cur = 0;
+    if (puddle_json_member(it->body, it->body_len, "events", &evs) != 0)
+        return 1;
+    while (puddle_json_array_next(evs, &cur, &one) == 1) {
+        if (puddle_json_member(one.p, one.len, "event", &v) != 0 || v.len < 2)
+            continue;
+        char *ev = (char *)malloc(v.len + 1);
+        puddle_message m;
+        const char *why = NULL;
+        int message = ev && puddle_json_string(v, ev, v.len + 1) == 0 && puddle_chat_event_parse(ev, strlen(ev), &m, &why) == 0 &&
+                      m.type == PUDDLE_EV_MESSAGE;
+        if (ev && message)
+            puddle_message_free(&m);
+        free(ev);
+        if (message)
+            return 0;
+    }
+    return 1;
+}
+
+static int undelivered_post(const puddle_call *c, puddle_jw *w)
+{
+    const char *b = (const char *)c->body;
+    size_t n = c->body_len;
+    puddle_span items, it, v;
+    char for_id[PUDDLE_USER_ID_LEN + 1] = "", levee[PUDDLE_USER_ID_LEN + 1] = "";
+    (void)w;
+    if (!puddle_json_valid_object(b, n) || puddle_json_member(b, n, "for", &v) != 0 || puddle_json_string(v, for_id, sizeof for_id) != 0 ||
+        puddle_json_member(b, n, "levee", &v) != 0 || puddle_json_string(v, levee, sizeof levee) != 0 || strcmp(levee, c->sender) != 0 ||
+        puddle_json_member(b, n, "items", &items) != 0)
+        return 204; /* answered alike whatever it says: a Levee is told nothing */
+    size_t cur = 0;
+    int taken = 0, seen = 0;
+    while (puddle_json_array_next(items, &cur, &it) == 1 && seen++ < 1000) {
+        char nonce[64] = "", hash[72] = "", sig[128] = "", kind[32] = "";
+        uint64_t seq = 0;
+        if (puddle_json_member(it.p, it.len, "nonce", &v) != 0 || puddle_json_string(v, nonce, sizeof nonce) != 0 ||
+            puddle_json_member(it.p, it.len, "sha256", &v) != 0 || puddle_json_string(v, hash, sizeof hash) != 0 ||
+            puddle_json_member(it.p, it.len, "sig", &v) != 0 || puddle_json_string(v, sig, sizeof sig) != 0)
+            continue;
+        /* only an item we hold a custody receipt from this Levee for counts; the rest are ignored */
+        if (puddle_outbox_undelivered(c->ctx->outbox, for_id, levee, nonce, hash, sig, resend_by_itself, NULL, kind, &seq) == 1) {
+            taken++;
+            puddle_log(PUDDLE_LOG_INFO, "%.12s…'s Levee gave up on our %s before they came back: not delivered", for_id, kind);
+        }
+    }
+    if (!taken)
+        puddle_log(PUDDLE_LOG_DEBUG, "a notice from the Levee %.12s… named nothing we hold its custody receipt for", levee);
+    return 204;
+}
+
 const puddle_route puddle_inbound_routes[] = {
     { "POST", "/stream/v1/access/result", PUDDLE_AUTH_CHAIN, PUDDLE_ACCESS_BODY_MAX, result_post, result_chain_key },
     { "POST", "/stream/v1/access/status", PUDDLE_AUTH_CHAIN_ANON, PUDDLE_ACCESS_BODY_MAX, status_post, puddle_access_chain_key },
     { "POST", "/stream/v1/close",         PUDDLE_AUTH_PEER,  4096, close_post, NULL },
+    { "POST", "/stream/v1/undelivered",   PUDDLE_AUTH_CHAIN_ANON, 128 * 1024, undelivered_post, undelivered_chain_key },
 };
 const size_t puddle_inbound_routes_count = sizeof puddle_inbound_routes / sizeof puddle_inbound_routes[0];

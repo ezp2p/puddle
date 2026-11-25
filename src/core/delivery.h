@@ -33,6 +33,12 @@ typedef struct {
     int checked;              /* the answer was checked against a key we hold for them, so only their signature counts */
     int opened;               /* it came sealed to our request, and opened: only the holder of the key we sealed to could make it */
     int custody;              /* their Levee took it for them while they are away (spec/06): delivered, though not yet read */
+    /* with `custody`: which Levee took it, and for which request, so a notice that it gave up can be checked (spec/06, "When
+     * the Levee gives up") */
+    char custody_levee[53];
+    unsigned char custody_key[32];
+    char custody_nonce[48];
+    char custody_hash[65];    /* hex SHA-256 of the body as sent */
     char content_type[48];    /* of the answer, as it said (lower case, without parameters); "" if it did not */
     char *body;               /* the response body, NUL-terminated, or NULL. Free with puddle_net_reply_free. */
     size_t body_len;

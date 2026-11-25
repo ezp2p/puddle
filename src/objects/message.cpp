@@ -401,7 +401,11 @@ void Message::write(puddle_jw *w, puddle_ctx *ctx, PartialUsers &people, const D
     if (it) {
         puddle_jw_key(w, "delivery");
         puddle_jw_object(w);
-        puddle_jw_str(w, "state", it->state == PUDDLE_OB_FAILED ? "failed" : it->attempts ? "retrying" : "queued");
+        /* undelivered: their Levee took it, then gave up before they came back (spec/06); not retried by itself. Once they are
+         * `back`, the owner may resend it or delete it. */
+        puddle_jw_str(w, "state", it->given_up ? "undelivered" : it->state == PUDDLE_OB_FAILED ? "failed" : it->attempts ? "retrying" : "queued");
+        if (it->given_up)
+            puddle_jw_flag(w, "back", it->back_ms != 0);
         if (it->reason[0])
             puddle_jw_str(w, "reason", it->reason);
         if (it->state == PUDDLE_OB_QUEUED && it->attempts)
