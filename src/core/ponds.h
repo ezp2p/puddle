@@ -81,6 +81,11 @@ int puddle_ponds_edited(puddle_ponds *p, const char *id, const char *json, size_
 /* A message the owner just deleted: no longer kept. 0 or -1 (no such Pond or channel). */
 int puddle_ponds_deleted(puddle_ponds *p, const char *id, int64_t channel, int64_t message);
 
+/* A message's reactions as the Pond said them after the owner reacted ({id, channel, reactions}, protocol 15): kept now. 0 or -1. */
+int puddle_ponds_reacted(puddle_ponds *p, const char *id, const char *json, size_t len);
+/* The owner has seen a channel: the messages there that mention us are no longer counted (protocol 15). 0, or -1 if unknown. */
+int puddle_ponds_seen(puddle_ponds *p, const char *id, int64_t channel);
+
 /* An /events answer. 1 if it says to start again (fetch /info, members and history afresh), 0 applied, -1 malformed. */
 int puddle_ponds_events(puddle_ponds *p, const char *id, const char *json, size_t len);
 

@@ -439,7 +439,9 @@ paths:
         Pond before the message, a chunk at a time, skipping what the Pond has already (docs/ponds.md, "Files"); the call
         answers once the message is posted. `bad_text`, `bad_file`, `too_many_files` (400); `slow_down` (429); `removed`
         (409: the Pond no longer has us); `no_file` (409: one is not here whole); `files_off` (409: the Pond takes no files);
-        `too_large` (409: one is over the Pond's `files.max_size`); `unreachable` (502).
+        `too_large` (409: one is over the Pond's `files.max_size`); `unreachable` (502). With `reply_to` (protocol 15), a reply:
+        `bad_reply` (400: no such message there), `no_replies` (409: the Pond is too old). Mentions are written in `body` as
+        `<@member id>`, `<@&role id>` and `@everyone` (docs/ponds.md, "Replies, reactions and mentions").
       requestBody:
         content:
           application/json:
@@ -447,6 +449,7 @@ paths:
               type: object
               properties:
                 body: { type: string, minLength: 1, maxLength: 4000, description: Required without files }
+                reply_to: { type: integer, minimum: 1, description: "Protocol 15: the message in this channel it answers" }
                 files:
                   type: array
                   maxItems: 10
@@ -537,6 +540,47 @@ paths:
       summary: One message with every text it had (protocol 14; view_message_log), its files with what is here of each
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "objects/pond.yaml#/$defs/LoggedMessage" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/ponds/{pond}/channels/{channel}/messages/{message}/react:
+    parameters:
+      - { $ref: "#/components/parameters/Pond" }
+      - { $ref: "#/components/parameters/Channel" }
+      - { name: message, in: path, required: true, schema: { type: integer, minimum: 1 } }
+    post:
+      tags: [ponds]
+      summary: React to a message in a Pond with an emoji (protocol 15; docs/ponds.md, "Replies, reactions and mentions")
+      description: |
+        `bad_emoji` (400: not one emoji, by the Pond's rule of 1 to 32 bytes with no ASCII); `no_reactions` (409: the Pond is too
+        old); the Pond's `no_permission`, `too_many_reactions`, `muted` (409), `no_message` (404) and `slow_down` (429) are passed on.
+        Answers the message's reactions as they are now, and keeps them so; every other member's Puddle hears of it.
+      requestBody:
+        content: { application/json: { schema: { type: object, required: [emoji], properties: { emoji: { type: string } } } } }
+      responses:
+        "200":
+          description: "{id, channel, reactions}"
+          content: { application/json: { schema: { type: object, properties: { id: { type: integer }, channel: { type: integer }, reactions: { type: array, items: { type: object } } } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/ponds/{pond}/channels/{channel}/messages/{message}/unreact:
+    parameters:
+      - { $ref: "#/components/parameters/Pond" }
+      - { $ref: "#/components/parameters/Channel" }
+      - { name: message, in: path, required: true, schema: { type: integer, minimum: 1 } }
+    post:
+      tags: [ponds]
+      summary: Take back our reaction (protocol 15)
+      requestBody:
+        content: { application/json: { schema: { type: object, required: [emoji], properties: { emoji: { type: string } } } } }
+      responses:
+        "200": { description: "{id, channel, reactions}, as react answers" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/ponds/{pond}/channels/{channel}/seen:
+    parameters: [{ $ref: "#/components/parameters/Pond" }, { $ref: "#/components/parameters/Channel" }]
+    post:
+      tags: [ponds]
+      summary: The owner has seen the channel (protocol 15)
+      description: Its messages that mention the owner are no longer counted (the channel's `mentions`, in the Pond's summary).
+      responses:
+        "204": { description: Seen }
         "404": { $ref: "#/components/responses/NotFound" }
   /api/v1/ponds/{pond}/channels/{channel}/log:
     parameters: [{ $ref: "#/components/parameters/Pond" }, { $ref: "#/components/parameters/Channel" }]

@@ -313,6 +313,15 @@ Rectangle {
                         Label { text: row.model.name; Layout.fillWidth: true; elide: Text.ElideRight; opacity: row.selected ? 1 : 0.8; font.bold: row.selected }
                         // only some roles see it (Discord's lock on a private channel)
                         Icon { visible: row.model.restricted === true; glyph: "lock"; size: 13; opacity: 0.5 }
+                        // messages that mention us, not yet seen (protocol 15)
+                        Rectangle {
+                            objectName: "mentions_" + row.model.name
+                            visible: (row.model.mentions || 0) > 0
+                            implicitWidth: Math.max(18, mentionCount.implicitWidth + 10); implicitHeight: 18; width: implicitWidth; height: implicitHeight
+                            radius: 9
+                            color: Theme.danger
+                            Label { id: mentionCount; anchors.centerIn: parent; text: (row.model.mentions || 0) > 99 ? "99+" : (row.model.mentions || 0); color: "white"; font.pixelSize: 11; font.bold: true }
+                        }
                         // a voice channel: join its voice (nothing to answer), or leave it if we are in it
                         ToolButton {
                             objectName: "voiceJoin_" + row.model.name

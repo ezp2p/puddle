@@ -21,7 +21,8 @@ ApplicationWindow {
     height: 600
     minimumWidth: 320
     minimumHeight: 400
-    readonly property int alerts: backend.chats.unreadTotal + backend.chats.incomingRequests + backend.chats.incomingGroupInvites
+    readonly property int alerts: backend.chats.unreadTotal + backend.chats.incomingRequests + backend.chats.incomingGroupInvites +
+                                  backend.chats.ponds.mentionsTotal
     title: alerts > 0 ? "(" + alerts + ") Puddle" : "Puddle"
 
     property string notified: "" // who the last notification was about
@@ -163,6 +164,15 @@ ApplicationWindow {
             if (!root.visible || !root.active)
                 root.notify(qsTr("Group invitation"), qsTr("You were invited to %1.").arg(root.backend.chats.nameOf(groupId)), "")
         }
+    }
+    // A Pond's message that mentions us (protocol 15): said unless that channel is in front of the owner, who then sees it there
+    Binding { target: root.backend.chats.ponds; property: "windowActive"; value: root.visible && root.active && shell.page === "pond" }
+    Connections {
+        target: root.backend.chats.ponds
+        function onMentioned(pondId, channelId, pondName, channelName) {
+            root.notify(pondName, qsTr("You were mentioned in #%1").arg(channelName), "pond:" + pondId + "/" + channelId)
+        }
+        function onListChanged() { root.updateBadge() }
     }
     // A friend calling: always said, even with the window in front (the call bar shows it there too)
     Connections {

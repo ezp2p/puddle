@@ -345,6 +345,7 @@ if(PUDDLE_BUILD_GUI)
         src/gui/qml/chat/ChatPage.qml
         src/gui/qml/chat/PondPage.qml
         src/gui/qml/chat/MessageLog.qml
+        src/gui/qml/chat/EmojiPicker.qml
         src/gui/qml/chat/PageView.qml
         src/gui/qml/chat/MediaTile.qml
         src/gui/qml/components/WrapRadio.qml

@@ -9,7 +9,9 @@ import "../theme"
 // A Pond's text channel, laid out like a conversation: each message under the name and time of who wrote it, following messages from the same
 // person tucked under the first. Files go with messages as in a conversation (docs/ponds.md, "Files"). Our own messages can be edited
 // (their words, and dropping files) and deleted, and anyone's by whoever may manage messages there; whoever may read the message
-// log sees what was edited or deleted (docs/ponds.md, "Editing and deleting"). No replies yet.
+// log sees what was edited or deleted (docs/ponds.md, "Editing and deleting"). Messages can be replied to, quoting what they
+// answer, and reacted to with an emoji; a message that mentions us is marked, and @ in the box names a member (or, for whoever
+// may, a role or everyone) (docs/ponds.md, "Replies, reactions and mentions").
 Pane {
     id: page
 
@@ -37,6 +39,55 @@ Pane {
     property string draftOwner: ""
     property string editingId: ""      // the message being edited in place
     property var editKeep: []          // while editing: the ids of the files it keeps
+    // replying to (protocol 15)
+    property string replyId: ""
+    property string replyName: ""
+    property string replyText: ""
+    function startReply(m) {
+        replyId = m.id; replyName = m.name || ""
+        replyText = (m.shown || "").replace(/\s+/g, " ").slice(0, 100)
+        input.forceActiveFocus()
+    }
+    function clearReply() { replyId = ""; replyName = ""; replyText = "" }
+    // the message a reply quotes, brought into view if it is loaded
+    function showMessage(id) {
+        for (let i = 0; i < list.count; i++) {
+            const m = ponds.messages.get(i)
+            if (m && m.id === id) { list.stickToEnd = false; list.positionViewAtIndex(i, ListView.Center); flashId = id; flashTimer.restart(); return }
+        }
+    }
+    property string flashId: ""
+    Timer { id: flashTimer; interval: 1500; onTriggered: page.flashId = "" }
+    // what @ named in the box: "@Name" -> "<@id>" (a member), "<@&id>" (a role); @everyone is written as it is
+    property var picked: ({})
+    function withMentions(t) {
+        const names = Object.keys(picked).sort((a, b) => b.length - a.length)
+        for (const n of names)
+            t = t.split(n).join(picked[n])
+        return t
+    }
+    function mention(item) {
+        const at = mentionPopup.start, end = input.cursorPosition
+        const label = "@" + item.name
+        if (item.kind === "member") { const p = picked; p[label] = "<@" + item.id + ">"; picked = p }
+        else if (item.kind === "role") { const p = picked; p[label] = "<@&" + item.id + ">"; picked = p }
+        input.remove(at, end)
+        input.insert(at, label + " ")
+        mentionPopup.close()
+    }
+    EmojiPicker {
+        id: emojiPicker
+        objectName: "pondEmojiPicker"
+        property string messageId: ""
+        onPicked: emoji => page.ponds.toggleReaction(messageId, emoji)
+    }
+    function pickReaction(item, messageId) {
+        emojiPicker.messageId = messageId
+        const p = item.mapToItem(page, 0, item.height)
+        emojiPicker.x = Math.max(8, Math.min(p.x - emojiPicker.width + item.width, page.width - emojiPicker.width - 8))
+        emojiPicker.y = Math.min(p.y + 4, page.height - emojiPicker.height - 8)
+        emojiPicker.open()
+    }
 
     function startEdit(m) {
         editingId = m.id
@@ -62,16 +113,19 @@ Pane {
         return Qt.formatDate(d, Locale.ShortFormat) + " " + clock(d)
     }
     function send() {
-        const t = input.text.trim()
+        const t = withMentions(input.text.trim())
         if (!canSend) return
         if (composer.count > 0) {          // files, with the words as their caption
-            if (!composer.send(t, "")) return
-            composer.caption = t
+            if (replyId !== "") { if (!composer.sendWith({ body: t, reply_to: Number(replyId) }, [])) return }
+            else if (!composer.send(t, "")) return
+            composer.caption = input.text.trim()
         } else {
             if (t === "") return
-            ponds.send(t)
+            ponds.send(t, replyId)
         }
         input.text = ""
+        picked = ({})
+        clearReply()
         list.stickToEnd = true
     }
 
@@ -112,6 +166,8 @@ Pane {
             input.text = d[key] || ""
             page.drafts = d
             page.editingId = ""
+            page.clearReply()
+            page.picked = ({})
             list.stickToEnd = true
             if (page.visible && page.ponds.channel !== "") input.forceActiveFocus()
         }
@@ -269,6 +325,8 @@ Pane {
                 readonly property bool mayEdit: page.ponds.canEditMessages && model.mine === true && page.ponds.currentStatus !== "removed"
                 readonly property bool mayDelete: page.ponds.canEditMessages && (model.mine === true || page.ponds.canDeleteAnyHere) &&
                                                   page.ponds.currentStatus !== "removed"
+                readonly property bool mayReply: page.ponds.canReply && page.canSend
+                readonly property bool mayReact: page.ponds.canReactHere && page.ponds.currentStatus !== "removed" && !page.muted
                 width: ListView.view.width
                 implicitHeight: col.implicitHeight
 
@@ -288,8 +346,10 @@ Pane {
                     id: ctx
                     MenuItem {
                         text: bodyText.selectedText !== "" ? qsTr("Copy") : qsTr("Copy text")
-                        onTriggered: bodyText.selectedText !== "" ? bodyText.copy() : page.chats.copy(msg.model.text)
+                        onTriggered: bodyText.selectedText !== "" ? bodyText.copy() : page.chats.copy(msg.model.shown || msg.model.text)
                     }
+                    MenuItem { objectName: "pondMsgReply"; text: qsTr("Reply"); visible: msg.mayReply; height: visible ? implicitHeight : 0; onTriggered: page.startReply(msg.model) }
+                    MenuItem { objectName: "pondMsgReact"; text: qsTr("Add reaction"); visible: msg.mayReact; height: visible ? implicitHeight : 0; onTriggered: page.pickReaction(msgName.visible ? msgName : bodyText, msg.model.id) }
                     MenuItem { objectName: "pondMsgEdit"; text: qsTr("Edit"); visible: msg.mayEdit; height: visible ? implicitHeight : 0; onTriggered: page.startEdit(msg.model) }
                     MenuItem {
                         text: qsTr("Edit history")
@@ -310,7 +370,11 @@ Pane {
                     y: dayLine.visible ? dayLine.y + dayLine.height + 4 : 0
                     width: parent.width
                     height: parent.height - y
-                    color: hover.hovered || msg.editing ? Theme.tint(palette.text, 0.05) : "transparent"
+                    color: page.flashId === msg.model.id ? Theme.tint(Theme.accent, 0.18)
+                           : msg.model.mentionsMe === true ? Theme.tint(Theme.accent, hover.hovered ? 0.14 : 0.09)
+                           : hover.hovered || msg.editing ? Theme.tint(palette.text, 0.05) : "transparent"
+                    // a message that mentions us: marked down its side, as on Discord
+                    Rectangle { visible: msg.model.mentionsMe === true; width: 3; height: parent.height; color: Theme.accent; objectName: "pondMentionMark" }
                 }
 
                 ColumnLayout {
@@ -330,11 +394,37 @@ Pane {
                         Rectangle { Layout.fillWidth: true; height: 1; color: palette.mid; opacity: 0.6 }
                     }
 
+                    // what it replies to (protocol 15): clicked, that message is brought into view
+                    RowLayout {
+                        objectName: "pondReplyQuote"
+                        visible: (msg.model.replyTo || "") !== ""
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 72
+                        Layout.rightMargin: 16
+                        Layout.topMargin: 8
+                        spacing: 6
+                        Icon { glyph: "corner-up-left"; size: 14; opacity: 0.5 }
+                        Label {
+                            objectName: "pondReplyText"
+                            Layout.fillWidth: true
+                            elide: Text.ElideRight
+                            font.pixelSize: 12
+                            opacity: quoteHover.hovered ? 0.95 : 0.7
+                            textFormat: Text.StyledText
+                            text: msg.model.replyDeleted === true ? "<i>" + qsTr("Original message was deleted") + "</i>"
+                                  : "<b>" + String(msg.model.replyName || "").replace(/&/g, "&amp;").replace(/</g, "&lt;") + "</b>  " +
+                                    (msg.model.replyText ? String(msg.model.replyText).replace(/\s+/g, " ").replace(/&/g, "&amp;").replace(/</g, "&lt;")
+                                                         : "<i>" + (msg.model.replyFiles > 0 ? qsTr("Click to see attachment") : "") + "</i>")
+                            HoverHandler { id: quoteHover; cursorShape: Qt.PointingHandCursor }
+                            TapHandler { onTapped: page.showMessage(msg.model.replyTo) }
+                        }
+                    }
+
                     RowLayout {
                         Layout.fillWidth: true
                         Layout.leftMargin: 16
                         Layout.rightMargin: 16
-                        Layout.topMargin: msg.grouped ? 1 : 10
+                        Layout.topMargin: msg.grouped ? 1 : ((msg.model.replyTo || "") !== "" ? 2 : 10)
                         Layout.bottomMargin: 1
                         spacing: 12
 
@@ -376,7 +466,8 @@ Pane {
                             TextEdit {
                                 id: bodyText
                                 objectName: "pondMessageText"
-                                visible: text !== "" && !msg.editing
+                                readonly property string plain: msg.model.shown || "" /* what it says, mentions as @names */
+                                visible: (msg.model.text || "") !== "" && !msg.editing
                                 Layout.fillWidth: true
                                 readOnly: true
                                 selectByMouse: true
@@ -384,10 +475,10 @@ Pane {
                                 wrapMode: TextEdit.Wrap
                                 color: palette.text
                                 font.pixelSize: 14
-                                text: msg.model.text || ""
-                                textFormat: TextEdit.PlainText
+                                text: msg.model.html || ""          /* escaped, with mentions as @names (protocol 15) */
+                                textFormat: TextEdit.RichText
                                 Accessible.role: Accessible.StaticText
-                                Accessible.name: msg.model.name + ": " + text
+                                Accessible.name: msg.model.name + ": " + (msg.model.shown || "")
                             }
                             Label {
                                 objectName: "pondMessageEdited"
@@ -469,27 +560,94 @@ Pane {
                                 onSaveFile: f => fileActions.save(f)
                                 onOpenFile: f => fileActions.open(f)
                             }
+                            // its reactions (protocol 15): ours marked; clicked, ours is added or taken back
+                            Flow {
+                                objectName: "pondReactions"
+                                visible: !!msg.model.reactions && msg.model.reactions.length > 0 && !msg.editing
+                                Layout.fillWidth: true
+                                Layout.topMargin: 4
+                                spacing: 4
+                                Repeater {
+                                    model: msg.model.reactions || []
+                                    delegate: Rectangle {
+                                        id: chip
+                                        required property var modelData
+                                        objectName: "pondReaction"
+                                        readonly property bool usable: msg.mayReact || modelData.mine
+                                        height: 26; radius: 13
+                                        width: chipRow.implicitWidth + 16
+                                        color: modelData.mine ? Theme.tint(Theme.accent, 0.2) : Theme.tint(palette.text, chipHover.hovered ? 0.1 : 0.06)
+                                        border.color: modelData.mine ? Theme.accent : "transparent"
+                                        Accessible.role: Accessible.Button
+                                        Accessible.name: qsTr("%1, %n reaction(s)", "", modelData.count).arg(modelData.emoji)
+                                        Row {
+                                            id: chipRow
+                                            anchors.centerIn: parent
+                                            spacing: 4
+                                            Label { text: chip.modelData.emoji; font.pixelSize: 14 }
+                                            Label { text: chip.modelData.count; font.pixelSize: 12; font.bold: chip.modelData.mine; anchors.verticalCenter: parent.verticalCenter }
+                                        }
+                                        HoverHandler { id: chipHover; cursorShape: chip.usable ? Qt.PointingHandCursor : Qt.ArrowCursor }
+                                        ToolTip.text: chip.modelData.names
+                                        ToolTip.visible: chipHover.hovered
+                                        ToolTip.delay: 400
+                                        TapHandler { enabled: chip.usable; onTapped: page.ponds.toggleReaction(msg.model.id, chip.modelData.emoji) }
+                                    }
+                                }
+                                ToolButton {
+                                    objectName: "pondAddReaction"
+                                    visible: msg.mayReact
+                                    implicitWidth: 30; implicitHeight: 26
+                                    icon.source: Theme.icon("mood-smile"); icon.width: 16; icon.height: 16
+                                    display: AbstractButton.IconOnly
+                                    opacity: hover.hovered ? 0.9 : 0.4
+                                    Accessible.name: qsTr("Add reaction")
+                                    ToolTip.text: Accessible.name; ToolTip.visible: hovered
+                                    onClicked: page.pickReaction(this, msg.model.id)
+                                }
+                            }
                         }
                     }
                 }
 
                 // hover tools
                 Row {
-                    visible: hover.hovered && !msg.editing && (msg.mayEdit || msg.mayDelete)
+                    visible: hover.hovered && !msg.editing && (msg.mayEdit || msg.mayDelete || msg.mayReply || msg.mayReact)
                     anchors.right: parent.right
                     anchors.rightMargin: 16
-                    y: msg.model.dayStart === true ? 34 : 0
+                    y: (msg.model.dayStart === true ? 34 : 0) + ((msg.model.replyTo || "") !== "" ? 4 : 0)
                     Rectangle {
                         width: tools.implicitWidth + 4; height: 30; radius: Theme.radius
                         color: Theme.card; border.color: Theme.hairline
                         Row {
                             id: tools
                             anchors.centerIn: parent
+                            ToolButton { id: reactButton; objectName: "pondReactButton"; visible: msg.mayReact; icon.source: Theme.icon("mood-smile"); icon.width: Theme.iconSize; icon.height: Theme.iconSize; display: AbstractButton.IconOnly; Accessible.name: qsTr("Add reaction"); ToolTip.text: qsTr("Add reaction"); ToolTip.visible: hovered; onClicked: page.pickReaction(reactButton, msg.model.id) }
+                            ToolButton { objectName: "pondReplyButton"; visible: msg.mayReply; icon.source: Theme.icon("arrow-back-up"); icon.width: Theme.iconSize; icon.height: Theme.iconSize; display: AbstractButton.IconOnly; Accessible.name: qsTr("Reply"); ToolTip.text: qsTr("Reply"); ToolTip.visible: hovered; onClicked: page.startReply(msg.model) }
                             ToolButton { objectName: "pondEditButton"; visible: msg.mayEdit; icon.source: Theme.icon("pencil"); icon.width: Theme.iconSize; icon.height: Theme.iconSize; display: AbstractButton.IconOnly; Accessible.name: qsTr("Edit"); ToolTip.text: qsTr("Edit"); ToolTip.visible: hovered; onClicked: page.startEdit(msg.model) }
                             ToolButton { objectName: "pondDeleteButton"; visible: msg.mayDelete; icon.source: Theme.icon("trash"); icon.width: Theme.iconSize; icon.height: Theme.iconSize; display: AbstractButton.IconOnly; Accessible.name: qsTr("Delete"); ToolTip.text: qsTr("Delete"); ToolTip.visible: hovered; onClicked: page.askDelete(msg.model) }
                         }
                     }
                 }
+            }
+        }
+
+        // replying to (protocol 15)
+        Rectangle {
+            objectName: "pondReplyBar"
+            visible: page.replyId !== ""
+            Layout.fillWidth: true
+            Layout.leftMargin: 16
+            Layout.rightMargin: 16
+            Layout.topMargin: 8
+            implicitHeight: 30
+            color: Theme.tint(palette.text, 0.08)
+            radius: Theme.radius
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 10
+                Label { Layout.fillWidth: true; elide: Text.ElideRight; font.pixelSize: 12; textFormat: Text.StyledText; text: qsTr("Replying to <b>%1</b>  %2").arg(page.replyName.replace(/&/g, "&amp;").replace(/</g, "&lt;")).arg(page.replyText.replace(/&/g, "&amp;").replace(/</g, "&lt;")) }
+                ToolButton { objectName: "pondCancelReply"; icon.source: Theme.icon("x"); icon.width: Theme.iconSize; icon.height: Theme.iconSize; display: AbstractButton.IconOnly; Accessible.name: qsTr("Cancel reply"); onClicked: page.clearReply() }
             }
         }
 
@@ -543,9 +701,22 @@ Pane {
                     FontMetrics { id: fontMetrics; font: input.font }
                     FieldMenu {}
                     Accessible.name: qsTr("Message")
+                    onCursorPositionChanged: mentionPopup.look()
                     Keys.onPressed: event => {
-                        if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && !(event.modifiers & Qt.ShiftModifier) && !inputMethodComposing) {
+                        if (mentionPopup.opened && (event.key === Qt.Key_Up || event.key === Qt.Key_Down)) {
+                            mentionPopup.move(event.key === Qt.Key_Down ? 1 : -1)
+                            event.accepted = true
+                        } else if (mentionPopup.opened && (event.key === Qt.Key_Tab || event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) {
+                            mentionPopup.choose()
+                            event.accepted = true
+                        } else if (mentionPopup.opened && event.key === Qt.Key_Escape) {
+                            mentionPopup.close()
+                            event.accepted = true
+                        } else if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && !(event.modifiers & Qt.ShiftModifier) && !inputMethodComposing) {
                             page.send()
+                            event.accepted = true
+                        } else if (event.key === Qt.Key_Escape && page.replyId !== "") {
+                            page.clearReply()
                             event.accepted = true
                         } else if (event.key === Qt.Key_Up && text === "") {
                             page.editLast()
@@ -611,6 +782,53 @@ Pane {
                           theirs ? qsTr("Delete %1's message for everyone here? It stays in the message log, for those who may read it.").arg(m.name)
                                  : qsTr("Delete this message for everyone here?"),
                           qsTr("Delete"), () => page.ponds.deleteMessage(m.id))
+    }
+    // @ in the box: who it can name, as they type (protocol 15)
+    Popup {
+        id: mentionPopup
+        objectName: "pondMentionPopup"
+        property int start: -1          // where the @ is
+        property var items: []
+        property int current: 0
+        x: box.x + 16
+        y: box.y - height - 4
+        width: Math.min(320, page.width - 32)
+        padding: 4
+        closePolicy: Popup.CloseOnPressOutside
+        background: Rectangle { color: Theme.card; border.color: Theme.hairline; radius: Theme.radius }
+        // what comes before the cursor: @ and a word, at the start or after a space
+        function look() {
+            if (!page.ponds.canMention) { close(); return }
+            const before = input.text.slice(0, input.cursorPosition)
+            const m = before.match(/(^|\s)@([^\s@]{0,32})$/)
+            if (!m) { close(); return }
+            start = before.length - m[2].length - 1
+            items = page.ponds.mentionables(m[2])
+            current = 0
+            if (items.length > 0) open(); else close()
+        }
+        function move(by) { current = (current + by + items.length) % items.length }
+        function choose() { if (items.length > 0) page.mention(items[current]) }
+        contentItem: ListView {
+            implicitHeight: contentHeight
+            interactive: false
+            model: mentionPopup.items
+            delegate: ItemDelegate {
+                required property var modelData
+                required property int index
+                objectName: "pondMentionChoice"
+                width: ListView.view.width
+                highlighted: index === mentionPopup.current
+                contentItem: RowLayout {
+                    spacing: 8
+                    Avatar { visible: modelData.kind === "member"; chats: page.chats; name: modelData.name; hash: modelData.avatar || ""; tint: modelData.color || ""; size: 22 }
+                    Icon { visible: modelData.kind !== "member"; glyph: "users"; size: 18; opacity: 0.7 }
+                    Label { text: (modelData.kind === "member" ? "" : "@") + modelData.name; Layout.fillWidth: true; elide: Text.ElideRight; color: modelData.kind === "role" && modelData.color ? modelData.color : palette.text }
+                    Label { visible: modelData.kind === "everyone"; text: qsTr("everyone who sees this channel"); opacity: 0.55; font.pixelSize: 11 }
+                }
+                onClicked: page.mention(modelData)
+            }
+        }
     }
     ConfirmDialog { id: deleteConfirm; objectName: "pondDeleteConfirm" }
     MessageLog {
